@@ -31,6 +31,7 @@ Early development. The product features above are the roadmap; this repository c
 | --- | --- |
 | Framework | Next.js 16 (App Router) + React 19 |
 | Language | TypeScript 5 (strict) |
+| Backend | [Convex](https://convex.dev) (reactive database) |
 | Styling | Tailwind CSS v4 |
 | Package manager | pnpm |
 
@@ -63,16 +64,32 @@ Biome is the formatter and the import/Tailwind-class organizer. ESLint runs only
 
 ```bash
 pnpm install
-pnpm dev
+pnpm dev:local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to view the app. Edit `app/page.tsx` and the page hot-reloads.
+`pnpm dev:local` provisions a local Convex backend (no account required), prints its URL, then runs the Convex dev server and the Next.js dev server together. Open [http://localhost:3000](http://localhost:3000) to view the app. To run only the web server, use `pnpm dev`.
+
+## Backend (Convex)
+
+The backend is [Convex](https://convex.dev), a reactive database with type-safe functions.
+
+- **Local development** runs an open-source Convex backend on your machine — no account needed. `pnpm dev:local` (or `pnpm dev:db`) provisions it and writes the deployment URL to `.env.local`.
+- **Schema** lives in `convex/schema.ts` (it starts empty — add your tables there). Backend functions go in `convex/`.
+- **Generated code** in `convex/_generated/` is produced by the Convex CLI and committed so the project type-checks in CI. It is excluded from formatting, linting, spell-checking, and the no-comments policy.
+- **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm convex:dashboard`.
+- **Deploying to the cloud** later is a matter of running `npx convex login` and `npx convex deploy`; no app code changes.
+
+The React client is wired in `app/ConvexClientProvider.tsx` and mounted in `app/layout.tsx`. It falls back to a placeholder URL when `NEXT_PUBLIC_CONVEX_URL` is unset, so builds without a backend (such as CI) never fail.
 
 ## Scripts
 
 | Script | What it does |
 | --- | --- |
-| `pnpm dev` | Start the Next.js dev server |
+| `pnpm dev:local` | Run local Convex + web together; prints the backend, web, and dashboard URLs |
+| `pnpm dev` | Start the Next.js dev server (web only) |
+| `pnpm dev:web` | Start the Next.js dev server |
+| `pnpm dev:db` | Start the Convex dev server (local backend) |
+| `pnpm convex:dashboard` | Open the local Convex dashboard |
 | `pnpm build` | Create a production build |
 | `pnpm start` | Serve the production build |
 | `pnpm check` | Run the full quality gate (all checks below + build) |
@@ -111,7 +128,8 @@ The same command runs in CI on every push and pull request, so green locally mea
 
 ```text
 app/                 App Router routes, layout, and global styles
-tools/               Repo automation (no-comments checker)
+convex/              Convex backend: schema and functions (_generated is committed)
+tools/               Repo automation (no-comments checker, dashboard URL printer)
 .github/             CI workflow, Dependabot, issue/PR templates, CODEOWNERS
 .husky/              Git hooks (pre-commit, commit-msg)
 biome.json           Formatter + linter (Biome)

@@ -7,7 +7,16 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!.next", "!out", "!build", "!coverage", "!next-env.d.ts", "!pnpm-lock.yaml"]
+    "includes": [
+      "**",
+      "!.next",
+      "!out",
+      "!build",
+      "!coverage",
+      "!next-env.d.ts",
+      "!pnpm-lock.yaml",
+      "!convex/_generated"
+    ]
   },
   "formatter": {
     "enabled": true,

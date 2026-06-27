@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["app/**/*.{ts,tsx}", "tools/**/*.mjs"],
+  "entry": ["app/**/*.{ts,tsx}", "convex/**/*.ts", "tools/**/*.mjs"],
   "project": ["**/*.{ts,tsx,mjs}"],
   "ignoreDependencies": ["@secretlint/secretlint-rule-preset-recommend", "tailwindcss"]
 }

@@ -7,6 +7,7 @@
     "biome",
     "biomejs",
     "commitlint",
+    "convex",
     "cooldown",
     "cssnano",
     "cspell",
@@ -42,6 +43,7 @@
     "build",
     "coverage",
     ".vscode",
+    "convex/_generated",
     "pnpm-lock.yaml",
     "*.tsbuildinfo"
   ]
