@@ -29,7 +29,11 @@
     "build": "next build",
     "check": "pnpm package:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm knip && pnpm spellcheck && pnpm secrets && pnpm markdownlint && pnpm comments:check && pnpm build",
     "comments:check": "node tools/check-no-comments.mjs",
+    "convex:dashboard": "convex dashboard",
     "dev": "next dev",
+    "dev:db": "convex dev",
+    "dev:local": "convex dev --once && concurrently --kill-others-on-fail -n convex,web,dash -c blue,green,magenta \"convex dev\" \"next dev\" \"node tools/print-convex-dashboard.mjs\"",
+    "dev:web": "next dev",
     "fix": "biome check --write --unsafe . && eslint . --fix && sort-package-json",
     "format": "biome check --write .",
     "format:check": "biome check .",
@@ -61,6 +65,7 @@
     ]
   },
   "dependencies": {
+    "convex": "^1.42.0",
     "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4"
@@ -74,6 +79,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^10.0.3",
     "cspell": "^10.0.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",

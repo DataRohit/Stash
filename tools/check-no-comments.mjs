@@ -4,7 +4,16 @@ import process from "node:process";
 import ts from "typescript";
 
 const ROOT = process.cwd();
-const IGNORED_DIRS = new Set([".git", ".next", "build", "coverage", "dist", "node_modules", "out"]);
+const IGNORED_DIRS = new Set([
+  ".git",
+  ".next",
+  "_generated",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+]);
 const IGNORED_FILES = new Set(["next-env.d.ts"]);
 const SCANNED_EXTENSIONS = new Set([".ts", ".tsx", ".css"]);
 
