@@ -67,16 +67,16 @@ pnpm install
 pnpm dev:local
 ```
 
-`pnpm dev:local` provisions a local Convex backend (no account required), prints its URL, then runs the Convex dev server and the Next.js dev server together. Open [http://localhost:3000](http://localhost:3000) to view the app. To run only the web server, use `pnpm dev`.
+`pnpm dev:local` provisions a local Convex backend if needed, writes the Convex-managed values to `.env.local`, then runs the Convex dev server and the Next.js dev server together. Open [http://localhost:3000](http://localhost:3000) to view the app. To initialize only the local database without starting the web server, use `pnpm db:setup`. To run only the web server, use `pnpm dev:web`.
 
 ## Backend (Convex)
 
 The backend is [Convex](https://convex.dev), a reactive database with type-safe functions.
 
-- **Local development** runs an open-source Convex backend on your machine — no account needed. `pnpm dev:local` (or `pnpm dev:db`) provisions it and writes the deployment URL to `.env.local`.
+- **Local development** runs an open-source Convex backend on your machine — no account needed. `pnpm db:setup` runs the Convex local initialization once and writes `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_SITE_URL` to `.env.local`. `pnpm dev:local` starts local Convex and Next.js together; `pnpm dev:db` starts only Convex.
 - **Schema** lives in `convex/schema.ts` (it starts empty — add your tables there). Backend functions go in `convex/`.
 - **Generated code** in `convex/_generated/` is produced by the Convex CLI and committed so the project type-checks in CI. It is excluded from formatting, linting, spell-checking, and the no-comments policy.
-- **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm convex:dashboard`.
+- **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm db:dashboard`.
 - **Deploying to the cloud** later is a matter of running `npx convex login` and `npx convex deploy`; no app code changes.
 
 The React client is wired in `app/ConvexClientProvider.tsx` and mounted in `app/layout.tsx`. It falls back to a placeholder URL when `NEXT_PUBLIC_CONVEX_URL` is unset, so builds without a backend (such as CI) never fail.
@@ -85,11 +85,11 @@ The React client is wired in `app/ConvexClientProvider.tsx` and mounted in `app/
 
 | Script | What it does |
 | --- | --- |
-| `pnpm dev:local` | Run local Convex + web together; prints the backend, web, and dashboard URLs |
-| `pnpm dev` | Start the Next.js dev server (web only) |
+| `pnpm db:setup` | Initialize local Convex once and write Convex-managed env vars to `.env.local` |
+| `pnpm db:dashboard` | Open the local Convex dashboard |
 | `pnpm dev:web` | Start the Next.js dev server |
 | `pnpm dev:db` | Start the Convex dev server (local backend) |
-| `pnpm convex:dashboard` | Open the local Convex dashboard |
+| `pnpm dev:local` | Run local Convex + web together; prints the backend, web, and dashboard URLs |
 | `pnpm build` | Create a production build |
 | `pnpm start` | Serve the production build |
 | `pnpm check` | Run the full quality gate (all checks below + build) |
@@ -105,6 +105,8 @@ The React client is wired in `app/ConvexClientProvider.tsx` and mounted in `app/
 | `pnpm markdownlint` | Lint Markdown files |
 | `pnpm comments:check` | Fail if any comment exists in `.ts`, `.tsx`, or `.css` |
 | `pnpm package:check` | Verify `package.json` key order |
+| `pnpm package:fix` | Sort `package.json` keys |
+| `pnpm prepare` | Install Husky git hooks |
 
 ## The quality gate
 
@@ -132,6 +134,9 @@ convex/              Convex backend: schema and functions (_generated is committ
 tools/               Repo automation (no-comments checker, dashboard URL printer)
 .github/             CI workflow, Dependabot, issue/PR templates, CODEOWNERS
 .husky/              Git hooks (pre-commit, commit-msg)
+convex.json          Convex project configuration
+package.json         Project metadata, dependencies, and scripts
+pnpm-workspace.yaml  pnpm workspace and approved build-script policy
 biome.json           Formatter + linter (Biome)
 eslint.config.mjs    ESLint flat config (Next.js rules)
 knip.json            Unused-code configuration
