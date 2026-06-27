@@ -1,0 +1,93 @@
+{
+  "name": "stash",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Host, organize, and collaboratively edit Markdown and HTML documents in nested projects — with version history, shareable links, and real-time collaboration.",
+  "keywords": [
+    "collaboration",
+    "document-management",
+    "documentation",
+    "html",
+    "markdown",
+    "nextjs",
+    "real-time",
+    "typescript",
+    "version-control",
+    "workspace"
+  ],
+  "homepage": "https://github.com/datarohit/stash#readme",
+  "bugs": {
+    "url": "https://github.com/datarohit/stash/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/datarohit/stash.git"
+  },
+  "license": "MIT",
+  "author": "Rohit Vilas Ingole (https://github.com/datarohit)",
+  "scripts": {
+    "build": "next build",
+    "check": "pnpm package:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm knip && pnpm spellcheck && pnpm secrets && pnpm markdownlint && pnpm comments:check && pnpm build",
+    "comments:check": "node tools/check-no-comments.mjs",
+    "dev": "next dev",
+    "fix": "biome check --write --unsafe . && eslint . --fix && sort-package-json",
+    "format": "biome check --write .",
+    "format:check": "biome check .",
+    "knip": "knip",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --no-warn-ignored",
+    "markdownlint": "markdownlint-cli2",
+    "package:check": "sort-package-json --check",
+    "package:fix": "sort-package-json",
+    "prepare": "husky",
+    "secrets": "secretlint --secretlintignore .gitignore \"**/*\"",
+    "spellcheck": "cspell --no-progress --no-must-find-files \"**/*.{ts,tsx,md,css,json,mjs}\"",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,mjs,cjs}": [
+      "biome check --write --no-errors-on-unmatched",
+      "eslint --fix --max-warnings 0 --no-warn-ignored"
+    ],
+    "*.{json,jsonc,css}": [
+      "biome check --write --no-errors-on-unmatched"
+    ],
+    "*.md": [
+      "markdownlint-cli2 --fix"
+    ],
+    "*": [
+      "secretlint --secretlintignore .gitignore"
+    ]
+  },
+  "dependencies": {
+    "next": "16.2.9",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.1",
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "@secretlint/secretlint-rule-preset-recommend": "^13.0.2",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "cspell": "^10.0.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "husky": "^9.1.7",
+    "knip": "^6.21.0",
+    "lint-staged": "^17.0.8",
+    "markdownlint-cli2": "^0.22.1",
+    "secretlint": "^13.0.2",
+    "sort-package-json": "^4.0.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
