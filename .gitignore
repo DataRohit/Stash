@@ -29,5 +29,7 @@ yarn-error.log*
 
 .vercel
 
+.claude/
+
 *.tsbuildinfo
 next-env.d.ts

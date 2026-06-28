@@ -32,7 +32,7 @@ Early development. The product features above are the roadmap; this repository c
 | Framework | Next.js 16 (App Router) + React 19 |
 | Language | TypeScript 5 (strict) |
 | Backend | [Convex](https://convex.dev) (reactive database) |
-| Styling | Tailwind CSS v4 |
+| Styling | Tailwind CSS v4 + [next-themes](https://github.com/pacocoursey/next-themes) |
 | Package manager | pnpm |
 
 ## Quality toolchain
@@ -79,7 +79,7 @@ The backend is [Convex](https://convex.dev), a reactive database with type-safe 
 - **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm db:dashboard`.
 - **Deploying to the cloud** later is a matter of running `npx convex login` and `npx convex deploy`; no app code changes.
 
-The React client is wired in `app/ConvexClientProvider.tsx` and mounted in `app/layout.tsx`. It falls back to a placeholder URL when `NEXT_PUBLIC_CONVEX_URL` is unset, so builds without a backend (such as CI) never fail.
+The React client is wired in `components/providers/ConvexClientProvider.tsx` and mounted in `app/layout.tsx`. It falls back to a placeholder URL when `NEXT_PUBLIC_CONVEX_URL` is unset, so builds without a backend (such as CI) never fail.
 
 ## Scripts
 
