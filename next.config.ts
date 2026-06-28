@@ -1,8 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  reactStrictMode: true,
+  experimental: {
+    viewTransition: true,
+  },
   poweredByHeader: false,
+  reactStrictMode: true,
 };
 
 export default nextConfig;

@@ -68,6 +68,7 @@
     ]
   },
   "dependencies": {
+    "@clerk/nextjs": "7.5.9",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.42.0",

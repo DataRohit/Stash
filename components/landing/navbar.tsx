@@ -1,5 +1,6 @@
 "use client";
 
+import { Show, UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ThemeToggle } from "@/components/landing/theme-toggle";
@@ -51,14 +52,26 @@ export function Navbar() {
 
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          <a
-            href={site.repo}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
-          >
-            GitHub
-          </a>
+          <Show when="signed-out">
+            <Link href="/sign-in" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+              Sign in
+            </Link>
+            <Link
+              href="/sign-up"
+              className={cn(buttonVariants({ variant: "primary", size: "sm" }))}
+            >
+              Sign up
+            </Link>
+          </Show>
+          <Show when="signed-in">
+            <Link
+              href="/dashboard"
+              className={cn(buttonVariants({ variant: "secondary" }), "text-xs")}
+            >
+              Dashboard
+            </Link>
+            <UserButton />
+          </Show>
         </div>
       </div>
     </header>

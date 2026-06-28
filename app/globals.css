@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+@view-transition {
+  navigation: auto;
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
@@ -26,21 +30,15 @@
   --ring: color-mix(in oklab, var(--accent) 62%, transparent);
   --hairline: color-mix(in oklab, var(--foreground) 11%, transparent);
   --shadow-glass:
-    inset 0 1px 0 color-mix(in oklab, white 74%, transparent),
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 5%, transparent),
     0 1px 2px color-mix(in oklab, var(--foreground) 5%, transparent),
     0 16px 48px color-mix(in oklab, var(--foreground) 7%, transparent);
   --shadow-larry:
-    inset 0 1px 0 color-mix(in oklab, white 78%, transparent),
     0 0.5px 1px color-mix(in oklab, var(--foreground) 9%, transparent),
     0 2px 6px color-mix(in oklab, var(--foreground) 8%, transparent),
     0 8px 18px color-mix(in oklab, var(--foreground) 7%, transparent),
     0 24px 48px color-mix(in oklab, var(--foreground) 9%, transparent),
     0 48px 96px color-mix(in oklab, var(--accent) 10%, transparent);
-  --shadow-press:
-    inset 0 1px 0 color-mix(in oklab, white 72%, transparent),
-    inset 0 0 0 1px color-mix(in oklab, var(--foreground) 8%, transparent),
-    0 1px 1px color-mix(in oklab, var(--foreground) 5%, transparent);
+  --shadow-press: 0 1px 1px color-mix(in oklab, var(--foreground) 5%, transparent);
   color-scheme: light;
 }
 
@@ -56,21 +54,15 @@
   --input: color-mix(in oklab, var(--foreground) 18%, transparent);
   --hairline: color-mix(in oklab, var(--foreground) 14%, transparent);
   --shadow-glass:
-    inset 0 1px 0 color-mix(in oklab, white 10%, transparent),
-    inset 0 0 0 1px color-mix(in oklab, white 7%, transparent),
     0 1px 2px color-mix(in oklab, black 28%, transparent),
     0 18px 54px color-mix(in oklab, black 30%, transparent);
   --shadow-larry:
-    inset 0 1px 0 color-mix(in oklab, white 12%, transparent),
     0 0.5px 1px color-mix(in oklab, black 34%, transparent),
     0 2px 6px color-mix(in oklab, black 30%, transparent),
     0 8px 18px color-mix(in oklab, black 28%, transparent),
     0 24px 48px color-mix(in oklab, black 32%, transparent),
     0 48px 96px color-mix(in oklab, var(--accent) 16%, transparent);
-  --shadow-press:
-    inset 0 1px 0 color-mix(in oklab, white 12%, transparent),
-    inset 0 0 0 1px color-mix(in oklab, white 8%, transparent),
-    0 1px 1px color-mix(in oklab, black 24%, transparent);
+  --shadow-press: 0 1px 1px color-mix(in oklab, black 24%, transparent);
   color-scheme: dark;
 }
 
@@ -155,26 +147,6 @@ samp {
     box-shadow: var(--shadow-press);
   }
 
-  .grid-bg {
-    background-image:
-      repeating-linear-gradient(
-        to right,
-        transparent 0,
-        transparent 35px,
-        color-mix(in oklab, var(--foreground) 6%, transparent) 35px,
-        color-mix(in oklab, var(--foreground) 6%, transparent) 36px
-      ),
-      repeating-linear-gradient(
-        to bottom,
-        transparent 0,
-        transparent 35px,
-        color-mix(in oklab, var(--foreground) 6%, transparent) 35px,
-        color-mix(in oklab, var(--foreground) 6%, transparent) 36px
-      );
-    -webkit-mask-image: radial-gradient(circle at center, black 0%, black 34%, transparent 76%);
-    mask-image: radial-gradient(circle at center, black 0%, black 34%, transparent 76%);
-  }
-
   .aurora {
     position: relative;
   }
@@ -251,7 +223,7 @@ samp {
   }
 
   to {
-    transform: translateX(-50%);
+    transform: translateX(calc(-100% / 6));
   }
 }
 
@@ -265,16 +237,80 @@ samp {
 
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation: none;
   mix-blend-mode: normal;
 }
 
 ::view-transition-old(root) {
+  animation: page-exit 160ms ease-out both;
   z-index: 1;
 }
 
 ::view-transition-new(root) {
+  animation: page-enter 260ms ease-out both;
   z-index: 9999;
+}
+
+.page-enter {
+  animation: hard-load-enter 360ms ease-out both;
+}
+
+.route-scene {
+  animation: route-scene-enter 320ms ease-out both;
+  transform-origin: center top;
+}
+
+@keyframes page-exit {
+  from {
+    filter: blur(0);
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  to {
+    filter: blur(2px);
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes page-enter {
+  from {
+    filter: blur(2px);
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    filter: blur(0);
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes route-scene-enter {
+  from {
+    filter: blur(2px);
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+
+  to {
+    filter: blur(0);
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes hard-load-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -285,5 +321,14 @@ samp {
   .marquee-track,
   .live-dot::after {
     animation: none;
+  }
+
+  .page-enter,
+  .route-scene,
+  ::view-transition-group(*),
+  ::view-transition-new(*),
+  ::view-transition-old(*) {
+    animation-delay: 0s;
+    animation-duration: 0s;
   }
 }

@@ -1,16 +1,14 @@
-import { ArrowRight } from "lucide-react";
+import { AuthEntryButton } from "@/components/landing/auth-entry-button";
 import { GridBackground } from "@/components/landing/grid-background";
 import { Reveal } from "@/components/landing/reveal";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
-import { site } from "@/lib/site";
 import { cn } from "@/lib/utils";
 
 export function Hero() {
   return (
     <section className="relative overflow-hidden border-hairline border-b">
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
-        <div className="hero-fade grid-bg absolute inset-0" />
         <GridBackground />
       </div>
       <div className="mx-auto max-w-7xl px-6 pt-28 pb-24 sm:pt-36 sm:pb-32">
@@ -39,15 +37,7 @@ export function Hero() {
           </p>
 
           <div className="flex flex-col gap-3 sm:flex-row">
-            <a
-              href={site.readme}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cn(buttonVariants({ size: "lg" }), "group")}
-            >
-              Get started
-              <ArrowRight className="cta-arrow size-4" />
-            </a>
+            <AuthEntryButton signedOutLabel="Get started" signedInLabel="Open dashboard" />
             <a
               href="#workflow"
               className={cn(buttonVariants({ variant: "secondary", size: "lg" }))}
