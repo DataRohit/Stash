@@ -146,7 +146,7 @@ cspell.json          Spell-check dictionary and ignores
 ## Continuous integration
 
 - **Quality workflow** (`.github/workflows/quality.yml`) installs with a frozen lockfile and runs `pnpm check` on every push and pull request.
-- **Dependabot** (`.github/dependabot.yml`) opens weekly grouped updates for npm and GitHub Actions, with a 7-day cooldown to avoid pnpm's `minimumReleaseAge` install failures on fresh releases.
+- **Dependabot** (`.github/dependabot.yml`) opens monthly grouped updates for npm and GitHub Actions, with a 7-day cooldown to avoid pnpm's `minimumReleaseAge` install failures on fresh releases. Major version bumps are ignored to keep CI green; do those manually.
 
 ## License
 

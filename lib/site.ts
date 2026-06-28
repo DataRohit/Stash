@@ -5,7 +5,7 @@ export const site = {
   repo: "https://github.com/datarohit/stash",
   issues: "https://github.com/datarohit/stash/issues",
   readme: "https://github.com/datarohit/stash#getting-started",
-  license: "https://github.com/datarohit/stash/blob/main/LICENSE",
+  license: "https://github.com/datarohit/stash/blob/master/LICENSE",
   author: "Rohit Vilas Ingole",
   authorUrl: "https://github.com/datarohit",
 };
@@ -30,7 +30,7 @@ export const footerColumns = [
     title: "API",
     links: [
       { label: "Convex backend", href: "https://convex.dev" },
-      { label: "Schema", href: `${site.repo}/tree/main/convex` },
+      { label: "Schema", href: `${site.repo}/tree/master/convex` },
       { label: "Quality gate", href: `${site.repo}#the-quality-gate` },
     ],
   },
