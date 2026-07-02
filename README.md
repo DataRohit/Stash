@@ -14,7 +14,7 @@ Stash lets you host your documents — documentation, planning docs, notes, or a
 
 - **Markdown & HTML documents** — host documentation, plans, notes, or any Markdown/HTML content.
 - **Projects, folders & nesting** — group documents into projects, with nested folders and files inside each.
-- **Organizations** — Pro users can create an organization that holds multiple projects for a team.
+- **Organizations** — every workspace lives in an organization; your plan sets how many you can create, and each has a custom name, description, tags, and icon.
 - **File limits** — per-plan quotas on the number and size of files.
 - **Shareable links** — publish read-only links to a document or a whole project.
 - **Version history** — track every change to a document and roll back when needed.
@@ -23,7 +23,7 @@ Stash lets you host your documents — documentation, planning docs, notes, or a
 
 ## Project status
 
-Early development. The product features above are the roadmap; this repository currently ships the production-grade foundation (toolchain, quality gate, and CI) that the app is being built on. Expect rapid change.
+Early development. The product features above are the roadmap. Shipped so far: the marketing landing page, Clerk authentication (sign-in/up, protected dashboard), a Clerk-powered pricing page, and the organization layer — a mandatory onboarding flow, plan-based organization limits, and per-organization customization (name, description, tags, and an uploadable icon that reuses Clerk's org logo and defaults to a generated DiceBear image). The document and project features come next. Expect rapid change.
 
 ## Tech stack
 
@@ -31,8 +31,10 @@ Early development. The product features above are the roadmap; this repository c
 | --- | --- |
 | Framework | Next.js 16 (App Router) + React 19 |
 | Language | TypeScript 5 (strict) |
-| Backend | [Convex](https://convex.dev) (reactive database) |
+| Backend | [Convex](https://convex.dev) (reactive database + file storage) |
+| Auth & billing | [Clerk](https://clerk.com) (sessions, organizations, roles, plans) |
 | Styling | Tailwind CSS v4 + [next-themes](https://github.com/pacocoursey/next-themes) |
+| UI extras | [Sonner](https://sonner.emilkowal.ski) toasts, [DiceBear](https://dicebear.com) generated org icons |
 | Package manager | pnpm |
 
 ## Quality toolchain
@@ -74,12 +76,22 @@ pnpm dev:local
 The backend is [Convex](https://convex.dev), a reactive database with type-safe functions.
 
 - **Local development** runs an open-source Convex backend on your machine — no account needed. `pnpm db:setup` runs the Convex local initialization once and writes `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_SITE_URL` to `.env.local`. `pnpm dev:local` starts local Convex and Next.js together; `pnpm dev:db` starts only Convex.
-- **Schema** lives in `convex/schema.ts` (it starts empty — add your tables there). Backend functions go in `convex/`.
+- **Schema** lives in `convex/schema.ts` (currently an `organizations` table holding per-org description and tags). Backend functions go in `convex/`. Organization icons are not stored here — they use Clerk's org logo.
+- **Clerk is wired to Convex** via `convex/auth.config.ts` (using `CLERK_JWT_ISSUER_DOMAIN`), so Convex functions can read the signed-in identity from the Clerk session token.
 - **Generated code** in `convex/_generated/` is produced by the Convex CLI and committed so the project type-checks in CI. It is excluded from formatting, linting, spell-checking, and the no-comments policy.
 - **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm db:dashboard`.
 - **Deploying to the cloud** later is a matter of running `npx convex login` and `npx convex deploy`; no app code changes.
 
 The React client is wired in `components/providers/ConvexClientProvider.tsx` and mounted in `app/layout.tsx`. It falls back to a placeholder URL when `NEXT_PUBLIC_CONVEX_URL` is unset, so builds without a backend (such as CI) never fail.
+
+## Authentication, organizations & billing
+
+Authentication and billing run on [Clerk](https://clerk.com); set the Clerk keys from `.env.example` before signing in.
+
+- **Auth** — `proxy.ts` protects `/dashboard` and `/onboarding`. A signed-in user without an active organization is redirected into onboarding.
+- **Organizations are mandatory** — every user must create or select an organization before reaching the dashboard. Orgs are created through a server action (not Clerk's client widgets) so the plan cap is always enforced.
+- **Plan-based limits** — the active plan and its limits are read straight from the Clerk billing API (`lib/subscription.ts`, `lib/plan-limits.ts`) rather than the session token, so a fresh upgrade takes effect immediately. Free allows one organization; Pro allows more.
+- **Per-org customization** — an organization's name and icon are stored in Clerk while its description and tags live in Convex (`convex/organizations.ts`). The icon reuses Clerk's org logo: a [DiceBear](https://dicebear.com) image is uploaded as the default on creation, admins can replace it with their own upload, and Clerk hosts and serves it so the app and Clerk's own widgets show the same icon. Admins can also delete the organization (a two-step confirmation that switches to another org and blocks deleting the last one).
 
 ## Scripts
 
@@ -129,7 +141,9 @@ The same command runs in CI on every push and pull request, so green locally mea
 ## Project structure
 
 ```text
-app/                 App Router routes, layout, and global styles
+app/                 App Router routes (landing, auth, onboarding, dashboard), layout, and global styles
+components/          UI primitives, providers, and landing-page sections
+lib/                 Server/client helpers (Clerk billing, plan limits, Convex access, org avatars)
 convex/              Convex backend: schema and functions (_generated is committed)
 tools/               Repo automation (no-comments checker, dashboard URL printer)
 .github/             CI workflow, Dependabot, issue/PR templates, CODEOWNERS

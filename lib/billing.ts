@@ -4,6 +4,7 @@ const REVALIDATE_SECONDS = 60;
 type PlanFeature = {
   id: string;
   name: string;
+  slug: string;
   description: string | null;
 };
 
@@ -30,6 +31,7 @@ type ClerkFee = {
 type ClerkFeature = {
   id: string;
   name: string;
+  slug: string;
   description: string | null;
 };
 
@@ -41,6 +43,7 @@ type ClerkPlan = {
   is_default: boolean;
   has_base_fee: boolean;
   publicly_visible: boolean;
+  for_payer_type: string;
   fee: ClerkFee;
   annual_monthly_fee: ClerkFee;
   annual_fee: ClerkFee;
@@ -109,6 +112,7 @@ function mapPlan(plan: ClerkPlan): BillingPlan {
     features: plan.features.map((feature) => ({
       id: feature.id,
       name: feature.name,
+      slug: feature.slug,
       description: feature.description,
     })),
   };
@@ -131,7 +135,7 @@ export async function getBillingPlans(): Promise<BillingPlan[]> {
 
     const body = (await response.json()) as { data: ClerkPlan[] };
     const plans = body.data
-      .filter((plan) => plan.publicly_visible)
+      .filter((plan) => plan.publicly_visible && plan.for_payer_type === "user")
       .sort((a, b) => a.fee.amount - b.fee.amount)
       .map(mapPlan);
 

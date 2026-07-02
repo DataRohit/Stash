@@ -12,7 +12,11 @@
   --muted: oklch(0.48 0.012 270);
   --accent: oklch(0.62 0.22 258);
   --signal: oklch(0.74 0.18 60);
+  --signal-foreground: oklch(0.26 0.05 70);
   --destructive: oklch(0.6 0.24 27);
+  --success: oklch(0.62 0.15 155);
+  --warning: oklch(0.72 0.17 70);
+  --info: oklch(0.62 0.18 245);
   --surface: oklch(1 0.002 95);
   --surface-2: oklch(0.955 0.004 95);
   --card: oklch(0.995 0.002 95);
@@ -53,6 +57,9 @@
   --border: color-mix(in oklab, var(--foreground) 14%, transparent);
   --input: color-mix(in oklab, var(--foreground) 18%, transparent);
   --hairline: color-mix(in oklab, var(--foreground) 14%, transparent);
+  --success: oklch(0.72 0.16 155);
+  --warning: oklch(0.8 0.15 78);
+  --info: oklch(0.72 0.16 245);
   --shadow-glass:
     0 1px 2px color-mix(in oklab, black 28%, transparent),
     0 18px 54px color-mix(in oklab, black 30%, transparent);
@@ -84,7 +91,11 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-signal: var(--signal);
+  --color-signal-foreground: var(--signal-foreground);
   --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -144,6 +155,21 @@ samp {
 
   .press-shadow {
     box-shadow: var(--shadow-press);
+  }
+
+  .gold-surface {
+    background: linear-gradient(
+      to bottom,
+      color-mix(in oklab, var(--signal) 92%, white 8%),
+      color-mix(in oklab, var(--signal) 86%, black 6%)
+    );
+  }
+
+  .gold-glow {
+    box-shadow:
+      0 1px 0 color-mix(in oklab, white 28%, transparent) inset,
+      0 2px 10px -2px color-mix(in oklab, var(--signal) 55%, transparent),
+      0 10px 30px -8px color-mix(in oklab, var(--signal) 45%, transparent);
   }
 
   .aurora {

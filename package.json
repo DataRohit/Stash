@@ -4,7 +4,10 @@
   "private": true,
   "description": "Host, organize, and collaboratively edit Markdown and HTML documents in nested projects with Convex-backed real-time collaboration, version history, and shareable links.",
   "keywords": [
+    "authentication",
     "backend",
+    "billing",
+    "clerk",
     "collaboration",
     "convex",
     "database",
@@ -12,7 +15,9 @@
     "documentation",
     "html",
     "markdown",
+    "multi-tenant",
     "nextjs",
+    "organizations",
     "real-time",
     "typescript",
     "version-control",
@@ -78,6 +83,7 @@
     "next-themes": "^0.4.6",
     "react": "19.2.7",
     "react-dom": "19.2.7",
+    "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
