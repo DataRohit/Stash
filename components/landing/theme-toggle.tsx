@@ -6,8 +6,13 @@ import type { MouseEvent } from "react";
 import { flushSync } from "react-dom";
 import { Button } from "@/components/ui/button";
 
+type ViewTransition = {
+  ready: Promise<void>;
+  finished: Promise<void>;
+};
+
 type DocumentWithViewTransition = Document & {
-  startViewTransition?: (callback: () => void) => { ready: Promise<void> };
+  startViewTransition?: (callback: () => void) => ViewTransition;
 };
 
 export function ThemeToggle() {
@@ -30,12 +35,15 @@ export function ThemeToggle() {
       Math.max(y, window.innerHeight - y),
     );
 
+    const root = document.documentElement;
+    root.classList.add("theme-transition");
+
     const transition = doc.startViewTransition(() => {
       flushSync(() => setTheme(next));
     });
 
     transition.ready.then(() => {
-      document.documentElement.animate(
+      root.animate(
         {
           clipPath: [`circle(0px at ${x}px ${y}px)`, `circle(${endRadius}px at ${x}px ${y}px)`],
         },
@@ -45,6 +53,10 @@ export function ThemeToggle() {
           pseudoElement: "::view-transition-new(root)",
         },
       );
+    });
+
+    transition.finished.finally(() => {
+      root.classList.remove("theme-transition");
     });
   };
 

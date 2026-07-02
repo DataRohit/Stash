@@ -97,7 +97,6 @@
 
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: 6rem;
 }
 
 body {
@@ -248,6 +247,11 @@ samp {
 ::view-transition-new(root) {
   animation: page-enter 260ms ease-out both;
   z-index: 9999;
+}
+
+html.theme-transition::view-transition-old(root),
+html.theme-transition::view-transition-new(root) {
+  animation: none;
 }
 
 .page-enter {
