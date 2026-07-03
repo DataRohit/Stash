@@ -12,6 +12,9 @@ type ClerkPlan = {
 type ClerkSubscriptionItem = {
   status: string;
   plan: ClerkPlan;
+  plan_period: "month" | "year" | null;
+  period_end: number | null;
+  canceled_at: number | null;
 };
 
 type ClerkSubscription = {
@@ -22,12 +25,18 @@ export type UserSubscription = {
   planSlug: string;
   isPro: boolean;
   featureSlugs: string[];
+  planPeriod: "month" | "year" | null;
+  periodEnd: number | null;
+  canceled: boolean;
 };
 
 const FREE_SUBSCRIPTION: UserSubscription = {
   planSlug: "free_user",
   isPro: false,
   featureSlugs: [],
+  planPeriod: null,
+  periodEnd: null,
+  canceled: false,
 };
 
 export async function getUserSubscription(): Promise<UserSubscription> {
@@ -60,6 +69,9 @@ export async function getUserSubscription(): Promise<UserSubscription> {
       planSlug: item.plan.slug,
       isPro: !item.plan.is_default,
       featureSlugs: item.plan.features.map((feature) => feature.slug),
+      planPeriod: item.plan_period,
+      periodEnd: item.period_end,
+      canceled: item.canceled_at != null,
     };
   } catch {
     return FREE_SUBSCRIPTION;

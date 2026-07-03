@@ -55,3 +55,81 @@ export async function removeOrgDetails(clerkOrgId: string): Promise<void> {
   }
   await client.mutation(api.organizations.remove, { clerkOrgId });
 }
+
+type ReconcileMember = {
+  memberUserId: string;
+  email: string;
+  role: string;
+  firstName: string | null;
+  lastName: string | null;
+  imageUrl: string | null;
+};
+
+type ReconcilePending = {
+  clerkInvitationId: string;
+  email: string;
+  role: string;
+};
+
+export async function reconcileOrgMembers(
+  clerkOrgId: string,
+  ownerUserId: string,
+  members: ReconcileMember[],
+  pendingInvites: ReconcilePending[],
+): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.members.reconcile, {
+    clerkOrgId,
+    ownerUserId,
+    members,
+    pendingInvites,
+  });
+}
+
+export async function mirrorUpsertPending(
+  clerkOrgId: string,
+  email: string,
+  role: string,
+  clerkInvitationId: string,
+): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.members.upsertPending, {
+    clerkOrgId,
+    email,
+    role,
+    clerkInvitationId,
+  });
+}
+
+export async function mirrorDeleteInvitation(
+  clerkOrgId: string,
+  clerkInvitationId: string,
+): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.members.deleteByInvitationId, { clerkOrgId, clerkInvitationId });
+}
+
+export async function mirrorDeleteMember(clerkOrgId: string, memberUserId: string): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.members.deleteByUserId, { clerkOrgId, memberUserId });
+}
+
+export async function deleteAllOrgMembers(clerkOrgId: string): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.members.deleteAllByOrg, { clerkOrgId });
+}

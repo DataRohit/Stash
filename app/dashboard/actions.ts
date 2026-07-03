@@ -1,7 +1,7 @@
 "use server";
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { removeOrgDetails, saveOrgDetails } from "@/lib/convex-server";
+import { deleteAllOrgMembers, removeOrgDetails, saveOrgDetails } from "@/lib/convex-server";
 import { MAX_IMAGE_BYTES, MAX_TAGS, MIN_ORG_NAME_LENGTH, sanitizeTags } from "@/lib/org";
 import { fetchOrgAvatarFile } from "@/lib/org-avatar";
 
@@ -66,13 +66,26 @@ export async function deleteOrganization(): Promise<DeleteOrganizationResult> {
   }
 
   const client = await clerkClient();
-  const memberships = await client.users.getOrganizationMembershipList({ userId });
-  const next = memberships.data.find((membership) => membership.organization.id !== orgId);
+  const memberships = await client.users.getOrganizationMembershipList({ userId, limit: 100 });
+  const current = memberships.data.find((membership) => membership.organization.id === orgId);
+  const isOwner = current?.organization.createdBy === userId;
+  const otherMemberships = memberships.data.filter(
+    (membership) => membership.organization.id !== orgId,
+  );
+  const ownedOthers = otherMemberships.filter(
+    (membership) => membership.organization.createdBy === userId,
+  );
+
+  if (isOwner && ownedOthers.length === 0) {
+    return { error: "last-owned-org" };
+  }
+  const next = ownedOthers[0] ?? otherMemberships[0];
   if (!next) {
     return { error: "last-org" };
   }
 
   try {
+    await deleteAllOrgMembers(orgId);
     await client.organizations.deleteOrganization(orgId);
     await removeOrgDetails(orgId);
     return { nextOrgId: next.organization.id };

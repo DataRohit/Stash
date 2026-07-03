@@ -23,7 +23,7 @@ Stash lets you host your documents — documentation, planning docs, notes, or a
 
 ## Project status
 
-Early development. The product features above are the roadmap. Shipped so far: the marketing landing page, Clerk authentication (sign-in/up, protected dashboard), a Clerk-powered pricing page, and the organization layer — a mandatory onboarding flow, plan-based organization limits, and per-organization customization (name, description, tags, and an uploadable icon that reuses Clerk's org logo and defaults to a generated DiceBear image). The document and project features come next. Expect rapid change.
+Early development. The product features above are the roadmap. Shipped so far: the marketing landing page, Clerk authentication (sign-in/up, protected dashboard), a Clerk-powered pricing page, and the organization layer — a mandatory onboarding flow, plan-based organization limits, per-organization customization (name, description, tags, and an uploadable icon that reuses Clerk's org logo and defaults to a generated DiceBear image), real-time member invitations (invite, accept/reject, and remove, with per-plan seat limits), and a plan-status badge. The document and project features come next. Expect rapid change.
 
 ## Tech stack
 
@@ -31,7 +31,7 @@ Early development. The product features above are the roadmap. Shipped so far: t
 | --- | --- |
 | Framework | Next.js 16 (App Router) + React 19 |
 | Language | TypeScript 5 (strict) |
-| Backend | [Convex](https://convex.dev) (reactive database + file storage) |
+| Backend | [Convex](https://convex.dev) (reactive database) |
 | Auth & billing | [Clerk](https://clerk.com) (sessions, organizations, roles, plans) |
 | Styling | Tailwind CSS v4 + [next-themes](https://github.com/pacocoursey/next-themes) |
 | UI extras | [Sonner](https://sonner.emilkowal.ski) toasts, [DiceBear](https://dicebear.com) generated org icons |
@@ -76,7 +76,7 @@ pnpm dev:local
 The backend is [Convex](https://convex.dev), a reactive database with type-safe functions.
 
 - **Local development** runs an open-source Convex backend on your machine — no account needed. `pnpm db:setup` runs the Convex local initialization once and writes `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_SITE_URL` to `.env.local`. `pnpm dev:local` starts local Convex and Next.js together; `pnpm dev:db` starts only Convex.
-- **Schema** lives in `convex/schema.ts` (currently an `organizations` table holding per-org description and tags). Backend functions go in `convex/`. Organization icons are not stored here — they use Clerk's org logo.
+- **Schema** lives in `convex/schema.ts` (an `organizations` table for per-org description and tags, and a `members` table that mirrors org members and pending invitations as a reactive read-model). Backend functions go in `convex/`. Organization icons are not stored here — they use Clerk's org logo.
 - **Clerk is wired to Convex** via `convex/auth.config.ts` (using `CLERK_JWT_ISSUER_DOMAIN`), so Convex functions can read the signed-in identity from the Clerk session token.
 - **Generated code** in `convex/_generated/` is produced by the Convex CLI and committed so the project type-checks in CI. It is excluded from formatting, linting, spell-checking, and the no-comments policy.
 - **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm db:dashboard`.
@@ -92,6 +92,10 @@ Authentication and billing run on [Clerk](https://clerk.com); set the Clerk keys
 - **Organizations are mandatory** — every user must create or select an organization before reaching the dashboard. Orgs are created through a server action (not Clerk's client widgets) so the plan cap is always enforced.
 - **Plan-based limits** — the active plan and its limits are read straight from the Clerk billing API (`lib/subscription.ts`, `lib/plan-limits.ts`) rather than the session token, so a fresh upgrade takes effect immediately. Free allows one organization; Pro allows more.
 - **Per-org customization** — an organization's name and icon are stored in Clerk while its description and tags live in Convex (`convex/organizations.ts`). The icon reuses Clerk's org logo: a [DiceBear](https://dicebear.com) image is uploaded as the default on creation, admins can replace it with their own upload, and Clerk hosts and serves it so the app and Clerk's own widgets show the same icon. Admins can also delete the organization (a two-step confirmation that switches to another org and blocks deleting the last one).
+- **Real-time members & invitations** — admins invite existing users by email (with a role), cancel pending invites, and remove members, capped per plan by a `N_organization_members` billing feature (`lib/plan-limits.ts`). Clerk stays authoritative (it emails invitations and owns membership); a Convex `members` table (`convex/members.ts`) is a denormalized read-model the dashboard subscribes to with `useQuery` so the list updates live. Because the local Convex deployment can't receive Clerk webhooks, a server-side reconcile (`reconcileMembers`) runs on each dashboard load to keep Convex in sync with Clerk — this also removes rows for invites/members changed via Clerk's own UI. An invited user sees the invitation arrive in real time and can accept or reject it in place.
+- **Plan status** — the dashboard navbar shows a badge for the current plan (Free or Pro) with the renewal or cancellation date, read from the Clerk billing API (`lib/subscription.ts`).
+
+To fully activate members/invitations, two one-time steps are needed in the Clerk dashboard (the code ships with safe fallbacks until then): add a `N_organization_members` feature to the Free and Pro plans (e.g. `3_organization_members` / `25_organization_members`), and add `org_id`/`org_role` claims (`{"org_id": "{{org.id}}", "org_role": "{{org.role}}"}`) to the `convex` JWT template so Convex can scope reads to the caller's organization.
 
 ## Scripts
 

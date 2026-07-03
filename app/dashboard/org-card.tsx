@@ -68,6 +68,7 @@ const DELETE_ERRORS: Record<string, string> = {
   unauthenticated: "Your session expired. Sign in again.",
   forbidden: "Only organization admins can delete this organization.",
   "last-org": "This is your only organization — create another before deleting it.",
+  "last-owned-org": "This is the only organization you own — create another before deleting it.",
   failed: "Something went wrong. Please try again.",
 };
 
@@ -247,26 +248,71 @@ export function OrgCard(props: OrgCardProps) {
   };
 
   return (
-    <section className="glass w-full max-w-2xl rounded-[12px] p-6 sm:p-8">
-      {mode === "view" ? (
+    <section className="glass w-full max-w-7xl rounded-[12px] p-6 sm:p-8">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
-          <img
-            src={iconUrl}
-            alt=""
-            className="size-14 shrink-0 rounded-[12px] border border-hairline bg-surface/60 object-cover"
-          />
+          {mode === "view" ? (
+            <img
+              src={iconUrl}
+              alt=""
+              className="size-14 shrink-0 rounded-[12px] border border-hairline bg-surface/60 object-cover"
+            />
+          ) : null}
           <div className="flex flex-col gap-1">
             <span className={labelClass}>— Organization</span>
-            <h1 className="font-serif text-3xl tracking-display">{name}</h1>
+            <h1 className="font-serif text-3xl tracking-display">
+              {mode === "view" ? name : "Edit details"}
+            </h1>
           </div>
         </div>
-      ) : (
-        <span className={labelClass}>— Organization</span>
-      )}
+
+        {isAdmin && !deleteOpen ? (
+          <div className="flex items-center gap-2">
+            {mode === "view" ? (
+              <>
+                <Button variant="secondary" className="w-52" onClick={beginEdit}>
+                  <Pencil className="size-4" aria-hidden="true" />
+                  Edit details
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="w-52"
+                  onClick={() => setDeleteOpen(true)}
+                  disabled={!canDelete}
+                >
+                  <Trash2 className="size-4" aria-hidden="true" />
+                  Delete organization
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-52"
+                  onClick={cancelEdit}
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  form="org-edit-form"
+                  className="w-52"
+                  disabled={saving || draftName.trim().length < 2}
+                >
+                  <Check className="size-4" aria-hidden="true" />
+                  {saving ? "Saving…" : "Save changes"}
+                </Button>
+              </>
+            )}
+          </div>
+        ) : null}
+      </div>
 
       {mode === "view" ? (
-        <div className="mt-6 flex flex-col gap-6">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="mt-8 flex flex-col gap-8">
+          <div className="grid gap-6 sm:grid-cols-3">
             <Meta icon={<Calendar className="size-3.5" aria-hidden="true" />} label="Created">
               {dateFormatter.format(new Date(createdAt))}
             </Meta>
@@ -278,259 +324,228 @@ export function OrgCard(props: OrgCardProps) {
             </Meta>
           </div>
 
-          <div className="flex flex-col gap-2">
-            <span className={labelClass}>Description</span>
-            <p className="text-sm leading-relaxed">
-              {description ? (
-                description
-              ) : (
-                <span className="text-muted-foreground">No description yet.</span>
-              )}
-            </p>
-          </div>
+          <div className="grid gap-8 border-hairline border-t pt-6 lg:grid-cols-3">
+            <div className="flex flex-col gap-2 lg:col-span-2">
+              <span className={labelClass}>Description</span>
+              <p className="text-sm leading-relaxed">
+                {description ? (
+                  description
+                ) : (
+                  <span className="text-muted-foreground">No description yet.</span>
+                )}
+              </p>
+            </div>
 
-          <div className="flex flex-col gap-2">
-            <span className={labelClass}>Tags</span>
-            {tags.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {tags.map((tag) => (
-                  <Badge key={tag} variant="surface">
-                    {tag}
-                  </Badge>
-                ))}
-              </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">No tags yet.</p>
-            )}
-          </div>
-
-          {isAdmin ? (
-            <div className="flex flex-col gap-3 border-hairline border-t pt-5">
-              {deleteOpen ? (
-                <div className="flex flex-col gap-3 rounded-[8px] border border-destructive/30 bg-destructive/[0.04] p-4">
-                  <div className="flex flex-col gap-1">
-                    <p className="font-medium text-sm">Delete this organization?</p>
-                    <p className="text-muted-foreground text-sm leading-relaxed">
-                      This permanently removes <span className="text-foreground">{name}</span> for
-                      everyone. Type the name to confirm.
-                    </p>
-                  </div>
-                  <input
-                    type="text"
-                    value={confirmName}
-                    onChange={(event) => setConfirmName(event.target.value)}
-                    disabled={deleting}
-                    autoComplete="off"
-                    placeholder={name}
-                    className={`h-10 ${fieldClass}`}
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      variant="destructive"
-                      className="w-full bg-destructive text-background hover:bg-destructive/90 hover:text-background"
-                      onClick={confirmDelete}
-                      disabled={deleting || confirmName.trim() !== name.trim()}
-                    >
-                      <Trash2 className="size-4" aria-hidden="true" />
-                      {deleting ? "Deleting…" : "Permanently delete"}
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      className="w-full"
-                      onClick={() => {
-                        setDeleteOpen(false);
-                        setConfirmName("");
-                      }}
-                      disabled={deleting}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
+            <div className="flex flex-col gap-2">
+              <span className={labelClass}>Tags</span>
+              {tags.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {tags.map((tag) => (
+                    <Badge key={tag} variant="surface">
+                      {tag}
+                    </Badge>
+                  ))}
                 </div>
               ) : (
-                <>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button variant="secondary" className="w-full" onClick={beginEdit}>
-                      <Pencil className="size-4" aria-hidden="true" />
-                      Edit details
-                    </Button>
-                    <Button
-                      variant="destructive"
-                      className="w-full"
-                      onClick={() => setDeleteOpen(true)}
-                      disabled={!canDelete}
-                    >
-                      <Trash2 className="size-4" aria-hidden="true" />
-                      Delete organization
-                    </Button>
-                  </div>
-                  {canDelete ? null : (
-                    <p className="text-muted-foreground text-xs">
-                      You can’t delete your only organization. Create another one first.
-                    </p>
-                  )}
-                </>
+                <p className="text-muted-foreground text-sm">No tags yet.</p>
               )}
             </div>
+          </div>
+
+          {isAdmin && deleteOpen ? (
+            <div className="flex max-w-md flex-col gap-3 rounded-[8px] border border-destructive/30 bg-destructive/[0.04] p-4">
+              <div className="flex flex-col gap-1">
+                <p className="font-medium text-sm">Delete this organization?</p>
+                <p className="text-muted-foreground text-sm leading-relaxed">
+                  This permanently removes <span className="text-foreground">{name}</span> for
+                  everyone. Type the name to confirm.
+                </p>
+              </div>
+              <input
+                type="text"
+                value={confirmName}
+                onChange={(event) => setConfirmName(event.target.value)}
+                disabled={deleting}
+                autoComplete="off"
+                placeholder={name}
+                className={`h-10 ${fieldClass}`}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant="destructive"
+                  className="w-full bg-destructive text-background hover:bg-destructive/90 hover:text-background"
+                  onClick={confirmDelete}
+                  disabled={deleting || confirmName.trim() !== name.trim()}
+                >
+                  <Trash2 className="size-4" aria-hidden="true" />
+                  {deleting ? "Deleting…" : "Permanently delete"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  onClick={() => {
+                    setDeleteOpen(false);
+                    setConfirmName("");
+                  }}
+                  disabled={deleting}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {isAdmin && !canDelete && !deleteOpen ? (
+            <p className="text-muted-foreground text-xs">
+              You must always own at least one organization. Create another one before deleting
+              this.
+            </p>
           ) : null}
         </div>
       ) : (
-        <form onSubmit={handleSave} className="mt-6 flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <span className={labelClass}>Icon</span>
-            <div className="flex items-center gap-4">
-              <img
-                src={iconUrl}
-                alt=""
-                className="size-16 shrink-0 rounded-[12px] border border-hairline bg-surface/60 object-cover"
+        <form id="org-edit-form" onSubmit={handleSave} className="mt-8 flex flex-col gap-8">
+          <div className="grid gap-6 sm:grid-cols-3">
+            <div className="flex flex-col gap-2">
+              <span className={labelClass}>Icon</span>
+              <div className="flex items-center gap-3">
+                <img
+                  src={iconUrl}
+                  alt=""
+                  className="size-10 shrink-0 rounded-[8px] border border-hairline bg-surface/60 object-cover"
+                />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  onChange={handleFile}
+                  className="hidden"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading || saving}
+                >
+                  <ImagePlus className="size-3.5" aria-hidden="true" />
+                  {uploading ? "Uploading…" : "Upload"}
+                </Button>
+                {imageUrl ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleResetIcon}
+                    disabled={uploading || saving}
+                    aria-label="Reset icon"
+                  >
+                    <RotateCcw className="size-3.5" aria-hidden="true" />
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-muted-foreground text-xs">PNG, JPG, WEBP or SVG. Max 2 MB.</p>
+            </div>
+
+            <div className="flex flex-col gap-2 sm:col-span-2">
+              <label htmlFor="org-name" className={labelClass}>
+                Name
+              </label>
+              <input
+                id="org-name"
+                type="text"
+                value={draftName}
+                onChange={(event) => setDraftName(event.target.value)}
+                disabled={saving}
+                autoComplete="off"
+                className={`h-9 max-w-sm ${fieldClass}`}
               />
-              <div className="flex flex-col gap-2">
+            </div>
+          </div>
+
+          <div className="grid gap-8 border-hairline border-t pt-6 lg:grid-cols-3 lg:items-stretch">
+            <div className="flex flex-col gap-2 lg:col-span-2">
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="org-description" className={labelClass}>
+                  Description
+                </label>
+                <span className="font-mono text-muted-foreground text-xs tabular-nums">
+                  {draftDescription.length}/{MAX_DESCRIPTION_LENGTH}
+                </span>
+              </div>
+              <textarea
+                id="org-description"
+                value={draftDescription}
+                onChange={(event) =>
+                  setDraftDescription(event.target.value.slice(0, MAX_DESCRIPTION_LENGTH))
+                }
+                disabled={saving}
+                placeholder="What is this organization for?"
+                className={`min-h-32 flex-1 resize-none py-2 ${fieldClass}`}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="org-tags" className={labelClass}>
+                  Tags
+                </label>
+                <span className="font-mono text-muted-foreground text-xs tabular-nums">
+                  {draftTags.length}/{MAX_TAGS}
+                </span>
+              </div>
+              <div className="flex min-h-32 flex-1 flex-col justify-between gap-2">
+                {draftTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {draftTags.map((tag, index) => (
+                      <Badge key={tag} variant="surface" className="pr-1">
+                        {tag}
+                        <button
+                          type="button"
+                          onClick={() => removeTag(index)}
+                          disabled={saving}
+                          aria-label={`Remove ${tag}`}
+                          className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-[4px] text-muted-foreground transition-colors hover:text-destructive"
+                        >
+                          <X className="size-3" aria-hidden="true" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <span />
+                )}
                 <div className="flex items-center gap-2">
                   <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
-                    onChange={handleFile}
-                    className="hidden"
+                    id="org-tags"
+                    type="text"
+                    value={tagInput}
+                    onChange={(event) => setTagInput(event.target.value)}
+                    onKeyDown={handleTagKeyDown}
+                    disabled={saving || draftTags.length >= MAX_TAGS}
+                    maxLength={MAX_TAG_LENGTH}
+                    autoComplete="off"
+                    placeholder={draftTags.length >= MAX_TAGS ? "Tag limit reached" : "Add a tag"}
+                    className={`h-10 flex-1 ${fieldClass}`}
                   />
                   <Button
                     type="button"
                     variant="secondary"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={uploading || saving}
+                    size="icon"
+                    className="size-10 shrink-0"
+                    onClick={addTag}
+                    disabled={
+                      saving || draftTags.length >= MAX_TAGS || tagInput.trim().length === 0
+                    }
+                    aria-label="Add tag"
                   >
-                    <ImagePlus className="size-4" aria-hidden="true" />
-                    {uploading ? "Uploading…" : "Upload image"}
+                    <Plus className="size-4" aria-hidden="true" />
                   </Button>
-                  {imageUrl ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={handleResetIcon}
-                      disabled={uploading || saving}
-                    >
-                      <RotateCcw className="size-4" aria-hidden="true" />
-                      Reset
-                    </Button>
-                  ) : null}
                 </div>
-                <p className="text-muted-foreground text-xs">PNG, JPG, WEBP or SVG. Max 2 MB.</p>
               </div>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <label htmlFor="org-name" className={labelClass}>
-              Name
-            </label>
-            <input
-              id="org-name"
-              type="text"
-              value={draftName}
-              onChange={(event) => setDraftName(event.target.value)}
-              disabled={saving}
-              autoComplete="off"
-              className={`h-10 ${fieldClass}`}
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-3">
-              <label htmlFor="org-description" className={labelClass}>
-                Description
-              </label>
-              <span className="font-mono text-muted-foreground text-xs tabular-nums">
-                {draftDescription.length}/{MAX_DESCRIPTION_LENGTH}
-              </span>
-            </div>
-            <textarea
-              id="org-description"
-              value={draftDescription}
-              onChange={(event) =>
-                setDraftDescription(event.target.value.slice(0, MAX_DESCRIPTION_LENGTH))
-              }
-              disabled={saving}
-              rows={3}
-              placeholder="What is this organization for?"
-              className={`resize-none py-2 ${fieldClass}`}
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-3">
-              <label htmlFor="org-tags" className={labelClass}>
-                Tags
-              </label>
-              <span className="font-mono text-muted-foreground text-xs tabular-nums">
-                {draftTags.length}/{MAX_TAGS}
-              </span>
-            </div>
-            {draftTags.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {draftTags.map((tag, index) => (
-                  <Badge key={tag} variant="surface" className="pr-1">
-                    {tag}
-                    <button
-                      type="button"
-                      onClick={() => removeTag(index)}
-                      disabled={saving}
-                      aria-label={`Remove ${tag}`}
-                      className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-[4px] text-muted-foreground transition-colors hover:text-destructive"
-                    >
-                      <X className="size-3" aria-hidden="true" />
-                    </button>
-                  </Badge>
-                ))}
-              </div>
-            ) : null}
-            <div className="flex items-center gap-2">
-              <input
-                id="org-tags"
-                type="text"
-                value={tagInput}
-                onChange={(event) => setTagInput(event.target.value)}
-                onKeyDown={handleTagKeyDown}
-                disabled={saving || draftTags.length >= MAX_TAGS}
-                maxLength={MAX_TAG_LENGTH}
-                autoComplete="off"
-                placeholder={draftTags.length >= MAX_TAGS ? "Tag limit reached" : "Add a tag"}
-                className={`h-10 flex-1 ${fieldClass}`}
-              />
-              <Button
-                type="button"
-                variant="secondary"
-                size="icon"
-                className="size-10 shrink-0"
-                onClick={addTag}
-                disabled={saving || draftTags.length >= MAX_TAGS || tagInput.trim().length === 0}
-                aria-label="Add tag"
-              >
-                <Plus className="size-4" aria-hidden="true" />
-              </Button>
             </div>
           </div>
 
           {error ? <p className="text-destructive text-sm">{error}</p> : null}
-
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={saving || draftName.trim().length < 2}
-            >
-              <Check className="size-4" aria-hidden="true" />
-              {saving ? "Saving…" : "Save changes"}
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              className="w-full"
-              onClick={cancelEdit}
-              disabled={saving}
-            >
-              Cancel
-            </Button>
-          </div>
         </form>
       )}
     </section>

@@ -14,6 +14,8 @@ export const buttonVariants = cva(
           "bg-transparent text-muted-foreground shadow-none hover:bg-foreground/[0.05] hover:text-foreground",
         destructive:
           "press-shadow hairline bg-surface/45 text-destructive backdrop-blur hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive",
+        success:
+          "press-shadow hairline bg-surface/45 text-success backdrop-blur hover:border-success/40 hover:bg-success/10 hover:text-success",
         upgrade:
           "gold-surface gold-glow border border-signal/60 font-semibold text-signal-foreground hover:brightness-[1.06]",
       },
