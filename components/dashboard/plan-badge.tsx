@@ -14,7 +14,7 @@ type PlanBadgeProps = {
   canceled: boolean;
 };
 
-const dateFormatter = new Intl.DateTimeFormat("en-US", { dateStyle: "medium" });
+const dateFormatter = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
 export function PlanBadge({ isPro, planPeriod, periodEnd, canceled }: PlanBadgeProps) {
   const clerk = useClerk();

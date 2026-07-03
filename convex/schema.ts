@@ -27,6 +27,27 @@ const schema = defineSchema({
     .index("by_org_email", ["clerkOrgId", "email"])
     .index("by_org_user", ["clerkOrgId", "memberUserId"])
     .index("by_email", ["email"]),
+
+  projects: defineTable({
+    clerkOrgId: v.string(),
+    title: v.string(),
+    description: v.string(),
+    tags: v.array(v.string()),
+    imageStorageId: v.union(v.id("_storage"), v.null()),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_clerk_org", ["clerkOrgId"]),
+
+  projectAccess: defineTable({
+    projectId: v.id("projects"),
+    clerkOrgId: v.string(),
+    userId: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_org_user", ["clerkOrgId", "userId"])
+    .index("by_project_user", ["projectId", "userId"]),
 });
 
 export default schema;

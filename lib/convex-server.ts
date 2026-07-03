@@ -1,6 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 
 export type OrgDetails = {
   description: string;
@@ -132,4 +133,56 @@ export async function deleteAllOrgMembers(clerkOrgId: string): Promise<void> {
     return;
   }
   await client.mutation(api.members.deleteAllByOrg, { clerkOrgId });
+}
+
+export async function countOrgProjects(clerkOrgId: string): Promise<number> {
+  const client = await authedClient();
+  if (!client) {
+    return 0;
+  }
+  return await client.query(api.projects.countByOrg, { clerkOrgId });
+}
+
+export async function createProjectDoc(
+  clerkOrgId: string,
+  title: string,
+  description: string,
+  tags: string[],
+): Promise<Id<"projects">> {
+  const client = await authedClient();
+  if (!client) {
+    throw new Error("Convex is not configured");
+  }
+  return await client.mutation(api.projects.create, { clerkOrgId, title, description, tags });
+}
+
+export async function fetchProject(projectId: string) {
+  try {
+    const client = await authedClient();
+    if (!client) {
+      return null;
+    }
+    return await client.query(api.projects.get, { projectId: projectId as Id<"projects"> });
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteAllOrgProjects(clerkOrgId: string): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.projects.deleteAllByOrg, { clerkOrgId });
+}
+
+export async function revokeAllProjectAccessForUser(
+  clerkOrgId: string,
+  userId: string,
+): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.projects.revokeAllAccessForUser, { clerkOrgId, userId });
 }

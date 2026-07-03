@@ -6,6 +6,7 @@ import {
   mirrorDeleteMember,
   mirrorUpsertPending,
   reconcileOrgMembers,
+  revokeAllProjectAccessForUser,
 } from "@/lib/convex-server";
 import { getUserPlanLimits } from "@/lib/plan-limits";
 
@@ -256,6 +257,7 @@ export async function removeMember(input: { memberUserId: string }): Promise<Mem
       userId: input.memberUserId,
     });
     await mirrorDeleteMember(orgId, input.memberUserId);
+    await revokeAllProjectAccessForUser(orgId, input.memberUserId);
     return { ok: true };
   } catch {
     return { error: "failed" };

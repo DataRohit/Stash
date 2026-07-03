@@ -10,6 +10,7 @@
 
 import type * as members from "../members.js";
 import type * as organizations from "../organizations.js";
+import type * as projects from "../projects.js";
 
 import type {
   ApiFromModules,
@@ -20,6 +21,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   members: typeof members;
   organizations: typeof organizations;
+  projects: typeof projects;
 }>;
 
 /**
