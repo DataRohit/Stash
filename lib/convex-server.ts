@@ -24,6 +24,17 @@ async function authedClient(): Promise<ConvexHttpClient | null> {
   return client;
 }
 
+export async function leaveDocumentPresence(documentId: string, sessionId: string): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.presence.leave, {
+    documentId: documentId as Id<"documents">,
+    sessionId,
+  });
+}
+
 export async function fetchOrgDetails(clerkOrgId: string): Promise<OrgDetails> {
   try {
     const client = await authedClient();

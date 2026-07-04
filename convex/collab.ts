@@ -3,9 +3,12 @@ import * as Y from "yjs";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
-import { accessForProject, requireProjectAccess } from "./documents";
+import { accessForProject, byteLength, projectTotalBytes, requireProjectAccess } from "./documents";
 
 const COMPACT_THRESHOLD = 200;
+const MAX_FILE_BYTES = 512 * 1024;
+const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
+const MAX_COLLAB_UPDATE_BYTES = 768 * 1024;
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
@@ -31,6 +34,33 @@ async function nextSeq(ctx: MutationCtx, documentId: Id<"documents">): Promise<n
     .order("desc")
     .first();
   return (latest?.seq ?? 0) + 1;
+}
+
+async function materializedContent(
+  ctx: QueryCtx,
+  documentId: Id<"documents">,
+  pendingUpdate: ArrayBuffer,
+): Promise<string> {
+  const ydoc = new Y.Doc();
+  const snapshot = await ctx.db
+    .query("yjsSnapshots")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .unique();
+  if (snapshot) {
+    Y.applyUpdate(ydoc, new Uint8Array(snapshot.snapshot));
+  }
+  const baseSeq = snapshot?.throughSeq ?? 0;
+  const updates = await ctx.db
+    .query("yjsUpdates")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId).gt("seq", baseSeq))
+    .collect();
+  for (const row of updates) {
+    Y.applyUpdate(ydoc, new Uint8Array(row.update));
+  }
+  Y.applyUpdate(ydoc, new Uint8Array(pendingUpdate));
+  const content = ydoc.getText("codemirror").toString();
+  ydoc.destroy();
+  return content;
 }
 
 export const pullUpdates = query({
@@ -63,11 +93,24 @@ export const pullUpdates = query({
 export const pushUpdate = mutation({
   args: { documentId: v.id("documents"), update: v.bytes() },
   handler: async (ctx, args) => {
-    const projectId = await documentProject(ctx, args.documentId);
-    if (!projectId) {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file") {
       throw new Error("not-found");
     }
-    await requireProjectAccess(ctx, projectId);
+    const access = await requireProjectAccess(ctx, doc.projectId);
+    if (args.update.byteLength > MAX_COLLAB_UPDATE_BYTES) {
+      throw new Error("update-too-large");
+    }
+    const content = await materializedContent(ctx, args.documentId, args.update);
+    const newSize = byteLength(content);
+    if (newSize > MAX_FILE_BYTES) {
+      throw new Error("file-too-large");
+    }
+    const total = await projectTotalBytes(ctx, doc.projectId);
+    const max = access.project.maxSizeBytes ?? DEFAULT_MAX_PROJECT_BYTES;
+    if (total - doc.size + newSize > max) {
+      throw new Error("project-full");
+    }
     const seq = await nextSeq(ctx, args.documentId);
     await ctx.db.insert("yjsUpdates", {
       documentId: args.documentId,
@@ -75,6 +118,7 @@ export const pushUpdate = mutation({
       update: args.update,
       createdAt: Date.now(),
     });
+    await ctx.db.patch(doc._id, { content, size: newSize, updatedAt: Date.now() });
     const shouldCompact = seq % COMPACT_THRESHOLD === 0;
     return { seq, shouldCompact };
   },
@@ -125,6 +169,9 @@ export const saveSnapshot = mutation({
       throw new Error("not-found");
     }
     await requireProjectAccess(ctx, projectId);
+    if (args.snapshot.byteLength > MAX_COLLAB_UPDATE_BYTES) {
+      throw new Error("snapshot-too-large");
+    }
     const existing = await ctx.db
       .query("yjsSnapshots")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))

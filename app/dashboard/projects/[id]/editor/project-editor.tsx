@@ -2,11 +2,10 @@
 
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowLeft, Check, Code2, Columns2, Eye, Loader2, PanelLeft, Save } from "lucide-react";
+import { ArrowLeft, Check, Code2, Columns2, Eye, Loader2, PanelLeft } from "lucide-react";
 import Link from "next/link";
 import {
   type PointerEvent as ReactPointerEvent,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -35,11 +34,7 @@ type ProjectEditorProps = {
 type ViewMode = "editor" | "split" | "preview";
 
 const MAX_ASSET_BYTES = 5 * 1024 * 1024;
-const AUTOSAVE_DELAY_MS = 900;
-
-function autosaveStorageKey(projectId: string): string {
-  return `stash:editor:auto-save:${projectId}`;
-}
+const MAX_FILE_BYTES = 512 * 1024;
 
 function sidebarStorageKey(projectId: string): string {
   return `stash:editor:sidebar:${projectId}`;
@@ -221,29 +216,14 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
   const createFile = useMutation(api.documents.createFile);
   const renameDoc = useMutation(api.documents.rename);
   const removeDoc = useMutation(api.documents.remove);
-  const setContent = useMutation(api.documents.setContent);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const createAsset = useMutation(api.documents.createAsset);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [buffer, setBuffer] = useState("");
-  const [savedContent, setSavedContent] = useState("");
-  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
-  const [autoSaveEnabled, setAutoSaveEnabled] = useState(() => {
-    if (typeof window === "undefined") {
-      return true;
-    }
-    return window.localStorage.getItem(autosaveStorageKey(projectId)) !== "off";
-  });
-  const [saving, setSaving] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem(sidebarStorageKey(projectId)) === "collapsed";
-  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const lastSeeded = useRef<string | null>(null);
 
   const startResize = (event: ReactPointerEvent) => {
@@ -265,8 +245,12 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
   };
 
   const { user } = useUser();
-  const selectedNode = nodes.find((node) => node.id === selectedId) ?? null;
-  const selectedFileId = selectedNode?.kind === "file" ? (selectedId as string) : null;
+  const effectiveSelectedId =
+    selectedId && (nodesData === undefined || nodes.some((node) => node.id === selectedId))
+      ? selectedId
+      : null;
+  const selectedNode = nodes.find((node) => node.id === effectiveSelectedId) ?? null;
+  const selectedFileId = selectedNode?.kind === "file" ? (effectiveSelectedId as string) : null;
   const doc = useQuery(
     api.documents.getDocument,
     selectedFileId ? { documentId: selectedFileId as Id<"documents"> } : "skip",
@@ -283,11 +267,15 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
     [user],
   );
   const collab = useCollabDoc(selectedFileId, canEdit, collabUser);
-  const collabReady = collab?.ready ?? true;
 
   useEffect(() => {
-    window.localStorage.setItem(autosaveStorageKey(projectId), autoSaveEnabled ? "on" : "off");
-  }, [autoSaveEnabled, projectId]);
+    const timer = window.setTimeout(() => {
+      setSidebarCollapsed(
+        window.localStorage.getItem(sidebarStorageKey(projectId)) === "collapsed",
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [projectId]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -299,59 +287,20 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
   useEffect(() => {
     if (doc && doc.id === selectedFileId && lastSeeded.current !== selectedFileId) {
       setBuffer(doc.content);
-      setSavedContent(doc.content);
-      setLastSavedAt(null);
       lastSeeded.current = selectedFileId;
     }
   }, [doc, selectedFileId]);
-
-  const dirty = Boolean(doc && selectedFileId && buffer !== savedContent);
-
-  const saveCurrentFile = useCallback(
-    async (mode: "auto" | "manual") => {
-      if (!canEdit || !selectedFileId || !doc || doc.id !== selectedFileId || !collabReady) {
-        return;
-      }
-      if (buffer === savedContent) {
-        if (mode === "manual") {
-          notify.success("Already saved");
-        }
-        return;
-      }
-      setSaving(true);
-      try {
-        await setContent({ documentId: selectedFileId as Id<"documents">, content: buffer });
-        setSavedContent(buffer);
-        setLastSavedAt(new Date());
-      } catch (error) {
-        notify.error("Couldn’t save", { description: mapDocError(error) });
-      } finally {
-        setSaving(false);
-      }
-    },
-    [buffer, canEdit, collabReady, doc, savedContent, selectedFileId, setContent],
-  );
-
-  useEffect(() => {
-    if (!autoSaveEnabled || !dirty || saving) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      void saveCurrentFile("auto");
-    }, AUTOSAVE_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [autoSaveEnabled, dirty, saveCurrentFile, saving]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        void saveCurrentFile("manual");
+        notify.success("Changes sync automatically");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [saveCurrentFile]);
+  }, []);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -406,19 +355,18 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
   };
 
   const saveStatus = selectedFileId
-    ? saving
-      ? "Saving..."
-      : dirty
-        ? autoSaveEnabled
-          ? "Unsaved changes"
-          : "Manual save required"
-        : lastSavedAt
-          ? `${autoSaveEnabled ? "Auto saved" : "Saved"} ${formatSaveTime(lastSavedAt)}`
-          : "Saved"
+    ? collab?.syncing
+      ? "Syncing..."
+      : collab?.lastSyncedAt
+        ? `Live ${formatSaveTime(collab.lastSyncedAt)}`
+        : "Live"
     : "";
   const usedBytes = usage?.usedBytes ?? 0;
   const maxBytes = usage?.maxSizeBytes ?? 8 * 1024 * 1024;
   const usedPercent = Math.min(100, Math.round((usedBytes / maxBytes) * 100));
+  const maxEditableBytes = doc
+    ? Math.min(MAX_FILE_BYTES, doc.size + Math.max(0, maxBytes - usedBytes))
+    : MAX_FILE_BYTES;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -450,9 +398,9 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
           ) : null}
           {saveStatus ? (
             <span className="hidden shrink-0 items-center gap-1 font-mono text-muted-foreground text-xs sm:flex">
-              {saving ? (
+              {collab?.syncing ? (
                 <Loader2 className="size-3 animate-spin" aria-hidden="true" />
-              ) : dirty ? null : (
+              ) : (
                 <Check className="size-3 text-accent" aria-hidden="true" />
               )}
               {saveStatus}
@@ -462,53 +410,6 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
         <div className="flex shrink-0 items-center gap-3">
           {selectedFileId && collab ? (
             <ViewerPresence viewers={collab.viewers} canOpen={isAdmin} />
-          ) : null}
-          {selectedFileId && canEdit ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setAutoSaveEnabled((value) => !value)}
-                aria-pressed={autoSaveEnabled}
-                aria-label={autoSaveEnabled ? "Autosave on" : "Autosave off"}
-                className={cn(
-                  "hidden h-7 cursor-pointer items-center gap-2 rounded-md border px-2.5 font-medium font-mono text-[10px] uppercase tracking-wider transition-colors sm:flex",
-                  autoSaveEnabled
-                    ? "border-accent/30 bg-accent/10 text-foreground"
-                    : "border-hairline text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors",
-                    autoSaveEnabled ? "bg-accent" : "bg-foreground/20",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "size-3 rounded-full bg-white shadow-sm transition-transform",
-                      autoSaveEnabled ? "translate-x-3.5" : "translate-x-0.5",
-                    )}
-                  />
-                </span>
-                Autosave
-              </button>
-              {!autoSaveEnabled ? (
-                <button
-                  type="button"
-                  onClick={() => void saveCurrentFile("manual")}
-                  disabled={!dirty || saving || !collabReady}
-                  className="flex h-7 cursor-pointer items-center gap-1.5 rounded-sm border border-hairline px-2 font-mono text-muted-foreground text-xs transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  {saving ? (
-                    <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Save className="size-3.5" aria-hidden="true" />
-                  )}
-                  <span className="hidden sm:inline">Save</span>
-                </button>
-              ) : null}
-            </div>
           ) : null}
           <div className="hidden items-center gap-2 sm:flex">
             <div className="h-1.5 w-24 overflow-hidden rounded-full bg-foreground/10">
@@ -563,7 +464,7 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
         >
           <FileTree
             nodes={nodes}
-            selectedId={selectedId}
+            selectedId={effectiveSelectedId}
             canEdit={canEdit}
             onSelect={(node) => setSelectedId(node.id)}
             onCreateFolder={(parentId, name) =>
@@ -586,7 +487,22 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
             onRemove={(node) =>
               guard(async () => {
                 await removeDoc({ documentId: node.id as Id<"documents"> });
-                if (selectedId === node.id) {
+                const removedIds = new Set<string>([node.id]);
+                let changed = true;
+                while (changed) {
+                  changed = false;
+                  for (const child of nodes) {
+                    if (
+                      child.parentId &&
+                      removedIds.has(child.parentId) &&
+                      !removedIds.has(child.id)
+                    ) {
+                      removedIds.add(child.id);
+                      changed = true;
+                    }
+                  }
+                }
+                if (effectiveSelectedId && removedIds.has(effectiveSelectedId)) {
                   setSelectedId(null);
                 }
               })
@@ -618,11 +534,17 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
                   )}
                 >
                   <DocEditor
-                    key={selectedFileId}
+                    key={`${selectedFileId}:${doc.fileType}`}
                     initialContent={doc.content}
                     language={doc.fileType === "html" ? "html" : "md"}
                     readOnly={!canEdit}
                     onChange={setBuffer}
+                    maxContentBytes={canEdit ? maxEditableBytes : undefined}
+                    onLimit={() =>
+                      notify.error("Edit is too large", {
+                        description: mapDocError(new Error("file-too-large")),
+                      })
+                    }
                     ytext={canEdit ? collab?.ytext : undefined}
                     awareness={canEdit ? collab?.awareness : undefined}
                   />

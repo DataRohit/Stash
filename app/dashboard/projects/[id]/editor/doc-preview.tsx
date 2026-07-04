@@ -26,6 +26,7 @@ body{background:#0b0d12;color:#e6e8ee;font-family:ui-sans-serif,system-ui,-apple
 .doc ul,.doc ol{padding-left:1.4rem}
 .doc blockquote{border-left:3px solid #2a2f3a;margin:1em 0;padding-left:1rem;color:#9aa3b2}
 .doc hr{border:none;border-top:1px solid #2a2f3a;margin:1.5em 0}
+.doc a.missing-ref{color:#f87171;text-decoration-style:wavy}
 .mermaid{margin:1em 0}
 `;
 
@@ -33,13 +34,17 @@ const HTML_BASE_CSS = `
 html,body{margin:0}
 body{background:#ffffff;color:#0f172a;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
 img{max-width:100%}
+a.missing-ref{color:#dc2626;text-decoration-style:wavy}
 `;
 
-const MISSING_ASSET_SRC =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='640' height='180' viewBox='0 0 640 180'%3E%3Crect width='640' height='180' rx='12' fill='%2312151c'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%239aa3b2' font-family='monospace' font-size='16'%3EMissing asset%3C/text%3E%3C/svg%3E";
-
 function isExternalRef(value: string): boolean {
-  return /^(?:[a-z][a-z\d+.-]*:|#|\/)/i.test(value);
+  return /^(?:[a-z][a-z\d+.-]*:|#)/i.test(value);
+}
+
+function missingAssetSrc(ref: string): string {
+  const label = ref.length > 48 ? `${ref.slice(0, 45)}...` : ref;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="180" viewBox="0 0 640 180"><rect width="640" height="180" rx="12" fill="#12151c"/><rect x="14" y="14" width="612" height="152" rx="10" fill="none" stroke="#ef4444" stroke-dasharray="8 8"/><text x="50%" y="78" text-anchor="middle" fill="#f87171" font-family="monospace" font-size="16" font-weight="600">Missing asset</text><text x="50%" y="108" text-anchor="middle" fill="#9aa3b2" font-family="monospace" font-size="13">${escapeHtml(label)}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
 function previewScript(theme: string): string {
@@ -85,7 +90,8 @@ function rewriteRefs(rawHtml: string, fromNode: TreeNode, nodes: TreeNode[]): st
     if (target?.kind === "asset" && target.assetUrl) {
       img.setAttribute("src", target.assetUrl);
     } else if (src && !isExternalRef(src)) {
-      img.setAttribute("src", MISSING_ASSET_SRC);
+      img.setAttribute("src", missingAssetSrc(src));
+      img.setAttribute("alt", `Missing asset: ${src}`);
       img.setAttribute("title", `Missing asset: ${src}`);
     }
   }
@@ -98,6 +104,10 @@ function rewriteRefs(rawHtml: string, fromNode: TreeNode, nodes: TreeNode[]): st
     } else if (target?.kind === "asset" && target.assetUrl) {
       anchor.setAttribute("href", target.assetUrl);
       anchor.setAttribute("target", "_blank");
+    } else if (href && !isExternalRef(href)) {
+      anchor.setAttribute("href", "#");
+      anchor.setAttribute("class", `${anchor.getAttribute("class") ?? ""} missing-ref`.trim());
+      anchor.setAttribute("title", `Missing file or asset: ${href}`);
     }
   }
   return doc.body.innerHTML;

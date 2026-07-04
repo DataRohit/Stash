@@ -2,8 +2,14 @@
 
 import { useMutation, useQuery } from "convex/react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from "y-protocols/awareness";
+import {
+  Awareness,
+  applyAwarenessUpdate,
+  encodeAwarenessUpdate,
+  removeAwarenessStates,
+} from "y-protocols/awareness";
 import * as Y from "yjs";
+import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -30,7 +36,7 @@ const CURSOR_COLORS = [
 const DEFAULT_CURSOR_COLOR = { color: "#2563eb", light: "#2563eb33" };
 
 const FLUSH_MS = 200;
-const HEARTBEAT_MS = 10_000;
+const HEARTBEAT_MS = 5_000;
 
 export type CollabViewer = {
   sessionId: string;
@@ -51,6 +57,8 @@ type CollabDoc = {
   ytext: Y.Text;
   awareness: Awareness;
   ready: boolean;
+  syncing: boolean;
+  lastSyncedAt: Date | null;
   viewers: CollabViewer[];
 };
 
@@ -98,6 +106,35 @@ function reportAsync(error: unknown): void {
   }
 }
 
+function beaconLeave(documentId: string, sessionId: string): void {
+  const body = JSON.stringify({ documentId, sessionId });
+  if (navigator.sendBeacon) {
+    const payload = new Blob([body], { type: "application/json" });
+    navigator.sendBeacon("/api/presence/leave", payload);
+    return;
+  }
+  void fetch("/api/presence/leave", {
+    method: "POST",
+    body,
+    headers: { "Content-Type": "application/json" },
+    keepalive: true,
+  }).catch(reportAsync);
+}
+
+function mapSyncError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("project-full")) {
+    return "This project has reached its size limit. Upgrade or remove files.";
+  }
+  if (message.includes("file-too-large")) {
+    return "This file is too large (max 512 KB per file).";
+  }
+  if (message.includes("update-too-large")) {
+    return "That edit is too large to sync in one step. Split the paste into smaller chunks.";
+  }
+  return "Your latest edit could not be synced. Please try again.";
+}
+
 export function useCollabDoc(
   documentId: string | null,
   canEdit: boolean,
@@ -105,11 +142,19 @@ export function useCollabDoc(
 ): CollabDoc | null {
   const [engine, setEngine] = useState<Engine | null>(null);
   const [ready, setReady] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [pullCursor, setPullCursor] = useState<{ documentId: string | null; afterSeq: number }>({
+    documentId: null,
+    afterSeq: 0,
+  });
+  const queryAfterSeq =
+    documentId && pullCursor.documentId === documentId ? pullCursor.afterSeq : 0;
 
   const pullResult = useQuery(
     api.collab.pullUpdates,
-    documentId ? { documentId: documentId as Id<"documents">, afterSeq: 0 } : "skip",
+    documentId ? { documentId: documentId as Id<"documents">, afterSeq: queryAfterSeq } : "skip",
   );
   const presenceResult = useQuery(
     api.presence.list,
@@ -123,6 +168,7 @@ export function useCollabDoc(
 
   const appliedSeq = useRef(0);
   const seeded = useRef(false);
+  const compactPending = useRef(false);
   const userColor = useMemo(() => colorForUser(user.id), [user.id]);
   const userLabel = useMemo(
     () => (user.email ? `${user.name} · ${user.email}` : user.name),
@@ -137,6 +183,8 @@ export function useCollabDoc(
     if (!documentId || !sessionId) {
       setEngine(null);
       setReady(false);
+      setSyncing(false);
+      setLastSyncedAt(null);
       return;
     }
     const ydoc = new Y.Doc();
@@ -144,7 +192,11 @@ export function useCollabDoc(
     const awareness = new Awareness(ydoc);
     appliedSeq.current = 0;
     seeded.current = false;
+    compactPending.current = false;
+    setPullCursor({ documentId, afterSeq: 0 });
     setReady(false);
+    setSyncing(false);
+    setLastSyncedAt(null);
     setEngine({ ydoc, ytext, awareness });
     return () => {
       awareness.destroy();
@@ -160,8 +212,9 @@ export function useCollabDoc(
       name: userLabel,
       color: userColor.color,
       colorLight: userColor.light,
+      sessionId,
     });
-  }, [engine, userLabel, userColor]);
+  }, [engine, userLabel, userColor, sessionId]);
 
   useEffect(() => {
     if (!engine || !documentId || !canEdit) {
@@ -173,20 +226,26 @@ export function useCollabDoc(
     const flush = async () => {
       timer = null;
       if (pending.length === 0) {
+        setSyncing(false);
         return;
       }
       const merged = Y.mergeUpdates(pending);
       pending = [];
-      const result = await pushUpdate({
-        documentId: documentId as Id<"documents">,
-        update: toArrayBuffer(merged),
-      });
-      if (result.shouldCompact) {
-        await saveSnapshot({
+      setSyncing(true);
+      try {
+        const result = await pushUpdate({
           documentId: documentId as Id<"documents">,
-          snapshot: toArrayBuffer(Y.encodeStateAsUpdate(ydoc)),
-          throughSeq: appliedSeq.current,
+          update: toArrayBuffer(merged),
         });
+        compactPending.current ||= result.shouldCompact;
+        setLastSyncedAt(new Date());
+      } catch (error) {
+        notify.error("Couldn’t sync changes", { description: mapSyncError(error) });
+        reportAsync(error);
+      } finally {
+        if (pending.length === 0) {
+          setSyncing(false);
+        }
       }
     };
     const onUpdate = (update: Uint8Array, origin: unknown) => {
@@ -194,19 +253,31 @@ export function useCollabDoc(
         return;
       }
       pending.push(update);
+      setSyncing(true);
       if (timer === null) {
         timer = setTimeout(() => void flush(), FLUSH_MS);
       }
     };
+    const onPageHide = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      void flush();
+    };
     ydoc.on("update", onUpdate);
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onPageHide);
     return () => {
       ydoc.off("update", onUpdate);
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onPageHide);
       if (timer !== null) {
         clearTimeout(timer);
       }
       void flush();
     };
-  }, [engine, documentId, canEdit, pushUpdate, saveSnapshot]);
+  }, [engine, documentId, canEdit, pushUpdate]);
 
   useEffect(() => {
     if (!engine || !documentId || pullResult === undefined) {
@@ -230,21 +301,51 @@ export function useCollabDoc(
       setReady(true);
     }
     const isEmpty = !pullResult.snapshot && pullResult.updates.length === 0;
+    if (isEmpty) {
+      setReady(true);
+    }
     if (isEmpty && canEdit && !seeded.current) {
       seeded.current = true;
       void ensureSeed({ documentId: documentId as Id<"documents"> });
     }
-  }, [engine, documentId, pullResult, canEdit, ensureSeed]);
+    if (appliedSeq.current !== queryAfterSeq) {
+      setPullCursor({ documentId, afterSeq: appliedSeq.current });
+    }
+    if (compactPending.current && appliedSeq.current > 0) {
+      compactPending.current = false;
+      void saveSnapshot({
+        documentId: documentId as Id<"documents">,
+        snapshot: toArrayBuffer(Y.encodeStateAsUpdate(ydoc)),
+        throughSeq: appliedSeq.current,
+      }).catch(reportAsync);
+    }
+  }, [engine, documentId, pullResult, queryAfterSeq, canEdit, ensureSeed, saveSnapshot]);
 
   useEffect(() => {
     if (!engine || !presenceResult) {
       return;
     }
     const { awareness } = engine;
+    const activeSessions = new Set<string>();
     for (const row of presenceResult) {
+      activeSessions.add(row.sessionId);
       if (row.sessionId !== sessionId && row.state.length > 0) {
         applyAwarenessUpdate(awareness, base64ToBytes(row.state), "remote");
       }
+    }
+    const staleClientIds: number[] = [];
+    for (const [clientId, state] of awareness.getStates()) {
+      const remoteSession = state.user?.sessionId;
+      if (
+        clientId !== awareness.clientID &&
+        typeof remoteSession === "string" &&
+        !activeSessions.has(remoteSession)
+      ) {
+        staleClientIds.push(clientId);
+      }
+    }
+    if (staleClientIds.length > 0) {
+      removeAwarenessStates(awareness, staleClientIds, "stale");
     }
   }, [engine, presenceResult, sessionId]);
 
@@ -266,12 +367,16 @@ export function useCollabDoc(
       }).catch(reportAsync);
     };
     const onChange = () => send();
+    const onPageHide = () => beaconLeave(documentId, sessionId);
     awareness.on("update", onChange);
+    window.addEventListener("pagehide", onPageHide);
     send();
     const interval = setInterval(send, HEARTBEAT_MS);
     return () => {
       awareness.off("update", onChange);
+      window.removeEventListener("pagehide", onPageHide);
       clearInterval(interval);
+      beaconLeave(documentId, sessionId);
       void leavePresence({
         documentId: documentId as Id<"documents">,
         sessionId,
@@ -305,5 +410,12 @@ export function useCollabDoc(
   if (!engine) {
     return null;
   }
-  return { ytext: engine.ytext, awareness: engine.awareness, ready, viewers };
+  return {
+    ytext: engine.ytext,
+    awareness: engine.awareness,
+    ready,
+    syncing,
+    lastSyncedAt,
+    viewers,
+  };
 }

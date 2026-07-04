@@ -3,6 +3,6 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-crons.interval("sweep stale presence", { minutes: 5 }, internal.presence.sweepStale, {});
+crons.interval("sweep stale presence", { minutes: 1 }, internal.presence.sweepStale, {});
 
 export default crons;

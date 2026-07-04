@@ -57,6 +57,8 @@ type DocEditorProps = {
   language: "md" | "html";
   readOnly: boolean;
   onChange: (value: string) => void;
+  maxContentBytes?: number;
+  onLimit?: () => void;
   ytext?: Y.Text;
   awareness?: Awareness;
 };
@@ -200,16 +202,18 @@ const remoteCursorTheme = EditorView.theme({
 
 const SEARCH_INPUT =
   "h-7 w-48 max-w-[45vw] rounded-md border border-hairline bg-surface/60 px-2.5 font-mono text-foreground text-xs outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-accent/50 focus:ring-1 focus:ring-ring";
-const SEARCH_BTN =
-  "flex h-7 shrink-0 items-center rounded-md border border-hairline bg-foreground/[0.04] px-2 font-medium font-mono text-[11px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
-const SEARCH_ICON_BTN =
-  "flex size-7 shrink-0 items-center justify-center rounded-md border border-hairline bg-foreground/[0.04] font-mono text-muted-foreground text-sm transition-colors hover:bg-foreground/10 hover:text-foreground";
+const SEARCH_ACTION_GROUP = "grid w-[246px] grid-cols-6 gap-1.5";
+const SEARCH_REPLACE_GROUP = "grid w-[246px] grid-cols-2 gap-1.5";
+const SEARCH_ACTION_BTN =
+  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-foreground/[0.04] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+const SEARCH_REPLACE_BTN =
+  "flex h-7 w-full shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-foreground/[0.04] px-2 font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
 const SEARCH_TOGGLE_ON =
-  "flex size-7 shrink-0 items-center justify-center rounded-md border border-accent/40 bg-accent/15 font-medium font-mono text-[11px] text-foreground";
+  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-accent/40 bg-accent/15 font-medium font-mono text-[10px] text-foreground";
 const SEARCH_TOGGLE_OFF =
-  "flex size-7 shrink-0 items-center justify-center rounded-md border border-hairline font-medium font-mono text-[11px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
 const SEARCH_CLOSE =
-  "ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive";
 
 function createStashSearchPanel(view: EditorView): Panel {
   const initial = getSearchQuery(view.state);
@@ -251,10 +255,10 @@ function createStashSearchPanel(view: EditorView): Panel {
     });
   };
 
-  const iconButton = (label: string, title: string, run: (v: EditorView) => boolean) => {
+  const actionButton = (label: string, title: string, run: (v: EditorView) => boolean) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = SEARCH_ICON_BTN;
+    button.className = SEARCH_ACTION_BTN;
     button.textContent = label;
     button.title = title;
     button.onclick = () => {
@@ -264,10 +268,10 @@ function createStashSearchPanel(view: EditorView): Panel {
     return button;
   };
 
-  const textButton = (label: string, title: string, run: (v: EditorView) => boolean) => {
+  const replaceButton = (label: string, title: string, run: (v: EditorView) => boolean) => {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = SEARCH_BTN;
+    button.className = SEARCH_REPLACE_BTN;
     button.textContent = label;
     button.title = title;
     button.onclick = () => {
@@ -282,6 +286,7 @@ function createStashSearchPanel(view: EditorView): Panel {
     button.type = "button";
     button.textContent = label;
     button.title = title;
+    button.ariaLabel = title;
     const paint = () => {
       button.className = flags[key] ? SEARCH_TOGGLE_ON : SEARCH_TOGGLE_OFF;
       button.setAttribute("aria-pressed", String(flags[key]));
@@ -324,15 +329,20 @@ function createStashSearchPanel(view: EditorView): Panel {
 
   const row1 = document.createElement("div");
   row1.className = "flex flex-wrap items-center gap-1.5";
-  row1.append(
-    findInput,
-    iconButton("↑", "Previous match (Shift+Enter)", findPrevious),
-    iconButton("↓", "Next match (Enter)", findNext),
-    textButton("All", "Select all matches", selectMatches),
+  const searchActions = document.createElement("div");
+  searchActions.className = SEARCH_ACTION_GROUP;
+  searchActions.append(
+    actionButton("↑", "Previous match (Shift+Enter)", findPrevious),
+    actionButton("↓", "Next match (Enter)", findNext),
+    actionButton("All", "Select all matches", selectMatches),
     toggleButton("Aa", "Match case", "caseSensitive"),
     toggleButton(".*", "Regular expression", "regexp"),
     toggleButton("W", "Whole word", "wholeWord"),
-    iconButton("×", "Close (Esc)", (v) => {
+  );
+  row1.append(
+    findInput,
+    searchActions,
+    actionButton("×", "Close (Esc)", (v) => {
       closeSearchPanel(v);
       return true;
     }),
@@ -342,11 +352,13 @@ function createStashSearchPanel(view: EditorView): Panel {
 
   const row2 = document.createElement("div");
   row2.className = "flex flex-wrap items-center gap-1.5";
-  row2.append(
-    replaceInput,
-    textButton("Replace", "Replace next match", replaceNext),
-    textButton("Replace all", "Replace all matches", replaceAll),
+  const replaceActions = document.createElement("div");
+  replaceActions.className = SEARCH_REPLACE_GROUP;
+  replaceActions.append(
+    replaceButton("Replace", "Replace next match", replaceNext),
+    replaceButton("Replace all", "Replace all matches", replaceAll),
   );
+  row2.append(replaceInput, replaceActions);
 
   const dom = document.createElement("div");
   dom.className = "flex flex-col gap-2 px-3 py-2.5";
@@ -414,6 +426,10 @@ function editorExtensions(language: "md" | "html", collab: boolean) {
   ];
 }
 
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
 const UNDO_BOUNDARY = /[\s.,;:!?)\]}>"']/;
 
 function wordBoundaryUndo(undoManager: UndoManager) {
@@ -440,17 +456,24 @@ export function DocEditor({
   language,
   readOnly,
   onChange,
+  maxContentBytes,
+  onLimit,
   ytext,
   awareness,
 }: DocEditorProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const onLimitRef = useRef(onLimit);
   const initialContentRef = useRef(initialContent);
 
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => {
+    onLimitRef.current = onLimit;
+  }, [onLimit]);
 
   useEffect(() => {
     initialContentRef.current = initialContent;
@@ -478,6 +501,18 @@ export function DocEditor({
       extensions: [
         ...editorExtensions(language, collab),
         EditorState.readOnly.of(readOnly),
+        maxContentBytes
+          ? EditorState.transactionFilter.of((transaction) => {
+              if (
+                !transaction.docChanged ||
+                byteLength(transaction.newDoc.toString()) <= maxContentBytes
+              ) {
+                return transaction;
+              }
+              onLimitRef.current?.();
+              return [];
+            })
+          : [],
         ...collabExtensions,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -492,7 +527,7 @@ export function DocEditor({
       view.destroy();
       undoManager?.destroy();
     };
-  }, [language, readOnly, ytext, awareness]);
+  }, [language, maxContentBytes, readOnly, ytext, awareness]);
 
   useEffect(() => {
     const view = viewRef.current;

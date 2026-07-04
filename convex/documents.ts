@@ -11,7 +11,7 @@ const MAX_DEPTH = 16;
 
 type Access = { project: Doc<"projects">; userId: string; isAdmin: boolean };
 
-function byteLength(text: string): number {
+export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
@@ -175,7 +175,30 @@ async function nameTaken(
   return siblings.some((doc) => doc._id !== exclude && doc.name.toLowerCase() === key);
 }
 
-async function projectTotalBytes(ctx: QueryCtx, projectId: Id<"projects">): Promise<number> {
+async function uniqueName(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+  parentId: Id<"documents"> | null,
+  baseName: string,
+): Promise<string> {
+  const siblings = await childrenOf(ctx, projectId, parentId);
+  const taken = new Set(siblings.map((doc) => doc.name.toLowerCase()));
+  if (!taken.has(baseName.toLowerCase())) {
+    return baseName;
+  }
+  const dot = baseName.lastIndexOf(".");
+  const stem = dot > 0 ? baseName.slice(0, dot) : baseName;
+  const extension = dot > 0 ? baseName.slice(dot) : "";
+  for (let index = 2; index < 10_000; index += 1) {
+    const candidate = `${stem}-${index}${extension}`;
+    if (!taken.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+  throw new Error("too-many-nodes");
+}
+
+export async function projectTotalBytes(ctx: QueryCtx, projectId: Id<"projects">): Promise<number> {
   const docs = await ctx.db
     .query("documents")
     .withIndex("by_project", (q) => q.eq("projectId", projectId))
@@ -508,10 +531,12 @@ export const createAsset = mutation({
       await ctx.storage.delete(args.storageId);
       throw new Error("project-full");
     }
-    let name = cleanName(args.name, "asset");
-    if (await nameTaken(ctx, args.projectId, args.parentId, name)) {
-      name = `${Date.now()}-${name}`;
-    }
+    const name = await uniqueName(
+      ctx,
+      args.projectId,
+      args.parentId,
+      cleanName(args.name, "asset"),
+    );
     const now = Date.now();
     return await ctx.db.insert("documents", {
       projectId: args.projectId,
