@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
+import { purgeDocCollab } from "./documents";
 
 const MAX_TAGS = 8;
 const MAX_TAG_LENGTH = 24;
@@ -61,6 +62,31 @@ function accessRowsFor(ctx: QueryCtx, projectId: Doc<"projects">["_id"]) {
     .collect();
 }
 
+async function purgeProject(ctx: MutationCtx, projectId: Doc<"projects">["_id"]) {
+  const grants = await accessRowsFor(ctx, projectId);
+  for (const grant of grants) {
+    await ctx.db.delete(grant._id);
+  }
+  const documents = await ctx.db
+    .query("documents")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  for (const document of documents) {
+    if (document.storageId) {
+      await ctx.storage.delete(document.storageId);
+    }
+    if (document.kind === "file") {
+      await purgeDocCollab(ctx, document._id);
+    }
+    await ctx.db.delete(document._id);
+  }
+  const project = await ctx.db.get(projectId);
+  if (project?.imageStorageId) {
+    await ctx.storage.delete(project.imageStorageId);
+  }
+  await ctx.db.delete(projectId);
+}
+
 export const listByOrg = query({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
@@ -109,6 +135,7 @@ export const listByOrg = query({
             : null,
           createdAt: project.createdAt,
           ownerName,
+          ownerEmail: owner?.email ?? null,
           ownerImageUrl: owner?.imageUrl ?? null,
           accessCount: caller.isAdmin ? (await accessRowsFor(ctx, project._id)).length : 0,
         };
@@ -222,14 +249,7 @@ export const remove = mutation({
       return;
     }
     await requireAdmin(ctx, project.clerkOrgId);
-    const grants = await accessRowsFor(ctx, project._id);
-    for (const grant of grants) {
-      await ctx.db.delete(grant._id);
-    }
-    if (project.imageStorageId) {
-      await ctx.storage.delete(project.imageStorageId);
-    }
-    await ctx.db.delete(project._id);
+    await purgeProject(ctx, project._id);
   },
 });
 
@@ -322,14 +342,7 @@ export const deleteAllByOrg = mutation({
       .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
       .collect();
     for (const project of projects) {
-      const grants = await accessRowsFor(ctx, project._id);
-      for (const grant of grants) {
-        await ctx.db.delete(grant._id);
-      }
-      if (project.imageStorageId) {
-        await ctx.storage.delete(project.imageStorageId);
-      }
-      await ctx.db.delete(project._id);
+      await purgeProject(ctx, project._id);
     }
   },
 });

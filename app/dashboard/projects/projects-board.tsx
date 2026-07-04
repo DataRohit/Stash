@@ -85,7 +85,7 @@ export function ProjectsBoard({
   };
 
   return (
-    <section className="glass w-full max-w-7xl rounded-[12px] p-6 sm:p-8">
+    <section className="glass w-full max-w-7xl rounded-lg p-6 sm:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-1">
           <span className={labelClass}>— Projects</span>
@@ -121,7 +121,7 @@ export function ProjectsBoard({
       {isAdmin && createOpen ? (
         <form
           onSubmit={handleCreate}
-          className="mt-6 flex flex-col gap-4 rounded-[8px] border border-hairline bg-surface/30 p-4"
+          className="mt-6 flex flex-col gap-4 rounded-md border border-hairline bg-surface/30 p-4"
         >
           <div className="flex flex-col gap-2">
             <label htmlFor="project-title" className={labelClass}>
@@ -171,7 +171,7 @@ export function ProjectsBoard({
                       onClick={() => setTags(tags.filter((_, i) => i !== index))}
                       disabled={creating}
                       aria-label={`Remove ${tag}`}
-                      className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-[4px] text-muted-foreground transition-colors hover:text-destructive"
+                      className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:text-destructive"
                     >
                       <X className="size-3" aria-hidden="true" />
                     </button>
@@ -239,6 +239,7 @@ export function ProjectsBoard({
                 tags={project.tags}
                 imageUrl={project.imageUrl}
                 ownerName={project.ownerName}
+                ownerEmail={project.ownerEmail}
                 ownerImageUrl={project.ownerImageUrl}
                 accessCount={project.accessCount}
                 isAdmin={isAdmin}

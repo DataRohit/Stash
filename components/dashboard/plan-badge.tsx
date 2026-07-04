@@ -42,7 +42,7 @@ export function PlanBadge({ isPro, planPeriod, periodEnd, canceled }: PlanBadgeP
     <button
       type="button"
       onClick={() => clerk.openUserProfile()}
-      className="flex cursor-pointer items-center gap-2 rounded-[6px] transition-opacity hover:opacity-80"
+      className="flex cursor-pointer items-center gap-2 rounded-sm transition-opacity hover:opacity-80"
       aria-label={isPro ? "Manage your Pro subscription" : "Upgrade to Pro"}
     >
       <Badge

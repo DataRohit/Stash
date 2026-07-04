@@ -186,3 +186,14 @@ export async function revokeAllProjectAccessForUser(
   }
   await client.mutation(api.projects.revokeAllAccessForUser, { clerkOrgId, userId });
 }
+
+export async function setProjectMaxSize(projectId: string, maxSizeBytes: number): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    return;
+  }
+  await client.mutation(api.documents.setMaxSize, {
+    projectId: projectId as Id<"projects">,
+    maxSizeBytes,
+  });
+}

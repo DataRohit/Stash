@@ -10,6 +10,7 @@ type ProjectCardProps = {
   tags: string[];
   imageUrl: string | null;
   ownerName: string | null;
+  ownerEmail: string | null;
   ownerImageUrl: string | null;
   accessCount: number;
   isAdmin: boolean;
@@ -24,6 +25,7 @@ export function ProjectCard({
   tags,
   imageUrl,
   ownerName,
+  ownerEmail,
   ownerImageUrl,
   accessCount,
   isAdmin,
@@ -33,13 +35,13 @@ export function ProjectCard({
   return (
     <Link
       href={`/dashboard/projects/${id}`}
-      className="glass flex flex-col gap-4 rounded-[12px] p-6 transition-colors hover:border-foreground/20"
+      className="glass flex flex-col gap-4 rounded-lg p-6 transition-colors hover:border-foreground/20"
     >
       <div className="flex items-start gap-4">
         <img
           src={imageUrl ?? orgAvatarUrl(id)}
           alt=""
-          className="size-14 shrink-0 rounded-[12px] border border-hairline object-cover"
+          className="size-14 shrink-0 rounded-lg border border-hairline object-cover"
         />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <p className="truncate font-serif text-xl tracking-display">{title}</p>
@@ -47,7 +49,7 @@ export function ProjectCard({
             <img
               src={orgIconUrl}
               alt=""
-              className="size-4 shrink-0 rounded-[4px] border border-hairline object-cover"
+              className="size-4 shrink-0 rounded-xs border border-hairline object-cover"
             />
             <span className="truncate">{orgName}</span>
           </div>
@@ -82,8 +84,15 @@ export function ProjectCard({
               {(ownerName ?? "?").slice(0, 1).toUpperCase()}
             </span>
           )}
-          <span className="truncate text-muted-foreground text-xs">
-            {ownerName ? `Owned by ${ownerName}` : "Owner unknown"}
+          <span className="min-w-0 flex-1 text-muted-foreground text-xs">
+            <span className="block truncate">
+              {ownerName ? `Owned by ${ownerName}` : "Owner unknown"}
+            </span>
+            {ownerEmail ? (
+              <span className="block truncate text-[11px] text-muted-foreground/80">
+                {ownerEmail}
+              </span>
+            ) : null}
           </span>
         </div>
         {isAdmin ? (

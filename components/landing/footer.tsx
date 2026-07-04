@@ -5,10 +5,10 @@ export function Footer() {
   return (
     <footer className="border-hairline border-t bg-surface/20 backdrop-blur">
       <div className="mx-auto max-w-7xl px-6 py-12">
-        <div className="glass overflow-hidden rounded-[12px]">
+        <div className="glass overflow-hidden rounded-lg">
           <div className="flex flex-col gap-3 border-hairline border-b bg-foreground/[0.025] px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
             <Link href="/" className="flex items-center gap-2.5">
-              <span className="flex size-7 items-center justify-center rounded-[6px] border border-hairline bg-foreground font-bold font-mono text-background text-sm">
+              <span className="flex size-7 items-center justify-center rounded-sm border border-hairline bg-foreground font-bold font-mono text-background text-sm">
                 S
               </span>
               <span className="font-semibold text-sm tracking-display">{site.name}</span>
@@ -46,7 +46,7 @@ export function Footer() {
                         href={link.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="rounded-[5px] text-foreground text-sm transition-colors hover:text-muted-foreground"
+                        className="rounded-sm text-foreground text-sm transition-colors hover:text-muted-foreground"
                       >
                         {link.label}
                       </a>

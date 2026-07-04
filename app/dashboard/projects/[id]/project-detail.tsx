@@ -10,6 +10,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  SquarePen,
   Trash2,
   X,
 } from "lucide-react";
@@ -18,13 +19,14 @@ import { useRouter } from "next/navigation";
 import { type ChangeEvent, type FormEvent, type KeyboardEvent, useRef, useState } from "react";
 import { ProjectAccessManager } from "@/app/dashboard/projects/[id]/project-access-manager";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { MAX_DESCRIPTION_LENGTH, MAX_IMAGE_BYTES, MAX_TAG_LENGTH, MAX_TAGS } from "@/lib/org";
 import { orgAvatarUrl } from "@/lib/org-avatar";
 import { fieldClass, labelClass } from "@/lib/ui";
+import { cn } from "@/lib/utils";
 
 type ProjectDetailProps = {
   projectId: string;
@@ -59,7 +61,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
 
   if (project === undefined) {
     return (
-      <section className="glass flex items-center gap-2 rounded-[12px] p-6 text-muted-foreground text-sm sm:p-8">
+      <section className="glass flex items-center gap-2 rounded-lg p-6 text-muted-foreground text-sm sm:p-8">
         <Loader2 className="size-4 animate-spin" aria-hidden="true" />
         Loading project…
       </section>
@@ -67,7 +69,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   }
   if (project === null) {
     return (
-      <section className="glass rounded-[12px] p-6 text-muted-foreground text-sm sm:p-8">
+      <section className="glass rounded-lg p-6 text-muted-foreground text-sm sm:p-8">
         This project is not available.
       </section>
     );
@@ -195,14 +197,14 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
         Projects
       </Link>
 
-      <section className="glass w-full rounded-[12px] p-6 sm:p-8">
+      <section className="glass w-full rounded-lg p-6 sm:p-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
             {mode === "view" ? (
               <img
                 src={iconUrl}
                 alt=""
-                className="size-14 shrink-0 rounded-[12px] border border-hairline object-cover"
+                className="size-14 shrink-0 rounded-lg border border-hairline object-cover"
               />
             ) : null}
             <div className="flex flex-col gap-1">
@@ -213,22 +215,33 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
             </div>
           </div>
 
-          {isAdmin && !deleteOpen ? (
+          {!deleteOpen ? (
             <div className="flex items-center gap-2">
               {mode === "view" ? (
                 <>
-                  <Button variant="secondary" className="w-40" onClick={beginEdit}>
-                    <Pencil className="size-4" aria-hidden="true" />
-                    Edit details
-                  </Button>
-                  <Button
-                    variant="destructive"
-                    className="w-40"
-                    onClick={() => setDeleteOpen(true)}
+                  <Link
+                    href={`/dashboard/projects/${project.id}/editor`}
+                    className={cn(buttonVariants({ variant: "primary" }), "w-40")}
                   >
-                    <Trash2 className="size-4" aria-hidden="true" />
-                    Delete
-                  </Button>
+                    <SquarePen className="size-4" aria-hidden="true" />
+                    Open editor
+                  </Link>
+                  {isAdmin ? (
+                    <>
+                      <Button variant="secondary" className="w-40" onClick={beginEdit}>
+                        <Pencil className="size-4" aria-hidden="true" />
+                        Edit details
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        className="w-40"
+                        onClick={() => setDeleteOpen(true)}
+                      >
+                        <Trash2 className="size-4" aria-hidden="true" />
+                        Delete
+                      </Button>
+                    </>
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -302,7 +315,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
             ) : null}
 
             {isAdmin && deleteOpen ? (
-              <div className="flex max-w-md flex-col gap-3 rounded-[8px] border border-destructive/30 bg-destructive/[0.04] p-4">
+              <div className="flex max-w-md flex-col gap-3 rounded-md border border-destructive/30 bg-destructive/[0.04] p-4">
                 <div className="flex flex-col gap-1">
                   <p className="font-medium text-sm">Delete this project?</p>
                   <p className="text-muted-foreground text-sm leading-relaxed">
@@ -354,7 +367,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                   <img
                     src={iconUrl}
                     alt=""
-                    className="size-10 shrink-0 rounded-[8px] border border-hairline object-cover"
+                    className="size-10 shrink-0 rounded-md border border-hairline object-cover"
                   />
                   <input
                     ref={fileInputRef}
@@ -446,7 +459,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                           onClick={() => setDraftTags(draftTags.filter((_, i) => i !== index))}
                           disabled={saving}
                           aria-label={`Remove ${tag}`}
-                          className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-[4px] text-muted-foreground transition-colors hover:text-destructive"
+                          className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:text-destructive"
                         >
                           <X className="size-3" aria-hidden="true" />
                         </button>

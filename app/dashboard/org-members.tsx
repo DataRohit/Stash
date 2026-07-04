@@ -38,7 +38,7 @@ const MEMBER_ERRORS: Record<string, string> = {
 
 const labelClass = "font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest";
 const fieldClass =
-  "rounded-[6px] border border-hairline bg-surface/45 px-3 text-sm outline-none transition-colors focus-visible:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
+  "rounded-sm border border-hairline bg-surface/45 px-3 text-sm outline-none transition-colors focus-visible:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 function displayName(firstName: string | null, lastName: string | null, email: string): string {
   const full = [firstName, lastName].filter(Boolean).join(" ").trim();
@@ -99,7 +99,7 @@ function RoleSelect({
         />
       </button>
       {open ? (
-        <ul className="absolute top-full left-0 z-20 mt-1 w-full overflow-hidden rounded-[6px] border border-hairline bg-surface p-1 shadow-glass">
+        <ul className="absolute top-full left-0 z-20 mt-1 w-full overflow-hidden rounded-sm border border-hairline bg-surface p-1 shadow-glass">
           {ROLE_OPTIONS.map((option) => {
             const selected = option.value === value;
             return (
@@ -110,7 +110,7 @@ function RoleSelect({
                     onChange(option.value);
                     setOpen(false);
                   }}
-                  className={`flex w-full cursor-pointer items-center justify-between rounded-[4px] px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-foreground/[0.06] ${selected ? "text-foreground" : "text-muted-foreground"}`}
+                  className={`flex w-full cursor-pointer items-center justify-between rounded-xs px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-foreground/[0.06] ${selected ? "text-foreground" : "text-muted-foreground"}`}
                 >
                   {option.label}
                   {selected ? <Check className="size-3.5 shrink-0" aria-hidden="true" /> : null}
@@ -196,7 +196,7 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
   };
 
   return (
-    <section className="glass w-full max-w-7xl rounded-[12px] p-6 sm:p-8">
+    <section className="glass w-full max-w-7xl rounded-lg p-6 sm:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-col gap-1">
           <span className={labelClass}>— Members</span>
@@ -226,7 +226,7 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
       {isAdmin && inviteOpen ? (
         <form
           onSubmit={handleInvite}
-          className="mt-6 flex flex-col gap-3 rounded-[8px] border border-hairline bg-surface/30 p-4 sm:flex-row sm:items-end"
+          className="mt-6 flex flex-col gap-3 rounded-md border border-hairline bg-surface/30 p-4 sm:flex-row sm:items-end"
         >
           <div className="flex flex-1 flex-col gap-2">
             <label htmlFor="invite-email" className={labelClass}>
@@ -276,10 +276,10 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
                     <img
                       src={person.imageUrl}
                       alt=""
-                      className="size-9 shrink-0 rounded-[8px] border border-hairline object-cover"
+                      className="size-9 shrink-0 rounded-md border border-hairline object-cover"
                     />
                   ) : (
-                    <span className="flex size-9 shrink-0 items-center justify-center rounded-[8px] border border-hairline bg-surface/60 font-medium font-mono text-muted-foreground text-sm">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-hairline bg-surface/60 font-medium font-mono text-muted-foreground text-sm">
                       {initials(person.firstName, person.lastName, person.email)}
                     </span>
                   )}

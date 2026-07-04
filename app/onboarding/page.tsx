@@ -45,9 +45,9 @@ export default async function OnboardingPage() {
       </div>
 
       <header className="fixed top-3 right-0 left-0 z-50 w-full px-3 sm:px-6">
-        <div className="glass mx-auto flex h-14 max-w-7xl items-center justify-between rounded-[12px] bg-surface/55 px-3 sm:px-4">
+        <div className="glass mx-auto flex h-14 max-w-7xl items-center justify-between rounded-lg bg-surface/55 px-3 sm:px-4">
           <Link href="/dashboard" className="flex items-center gap-2.5">
-            <span className="flex size-7 items-center justify-center rounded-[6px] border border-hairline bg-foreground font-bold font-mono text-background text-sm">
+            <span className="flex size-7 items-center justify-center rounded-sm border border-hairline bg-foreground font-bold font-mono text-background text-sm">
               S
             </span>
             <span className="font-semibold text-sm tracking-display">{site.name}</span>
@@ -59,7 +59,7 @@ export default async function OnboardingPage() {
         </div>
       </header>
 
-      <div className="glass w-full max-w-md rounded-[12px] p-6 sm:p-8">
+      <div className="glass w-full max-w-md rounded-lg p-6 sm:p-8">
         <div className="flex flex-col gap-2">
           <span className="font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
             — {hasOrganizations ? "Your organizations" : "Welcome"}
@@ -77,7 +77,7 @@ export default async function OnboardingPage() {
 
         <div className="mt-6 flex flex-col gap-6">
           {atLimit ? (
-            <div className="flex flex-col gap-3 rounded-[8px] border border-hairline bg-foreground/[0.025] p-4">
+            <div className="flex flex-col gap-3 rounded-md border border-hairline bg-foreground/[0.025] p-4">
               <p className="text-sm leading-relaxed">
                 You’ve reached your plan’s limit of {maxOrganizations} organization
                 {maxOrganizations === 1 ? "" : "s"}.{isPro ? "" : " Upgrade to Pro to create more."}

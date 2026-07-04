@@ -24,12 +24,12 @@ export function PricingPlans({ plans }: PricingPlansProps) {
           Save {maxSavings}%
         </span>
       ) : null}
-      <div className="flex items-center gap-1 rounded-[7px] border border-hairline bg-foreground/[0.03] p-0.5">
+      <div className="flex items-center gap-1 rounded-md border border-hairline bg-foreground/[0.03] p-0.5">
         <button
           type="button"
           onClick={() => setAnnual(false)}
           className={cn(
-            "cursor-pointer rounded-[5px] px-2.5 py-1 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
+            "cursor-pointer rounded-sm px-2.5 py-1 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
             annual
               ? "text-muted-foreground hover:text-foreground"
               : "bg-foreground/10 text-foreground",
@@ -41,7 +41,7 @@ export function PricingPlans({ plans }: PricingPlansProps) {
           type="button"
           onClick={() => setAnnual(true)}
           className={cn(
-            "cursor-pointer rounded-[5px] px-2.5 py-1 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
+            "cursor-pointer rounded-sm px-2.5 py-1 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
             annual
               ? "bg-foreground/10 text-foreground"
               : "text-muted-foreground hover:text-foreground",
@@ -90,7 +90,7 @@ export function PricingPlans({ plans }: PricingPlansProps) {
                   ) : null}
                 </div>
                 {plan.isPopular ? (
-                  <span className="press-shadow rounded-[5px] border border-accent/35 bg-accent/10 px-2 py-0.5 font-medium font-mono text-[0.68rem] text-accent uppercase tracking-wider">
+                  <span className="press-shadow rounded-sm border border-accent/35 bg-accent/10 px-2 py-0.5 font-medium font-mono text-[0.68rem] text-accent uppercase tracking-wider">
                     Popular
                   </span>
                 ) : null}

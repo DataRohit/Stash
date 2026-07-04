@@ -50,7 +50,7 @@ export function FinalCta() {
               <ol className="mt-4 flex flex-col gap-3">
                 {nextSteps.map((step, index) => (
                   <li key={step} className="flex items-center gap-3 text-sm">
-                    <span className="press-shadow flex size-8 shrink-0 items-center justify-center rounded-[6px] border border-hairline bg-surface/60 font-mono text-xs">
+                    <span className="press-shadow flex size-8 shrink-0 items-center justify-center rounded-sm border border-hairline bg-surface/60 font-mono text-xs">
                       {String(index + 1).padStart(2, "0")}
                     </span>
                     <span>{step}</span>

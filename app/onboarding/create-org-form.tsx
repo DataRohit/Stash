@@ -76,7 +76,7 @@ export function CreateOrgForm({ used, max }: CreateOrgFormProps) {
           placeholder="Your organization"
           autoComplete="off"
           disabled={pending}
-          className="h-10 rounded-[6px] border border-hairline bg-surface/45 px-3 text-sm outline-none transition-colors focus-visible:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-10 rounded-sm border border-hairline bg-surface/45 px-3 text-sm outline-none transition-colors focus-visible:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
         />
       </div>
 

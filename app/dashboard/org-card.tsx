@@ -81,7 +81,7 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 const labelClass = "font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest";
 const fieldClass =
-  "rounded-[6px] border border-hairline bg-surface/45 px-3 text-sm outline-none transition-colors focus-visible:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
+  "rounded-sm border border-hairline bg-surface/45 px-3 text-sm outline-none transition-colors focus-visible:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60";
 
 export function OrgCard(props: OrgCardProps) {
   const {
@@ -248,14 +248,14 @@ export function OrgCard(props: OrgCardProps) {
   };
 
   return (
-    <section className="glass w-full max-w-7xl rounded-[12px] p-6 sm:p-8">
+    <section className="glass w-full max-w-7xl rounded-lg p-6 sm:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
           {mode === "view" ? (
             <img
               src={iconUrl}
               alt=""
-              className="size-14 shrink-0 rounded-[12px] border border-hairline bg-surface/60 object-cover"
+              className="size-14 shrink-0 rounded-lg border border-hairline bg-surface/60 object-cover"
             />
           ) : null}
           <div className="flex flex-col gap-1">
@@ -353,7 +353,7 @@ export function OrgCard(props: OrgCardProps) {
           </div>
 
           {isAdmin && deleteOpen ? (
-            <div className="flex max-w-md flex-col gap-3 rounded-[8px] border border-destructive/30 bg-destructive/[0.04] p-4">
+            <div className="flex max-w-md flex-col gap-3 rounded-md border border-destructive/30 bg-destructive/[0.04] p-4">
               <div className="flex flex-col gap-1">
                 <p className="font-medium text-sm">Delete this organization?</p>
                 <p className="text-muted-foreground text-sm leading-relaxed">
@@ -411,7 +411,7 @@ export function OrgCard(props: OrgCardProps) {
                 <img
                   src={iconUrl}
                   alt=""
-                  className="size-10 shrink-0 rounded-[8px] border border-hairline bg-surface/60 object-cover"
+                  className="size-10 shrink-0 rounded-md border border-hairline bg-surface/60 object-cover"
                 />
                 <input
                   ref={fileInputRef}
@@ -504,7 +504,7 @@ export function OrgCard(props: OrgCardProps) {
                           onClick={() => removeTag(index)}
                           disabled={saving}
                           aria-label={`Remove ${tag}`}
-                          className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-[4px] text-muted-foreground transition-colors hover:text-destructive"
+                          className="ml-0.5 inline-flex size-4 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:text-destructive"
                         >
                           <X className="size-3" aria-hidden="true" />
                         </button>

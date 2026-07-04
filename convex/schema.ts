@@ -34,10 +34,28 @@ const schema = defineSchema({
     description: v.string(),
     tags: v.array(v.string()),
     imageStorageId: v.union(v.id("_storage"), v.null()),
+    maxSizeBytes: v.optional(v.number()),
     createdBy: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_clerk_org", ["clerkOrgId"]),
+
+  documents: defineTable({
+    projectId: v.id("projects"),
+    clerkOrgId: v.string(),
+    parentId: v.union(v.id("documents"), v.null()),
+    kind: v.union(v.literal("folder"), v.literal("file"), v.literal("asset")),
+    name: v.string(),
+    fileType: v.union(v.literal("md"), v.literal("html"), v.null()),
+    content: v.string(),
+    storageId: v.union(v.id("_storage"), v.null()),
+    mimeType: v.union(v.string(), v.null()),
+    size: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_parent", ["projectId", "parentId"]),
 
   projectAccess: defineTable({
     projectId: v.id("projects"),
@@ -48,6 +66,34 @@ const schema = defineSchema({
     .index("by_project", ["projectId"])
     .index("by_org_user", ["clerkOrgId", "userId"])
     .index("by_project_user", ["projectId", "userId"]),
+
+  yjsUpdates: defineTable({
+    documentId: v.id("documents"),
+    seq: v.number(),
+    update: v.bytes(),
+    createdAt: v.number(),
+  }).index("by_document", ["documentId", "seq"]),
+
+  yjsSnapshots: defineTable({
+    documentId: v.id("documents"),
+    snapshot: v.bytes(),
+    throughSeq: v.number(),
+    updatedAt: v.number(),
+  }).index("by_document", ["documentId"]),
+
+  presence: defineTable({
+    documentId: v.id("documents"),
+    sessionId: v.optional(v.string()),
+    userId: v.string(),
+    name: v.string(),
+    email: v.optional(v.string()),
+    color: v.string(),
+    image: v.union(v.string(), v.null()),
+    state: v.string(),
+    lastSeen: v.number(),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_document_session", ["documentId", "sessionId"]),
 });
 
 export default schema;

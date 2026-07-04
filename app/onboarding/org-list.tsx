@@ -31,7 +31,7 @@ export function OrgList({ organizations }: { organizations: OrgListItem[] }) {
       <span className="font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
         Your organizations
       </span>
-      <div className="divide-y divide-hairline overflow-hidden rounded-[8px] border border-hairline">
+      <div className="divide-y divide-hairline overflow-hidden rounded-md border border-hairline">
         {organizations.map((org) => (
           <button
             key={org.id}
@@ -43,7 +43,7 @@ export function OrgList({ organizations }: { organizations: OrgListItem[] }) {
             <img
               src={org.iconUrl}
               alt=""
-              className="size-8 shrink-0 rounded-[7px] border border-hairline bg-surface/60 object-cover"
+              className="size-8 shrink-0 rounded-md border border-hairline bg-surface/60 object-cover"
             />
             <span className="flex-1 truncate font-medium text-sm">{org.name}</span>
             {pendingId === org.id ? (

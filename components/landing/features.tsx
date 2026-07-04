@@ -77,7 +77,7 @@ export function Features() {
               )}
             >
               <div className="flex items-start justify-between gap-4">
-                <span className="press-shadow flex size-10 items-center justify-center rounded-[7px] border border-hairline bg-surface/65 transition-colors duration-200 group-hover:border-accent/50">
+                <span className="press-shadow flex size-10 items-center justify-center rounded-md border border-hairline bg-surface/65 transition-colors duration-200 group-hover:border-accent/50">
                   <feature.icon className="size-4 text-foreground transition-colors duration-200 group-hover:text-accent" />
                 </span>
                 <span className="font-mono text-muted-foreground text-xs">

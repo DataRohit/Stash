@@ -63,7 +63,7 @@ export function Workflow() {
                         aria-hidden="true"
                       />
                     ) : null}
-                    <span className="press-shadow relative z-10 flex size-9 shrink-0 items-center justify-center rounded-[7px] border border-hairline bg-surface/70 font-mono font-semibold text-foreground text-xs transition-colors duration-200 group-hover:border-accent/50 group-hover:text-accent">
+                    <span className="press-shadow relative z-10 flex size-9 shrink-0 items-center justify-center rounded-md border border-hairline bg-surface/70 font-mono font-semibold text-foreground text-xs transition-colors duration-200 group-hover:border-accent/50 group-hover:text-accent">
                       {String(index + 1).padStart(2, "0")}
                     </span>
                   </div>
@@ -80,7 +80,7 @@ export function Workflow() {
                       <span className="font-medium font-mono text-[0.68rem] text-accent uppercase tracking-widest">
                         {step.phase}
                       </span>
-                      <span className="rounded-[6px] border border-hairline bg-surface/45 px-2.5 py-1 font-mono text-muted-foreground text-xs">
+                      <span className="rounded-sm border border-hairline bg-surface/45 px-2.5 py-1 font-mono text-muted-foreground text-xs">
                         {step.output}
                       </span>
                     </div>

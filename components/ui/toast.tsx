@@ -51,12 +51,9 @@ function ToastCard({
   const { icon: Icon, badge, iconColor } = TYPE_STYLES[type];
 
   return (
-    <div className="glass-strong pointer-events-auto flex w-[356px] max-w-[calc(100vw-2rem)] items-center gap-3 rounded-[12px] p-3.5">
+    <div className="glass-strong pointer-events-auto flex w-[356px] max-w-[calc(100vw-2rem)] items-center gap-3 rounded-lg p-3.5">
       <span
-        className={cn(
-          "flex size-7 shrink-0 items-center justify-center rounded-[8px] border",
-          badge,
-        )}
+        className={cn("flex size-7 shrink-0 items-center justify-center rounded-md border", badge)}
       >
         <Icon className={cn("size-4", iconColor)} />
       </span>
@@ -70,7 +67,7 @@ function ToastCard({
         type="button"
         onClick={() => sonnerToast.dismiss(id)}
         aria-label="Dismiss notification"
-        className="-mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center self-center rounded-[6px] text-muted-foreground transition-colors hover:text-destructive"
+        className="-mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center self-center rounded-sm text-muted-foreground transition-colors hover:text-destructive"
       >
         <X className="size-3.5" />
       </button>

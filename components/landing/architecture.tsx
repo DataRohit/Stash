@@ -88,7 +88,7 @@ export function Architecture() {
             {primitives.map((primitive) => (
               <span
                 key={primitive}
-                className="press-shadow hairline flex-1 whitespace-nowrap rounded-[6px] bg-surface/45 px-4 py-3 text-center font-mono text-muted-foreground text-xs uppercase tracking-wider backdrop-blur"
+                className="press-shadow hairline flex-1 whitespace-nowrap rounded-sm bg-surface/45 px-4 py-3 text-center font-mono text-muted-foreground text-xs uppercase tracking-wider backdrop-blur"
               >
                 {primitive}
               </span>

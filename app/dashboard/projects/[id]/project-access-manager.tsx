@@ -71,10 +71,10 @@ export function ProjectAccessManager({
                 <img
                   src={person.imageUrl}
                   alt=""
-                  className="size-9 shrink-0 rounded-[8px] border border-hairline object-cover"
+                  className="size-9 shrink-0 rounded-md border border-hairline object-cover"
                 />
               ) : (
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-[8px] border border-hairline bg-surface/60 font-medium font-mono text-muted-foreground text-sm">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-hairline bg-surface/60 font-medium font-mono text-muted-foreground text-sm">
                   {initial(person.firstName, person.lastName, person.email)}
                 </span>
               )}

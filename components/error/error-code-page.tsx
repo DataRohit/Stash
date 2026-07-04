@@ -27,7 +27,7 @@ export function ErrorCodePage({
       <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
         <GridBackground ripples={false} />
       </div>
-      <section className="glass-strong w-full max-w-3xl overflow-hidden rounded-[12px]">
+      <section className="glass-strong w-full max-w-3xl overflow-hidden rounded-lg">
         <div className="border-hairline border-b bg-foreground/[0.025] px-5 py-3.5 sm:px-6">
           <span className="font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
             Error code

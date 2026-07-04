@@ -31,7 +31,7 @@ export function DashboardHeader({ isPro, planPeriod, periodEnd, canceled }: Dash
 
   const tabClass = (href: string, full: boolean) =>
     cn(
-      "rounded-[6px] px-2.5 py-1.5 font-medium font-mono text-xs uppercase tracking-widest transition-colors",
+      "rounded-sm px-2.5 py-1.5 font-medium font-mono text-xs uppercase tracking-widest transition-colors",
       full && "flex-1 text-center",
       isActive(pathname, href)
         ? "bg-foreground/[0.06] text-foreground"
@@ -41,10 +41,10 @@ export function DashboardHeader({ isPro, planPeriod, periodEnd, canceled }: Dash
   return (
     <header className="fixed top-3 right-0 left-0 z-50 w-full px-3 sm:px-6">
       <div className="mx-auto flex max-w-7xl flex-col gap-2">
-        <div className="glass flex h-14 items-center justify-between gap-2 rounded-[12px] bg-surface/80 px-3 sm:px-4">
+        <div className="glass flex h-14 items-center justify-between gap-2 rounded-lg bg-surface/80 px-3 sm:px-4">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <Link href="/dashboard" className="flex shrink-0 items-center gap-2.5">
-              <span className="flex size-7 items-center justify-center rounded-[6px] border border-hairline bg-foreground font-bold font-mono text-background text-sm">
+              <span className="flex size-7 items-center justify-center rounded-sm border border-hairline bg-foreground font-bold font-mono text-background text-sm">
                 S
               </span>
               <span className="hidden font-semibold text-sm tracking-display lg:inline">
@@ -59,7 +59,7 @@ export function DashboardHeader({ isPro, planPeriod, periodEnd, canceled }: Dash
                 afterLeaveOrganizationUrl="/onboarding"
                 appearance={{
                   elements: {
-                    organizationSwitcherTrigger: "rounded-[6px]",
+                    organizationSwitcherTrigger: "rounded-sm",
                   },
                 }}
               />
@@ -94,14 +94,14 @@ export function DashboardHeader({ isPro, planPeriod, periodEnd, canceled }: Dash
             <UserButton
               appearance={{
                 elements: {
-                  userButtonAvatarBox: "rounded-[6px]",
+                  userButtonAvatarBox: "rounded-sm",
                 },
               }}
             />
           </div>
         </div>
 
-        <nav className="glass flex items-center gap-1 rounded-[12px] bg-surface/80 p-1 lg:hidden">
+        <nav className="glass flex items-center gap-1 rounded-lg bg-surface/80 p-1 lg:hidden">
           {NAV_ITEMS.map((item) => (
             <Link key={item.href} href={item.href} className={tabClass(item.href, true)}>
               {item.label}

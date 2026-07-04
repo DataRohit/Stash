@@ -76,9 +76,9 @@ export function OrgInvitations() {
   };
 
   return (
-    <section className="glass w-full max-w-7xl rounded-[12px] border-signal/30 p-6 sm:p-8">
+    <section className="glass w-full max-w-7xl rounded-lg border-signal/30 p-6 sm:p-8">
       <div className="flex items-center gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[8px] border border-signal/40 bg-signal/10 text-signal">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-signal/40 bg-signal/10 text-signal">
           <MailPlus className="size-4" aria-hidden="true" />
         </span>
         <div className="flex flex-col gap-0.5">
@@ -98,7 +98,7 @@ export function OrgInvitations() {
               <img
                 src={org.imageUrl}
                 alt=""
-                className="size-10 shrink-0 rounded-[8px] border border-hairline object-cover"
+                className="size-10 shrink-0 rounded-md border border-hairline object-cover"
               />
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium text-sm">{org.name}</p>
