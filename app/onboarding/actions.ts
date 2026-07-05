@@ -8,6 +8,13 @@ export type CreateOrganizationResult =
   | { id: string }
   | { error: "unauthenticated" | "invalid" | "duplicate" | "limit" | "failed" };
 
+type ClerkClient = Awaited<ReturnType<typeof clerkClient>>;
+
+async function ownedMemberships(client: ClerkClient, userId: string) {
+  const memberships = await client.users.getOrganizationMembershipList({ userId, limit: 100 });
+  return memberships.data.filter((membership) => membership.organization.createdBy === userId);
+}
+
 export async function createOrganization(name: string): Promise<CreateOrganizationResult> {
   const { userId } = await auth();
   if (!userId) {
@@ -21,13 +28,13 @@ export async function createOrganization(name: string): Promise<CreateOrganizati
 
   const { maxOrganizations } = await getUserPlanLimits();
   const client = await clerkClient();
-  const memberships = await client.users.getOrganizationMembershipList({ userId });
+  const owned = await ownedMemberships(client, userId);
 
-  if (memberships.totalCount >= maxOrganizations) {
+  if (owned.length >= maxOrganizations) {
     return { error: "limit" };
   }
 
-  const duplicate = memberships.data.some(
+  const duplicate = owned.some(
     (membership) => membership.organization.name.trim().toLowerCase() === trimmed.toLowerCase(),
   );
   if (duplicate) {
@@ -39,6 +46,17 @@ export async function createOrganization(name: string): Promise<CreateOrganizati
       name: trimmed,
       createdBy: userId,
     });
+    const latestOwned = await ownedMemberships(client, userId);
+    const normalizedName = trimmed.toLowerCase();
+    const duplicateAfterCreate = latestOwned.some(
+      (membership) =>
+        membership.organization.id !== organization.id &&
+        membership.organization.name.trim().toLowerCase() === normalizedName,
+    );
+    if (latestOwned.length > maxOrganizations || duplicateAfterCreate) {
+      await client.organizations.deleteOrganization(organization.id).catch(() => null);
+      return { error: duplicateAfterCreate ? "duplicate" : "limit" };
+    }
     const file = await fetchOrgAvatarFile(organization.id).catch(() => null);
     if (file) {
       await client.organizations

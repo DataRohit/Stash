@@ -2,7 +2,8 @@ import { auth } from "@clerk/nextjs/server";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { ProjectDetail } from "@/app/dashboard/projects/[id]/project-detail";
-import { fetchProject } from "@/lib/convex-server";
+import { fetchProject, setOrgPlanLimits, setProjectMaxCollaborators } from "@/lib/convex-server";
+import { getUserPlanLimitsForSync } from "@/lib/plan-limits";
 
 export const metadata: Metadata = {
   title: "Project",
@@ -22,6 +23,18 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
   const project = await fetchProject(id);
   if (!project || project.clerkOrgId !== orgId) {
     notFound();
+  }
+
+  if (project.viewerIsOwner) {
+    const limits = await getUserPlanLimitsForSync();
+    if (limits) {
+      await setOrgPlanLimits(orgId, {
+        maxProjects: limits.maxProjectsPerOrganization,
+        maxCollaborators: limits.maxCollaboratorsPerProject,
+        maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+      });
+      await setProjectMaxCollaborators(id, limits.maxCollaboratorsPerProject);
+    }
   }
 
   return (

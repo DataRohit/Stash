@@ -1,7 +1,7 @@
 "use server";
 
 import { auth } from "@clerk/nextjs/server";
-import { countOrgProjects, createProjectDoc } from "@/lib/convex-server";
+import { countOrgProjects, createProjectDoc, setOrgPlanLimits } from "@/lib/convex-server";
 import { getUserPlanLimits } from "@/lib/plan-limits";
 
 export type CreateProjectResult = { id: string } | { error: string };
@@ -29,9 +29,23 @@ export async function createProject(input: {
     if (count >= limits.maxProjectsPerOrganization) {
       return { error: "limit-reached" };
     }
-    const id = await createProjectDoc(orgId, title, input.description, input.tags);
+    await setOrgPlanLimits(orgId, {
+      maxProjects: limits.maxProjectsPerOrganization,
+      maxCollaborators: limits.maxCollaboratorsPerProject,
+      maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+    });
+    const id = await createProjectDoc(
+      orgId,
+      title,
+      input.description,
+      input.tags,
+      limits.maxProjectsPerOrganization,
+    );
     return { id };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("too-many-projects")) {
+      return { error: "limit-reached" };
+    }
     return { error: "failed" };
   }
 }

@@ -6,6 +6,10 @@ const schema = defineSchema({
     clerkOrgId: v.string(),
     description: v.string(),
     tags: v.array(v.string()),
+    maxProjects: v.optional(v.number()),
+    maxCollaborators: v.optional(v.number()),
+    maxSizeBytes: v.optional(v.number()),
+    reconciledAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_clerk_org", ["clerkOrgId"]),
 
@@ -35,10 +39,15 @@ const schema = defineSchema({
     tags: v.array(v.string()),
     imageStorageId: v.union(v.id("_storage"), v.null()),
     maxSizeBytes: v.optional(v.number()),
+    maxCollaborators: v.optional(v.number()),
+    totalBytes: v.optional(v.number()),
+    deletedAt: v.optional(v.number()),
     createdBy: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_clerk_org", ["clerkOrgId"]),
+  })
+    .index("by_clerk_org", ["clerkOrgId"])
+    .index("by_deleted", ["deletedAt"]),
 
   documents: defineTable({
     projectId: v.id("projects"),
@@ -48,14 +57,18 @@ const schema = defineSchema({
     name: v.string(),
     fileType: v.union(v.literal("md"), v.literal("html"), v.null()),
     content: v.string(),
+    contentSeq: v.optional(v.number()),
+    contentState: v.optional(v.bytes()),
     storageId: v.union(v.id("_storage"), v.null()),
     mimeType: v.union(v.string(), v.null()),
     size: v.number(),
+    deletingAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_project", ["projectId"])
-    .index("by_parent", ["projectId", "parentId"]),
+    .index("by_parent", ["projectId", "parentId"])
+    .index("by_deleting", ["deletingAt"]),
 
   projectAccess: defineTable({
     projectId: v.id("projects"),

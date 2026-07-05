@@ -55,3 +55,11 @@ export async function getUserPlanLimits(): Promise<PlanLimits> {
   const { featureSlugs } = await getUserSubscription();
   return limitsFromFeatures(featureSlugs);
 }
+
+export async function getUserPlanLimitsForSync(): Promise<PlanLimits | null> {
+  const { featureSlugs, degraded } = await getUserSubscription();
+  if (degraded) {
+    return null;
+  }
+  return limitsFromFeatures(featureSlugs);
+}

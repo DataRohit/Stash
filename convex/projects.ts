@@ -1,13 +1,23 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
-import { purgeDocCollab } from "./documents";
+import { internalMutation, mutation, query } from "./_generated/server";
+import { purgeDocCollabBatch } from "./documents";
+import {
+  clampInt,
+  DEFAULT_MAX_COLLABORATORS,
+  DEFAULT_MAX_PROJECTS,
+  HARD_MAX_COLLABORATORS,
+  HARD_MAX_PROJECTS,
+} from "./limits";
 
 const MAX_TAGS = 8;
 const MAX_TAG_LENGTH = 24;
 const MAX_TITLE_LENGTH = 80;
 const MAX_DESCRIPTION_LENGTH = 280;
+const PURGE_GRANT_BATCH = 200;
+const PURGE_DOC_BATCH = 20;
 
 type Caller = { userId: string; isAdmin: boolean };
 
@@ -37,8 +47,7 @@ async function callerFor(ctx: QueryCtx, clerkOrgId: string): Promise<Caller | nu
   if (!identity) {
     return null;
   }
-  const claimedOrg = identity.org_id;
-  if (typeof claimedOrg === "string" && claimedOrg !== clerkOrgId) {
+  if (identity.org_id !== clerkOrgId) {
     return null;
   }
   return {
@@ -62,30 +71,93 @@ function accessRowsFor(ctx: QueryCtx, projectId: Doc<"projects">["_id"]) {
     .collect();
 }
 
-async function purgeProject(ctx: MutationCtx, projectId: Doc<"projects">["_id"]) {
-  const grants = await accessRowsFor(ctx, projectId);
+function acceptedMemberFor(ctx: QueryCtx, clerkOrgId: string, userId: string) {
+  return ctx.db
+    .query("members")
+    .withIndex("by_org_user", (q) => q.eq("clerkOrgId", clerkOrgId).eq("memberUserId", userId))
+    .first();
+}
+
+export async function purgeAccessForUser(
+  ctx: MutationCtx,
+  clerkOrgId: string,
+  userId: string,
+): Promise<void> {
+  const grants = await ctx.db
+    .query("projectAccess")
+    .withIndex("by_org_user", (q) => q.eq("clerkOrgId", clerkOrgId).eq("userId", userId))
+    .collect();
   for (const grant of grants) {
     await ctx.db.delete(grant._id);
   }
-  const documents = await ctx.db
-    .query("documents")
-    .withIndex("by_project", (q) => q.eq("projectId", projectId))
-    .collect();
-  for (const document of documents) {
-    if (document.storageId) {
-      await ctx.storage.delete(document.storageId);
-    }
-    if (document.kind === "file") {
-      await purgeDocCollab(ctx, document._id);
-    }
-    await ctx.db.delete(document._id);
-  }
-  const project = await ctx.db.get(projectId);
-  if (project?.imageStorageId) {
-    await ctx.storage.delete(project.imageStorageId);
-  }
-  await ctx.db.delete(projectId);
 }
+
+async function tombstoneProject(ctx: MutationCtx, projectId: Doc<"projects">["_id"]) {
+  const project = await ctx.db.get(projectId);
+  if (!project || project.deletedAt) {
+    return;
+  }
+  await ctx.db.patch(projectId, { deletedAt: Date.now() });
+  await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId });
+}
+
+export const purgeBatch = internalMutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const grants = await ctx.db
+      .query("projectAccess")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const grant of grants) {
+      await ctx.db.delete(grant._id);
+    }
+    if (grants.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const documents = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_DOC_BATCH);
+    for (const document of documents) {
+      if (document.kind === "file") {
+        const hasMoreCollab = await purgeDocCollabBatch(ctx, document._id);
+        if (hasMoreCollab) {
+          await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, {
+            projectId: args.projectId,
+          });
+          return;
+        }
+      }
+      if (document.storageId) {
+        await ctx.storage.delete(document.storageId);
+      }
+      await ctx.db.delete(document._id);
+    }
+    if (documents.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const project = await ctx.db.get(args.projectId);
+    if (project?.imageStorageId) {
+      await ctx.storage.delete(project.imageStorageId);
+    }
+    await ctx.db.delete(args.projectId);
+  },
+});
+
+export const resumePurges = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const projects = await ctx.db
+      .query("projects")
+      .withIndex("by_deleted", (q) => q.gt("deletedAt", 0))
+      .take(100);
+    for (const project of projects) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: project._id });
+    }
+  },
+});
 
 export const listByOrg = query({
   args: { clerkOrgId: v.string() },
@@ -111,6 +183,7 @@ export const listByOrg = query({
       const docs = await Promise.all(grants.map((grant) => ctx.db.get(grant.projectId)));
       projects = docs.filter((doc): doc is Doc<"projects"> => doc !== null);
     }
+    projects = projects.filter((project) => !project.deletedAt);
 
     projects.sort((a, b) => b.createdAt - a.createdAt);
 
@@ -148,7 +221,7 @@ export const get = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
-    if (!project) {
+    if (!project || project.deletedAt) {
       return null;
     }
     const caller = await callerFor(ctx, project.clerkOrgId);
@@ -167,6 +240,7 @@ export const get = query({
       }
     }
     const access = caller.isAdmin ? await accessRowsFor(ctx, project._id) : [];
+    const viewerMember = await acceptedMemberFor(ctx, project.clerkOrgId, caller.userId);
     return {
       id: project._id,
       clerkOrgId: project.clerkOrgId,
@@ -176,10 +250,32 @@ export const get = query({
       imageUrl: project.imageStorageId ? await ctx.storage.getUrl(project.imageStorageId) : null,
       createdAt: project.createdAt,
       isAdmin: caller.isAdmin,
+      viewerIsOwner: viewerMember?.isOwner === true,
       accessUserIds: access.map((row) => row.userId),
+      maxCollaborators: project.maxCollaborators ?? DEFAULT_MAX_COLLABORATORS,
     };
   },
 });
+
+async function orgLimits(ctx: QueryCtx, clerkOrgId: string) {
+  const row = await ctx.db
+    .query("organizations")
+    .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", clerkOrgId))
+    .unique();
+  return {
+    maxProjects: typeof row?.maxProjects === "number" ? row.maxProjects : null,
+    maxCollaborators:
+      typeof row?.maxCollaborators === "number" ? row.maxCollaborators : DEFAULT_MAX_COLLABORATORS,
+  };
+}
+
+async function activeProjectsFor(ctx: QueryCtx, clerkOrgId: string): Promise<Doc<"projects">[]> {
+  const rows = await ctx.db
+    .query("projects")
+    .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", clerkOrgId))
+    .collect();
+  return rows.filter((row) => !row.deletedAt);
+}
 
 export const countByOrg = query({
   args: { clerkOrgId: v.string() },
@@ -188,11 +284,7 @@ export const countByOrg = query({
     if (!caller) {
       return 0;
     }
-    const rows = await ctx.db
-      .query("projects")
-      .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
-      .collect();
-    return rows.length;
+    return (await activeProjectsFor(ctx, args.clerkOrgId)).length;
   },
 });
 
@@ -202,16 +294,32 @@ export const create = mutation({
     title: v.string(),
     description: v.string(),
     tags: v.array(v.string()),
+    maxProjects: v.number(),
   },
   handler: async (ctx, args) => {
     const userId = await requireAdmin(ctx, args.clerkOrgId);
+    const title = args.title.trim();
+    if (title.length < 2) {
+      throw new Error("invalid-title");
+    }
+    const limits = await orgLimits(ctx, args.clerkOrgId);
+    const fallbackCap = Math.min(
+      clampInt(args.maxProjects, 0, HARD_MAX_PROJECTS),
+      DEFAULT_MAX_PROJECTS,
+    );
+    const cap = limits.maxProjects ?? fallbackCap;
+    const existing = await activeProjectsFor(ctx, args.clerkOrgId);
+    if (existing.length >= cap) {
+      throw new Error("too-many-projects");
+    }
     const now = Date.now();
     return await ctx.db.insert("projects", {
       clerkOrgId: args.clerkOrgId,
-      title: args.title.trim().slice(0, MAX_TITLE_LENGTH),
+      title: title.slice(0, MAX_TITLE_LENGTH),
       description: args.description.trim().slice(0, MAX_DESCRIPTION_LENGTH),
       tags: normalizeTags(args.tags),
       imageStorageId: null,
+      totalBytes: 0,
       createdBy: userId,
       createdAt: now,
       updatedAt: now,
@@ -232,8 +340,12 @@ export const update = mutation({
       throw new Error("Not found");
     }
     await requireAdmin(ctx, project.clerkOrgId);
+    const title = args.title.trim();
+    if (title.length < 2) {
+      throw new Error("invalid-title");
+    }
     await ctx.db.patch(project._id, {
-      title: args.title.trim().slice(0, MAX_TITLE_LENGTH),
+      title: title.slice(0, MAX_TITLE_LENGTH),
       description: args.description.trim().slice(0, MAX_DESCRIPTION_LENGTH),
       tags: normalizeTags(args.tags),
       updatedAt: Date.now(),
@@ -249,7 +361,7 @@ export const remove = mutation({
       return;
     }
     await requireAdmin(ctx, project.clerkOrgId);
-    await purgeProject(ctx, project._id);
+    await tombstoneProject(ctx, project._id);
   },
 });
 
@@ -306,6 +418,22 @@ export const grantAccess = mutation({
     if (existing) {
       return;
     }
+    const member = await acceptedMemberFor(ctx, project.clerkOrgId, args.userId);
+    if (member?.status !== "accepted") {
+      throw new Error("not-a-member");
+    }
+    if (member.isOwner || member.role === "org:admin") {
+      throw new Error("already-privileged");
+    }
+    const grants = await accessRowsFor(ctx, project._id);
+    const limits = await orgLimits(ctx, project.clerkOrgId);
+    const cap = Math.min(
+      project.maxCollaborators ?? limits.maxCollaborators,
+      limits.maxCollaborators,
+    );
+    if (grants.length >= cap) {
+      throw new Error("too-many-collaborators");
+    }
     await ctx.db.insert("projectAccess", {
       projectId: project._id,
       clerkOrgId: project.clerkOrgId,
@@ -333,6 +461,24 @@ export const revokeAccess = mutation({
   },
 });
 
+export const setMaxCollaborators = mutation({
+  args: { projectId: v.id("projects"), maxCollaborators: v.number() },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (!project) {
+      throw new Error("Not found");
+    }
+    await requireAdmin(ctx, project.clerkOrgId);
+    const limits = await orgLimits(ctx, project.clerkOrgId);
+    await ctx.db.patch(project._id, {
+      maxCollaborators: Math.min(
+        clampInt(args.maxCollaborators, 0, HARD_MAX_COLLABORATORS),
+        limits.maxCollaborators,
+      ),
+    });
+  },
+});
+
 export const deleteAllByOrg = mutation({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
@@ -342,7 +488,7 @@ export const deleteAllByOrg = mutation({
       .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
       .collect();
     for (const project of projects) {
-      await purgeProject(ctx, project._id);
+      await tombstoneProject(ctx, project._id);
     }
   },
 });
@@ -351,14 +497,6 @@ export const revokeAllAccessForUser = mutation({
   args: { clerkOrgId: v.string(), userId: v.string() },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, args.clerkOrgId);
-    const grants = await ctx.db
-      .query("projectAccess")
-      .withIndex("by_org_user", (q) =>
-        q.eq("clerkOrgId", args.clerkOrgId).eq("userId", args.userId),
-      )
-      .collect();
-    for (const grant of grants) {
-      await ctx.db.delete(grant._id);
-    }
+    await purgeAccessForUser(ctx, args.clerkOrgId, args.userId);
   },
 });

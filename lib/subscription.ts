@@ -28,6 +28,7 @@ export type UserSubscription = {
   planPeriod: "month" | "year" | null;
   periodEnd: number | null;
   canceled: boolean;
+  degraded: boolean;
 };
 
 const FREE_SUBSCRIPTION: UserSubscription = {
@@ -37,13 +38,14 @@ const FREE_SUBSCRIPTION: UserSubscription = {
   planPeriod: null,
   periodEnd: null,
   canceled: false,
+  degraded: false,
 };
 
 export async function getUserSubscription(): Promise<UserSubscription> {
   const { userId } = await auth();
   const secretKey = process.env.CLERK_SECRET_KEY;
   if (!userId || !secretKey) {
-    return FREE_SUBSCRIPTION;
+    return { ...FREE_SUBSCRIPTION, degraded: true };
   }
 
   try {
@@ -52,7 +54,7 @@ export async function getUserSubscription(): Promise<UserSubscription> {
       cache: "no-store",
     });
     if (!response.ok) {
-      return FREE_SUBSCRIPTION;
+      return { ...FREE_SUBSCRIPTION, degraded: true };
     }
 
     const subscription = (await response.json()) as ClerkSubscription;
@@ -72,8 +74,9 @@ export async function getUserSubscription(): Promise<UserSubscription> {
       planPeriod: item.plan_period,
       periodEnd: item.period_end,
       canceled: item.canceled_at != null,
+      degraded: false,
     };
   } catch {
-    return FREE_SUBSCRIPTION;
+    return { ...FREE_SUBSCRIPTION, degraded: true };
   }
 }

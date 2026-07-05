@@ -58,6 +58,7 @@ type CollabDoc = {
   awareness: Awareness;
   ready: boolean;
   syncing: boolean;
+  blocked: string | null;
   lastSyncedAt: Date | null;
   viewers: CollabViewer[];
 };
@@ -143,6 +144,7 @@ export function useCollabDoc(
   const [engine, setEngine] = useState<Engine | null>(null);
   const [ready, setReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [blocked, setBlocked] = useState<string | null>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pullCursor, setPullCursor] = useState<{ documentId: string | null; afterSeq: number }>({
@@ -162,13 +164,11 @@ export function useCollabDoc(
   );
   const pushUpdate = useMutation(api.collab.pushUpdate);
   const ensureSeed = useMutation(api.collab.ensureSeed);
-  const saveSnapshot = useMutation(api.collab.saveSnapshot);
   const heartbeat = useMutation(api.presence.heartbeat);
   const leavePresence = useMutation(api.presence.leave);
 
   const appliedSeq = useRef(0);
   const seeded = useRef(false);
-  const compactPending = useRef(false);
   const userColor = useMemo(() => colorForUser(user.id), [user.id]);
   const userLabel = useMemo(
     () => (user.email ? `${user.name} · ${user.email}` : user.name),
@@ -192,10 +192,10 @@ export function useCollabDoc(
     const awareness = new Awareness(ydoc);
     appliedSeq.current = 0;
     seeded.current = false;
-    compactPending.current = false;
     setPullCursor({ documentId, afterSeq: 0 });
     setReady(false);
     setSyncing(false);
+    setBlocked(null);
     setLastSyncedAt(null);
     setEngine({ ydoc, ytext, awareness });
     return () => {
@@ -223,6 +223,7 @@ export function useCollabDoc(
     const { ydoc } = engine;
     let pending: Uint8Array[] = [];
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let failureNotified = false;
     const flush = async () => {
       timer = null;
       if (pending.length === 0) {
@@ -233,14 +234,23 @@ export function useCollabDoc(
       pending = [];
       setSyncing(true);
       try {
-        const result = await pushUpdate({
+        await pushUpdate({
           documentId: documentId as Id<"documents">,
           update: toArrayBuffer(merged),
         });
-        compactPending.current ||= result.shouldCompact;
+        failureNotified = false;
+        setBlocked(null);
         setLastSyncedAt(new Date());
       } catch (error) {
-        notify.error("Couldn’t sync changes", { description: mapSyncError(error) });
+        pending = [merged, ...pending];
+        const message = error instanceof Error ? error.message : "";
+        if (message.includes("project-full") || message.includes("file-too-large")) {
+          setBlocked(mapSyncError(error));
+        }
+        if (!failureNotified) {
+          failureNotified = true;
+          notify.error("Couldn’t sync changes", { description: mapSyncError(error) });
+        }
         reportAsync(error);
       } finally {
         if (pending.length === 0) {
@@ -311,15 +321,7 @@ export function useCollabDoc(
     if (appliedSeq.current !== queryAfterSeq) {
       setPullCursor({ documentId, afterSeq: appliedSeq.current });
     }
-    if (compactPending.current && appliedSeq.current > 0) {
-      compactPending.current = false;
-      void saveSnapshot({
-        documentId: documentId as Id<"documents">,
-        snapshot: toArrayBuffer(Y.encodeStateAsUpdate(ydoc)),
-        throughSeq: appliedSeq.current,
-      }).catch(reportAsync);
-    }
-  }, [engine, documentId, pullResult, queryAfterSeq, canEdit, ensureSeed, saveSnapshot]);
+  }, [engine, documentId, pullResult, queryAfterSeq, canEdit, ensureSeed]);
 
   useEffect(() => {
     if (!engine || !presenceResult) {
@@ -330,7 +332,11 @@ export function useCollabDoc(
     for (const row of presenceResult) {
       activeSessions.add(row.sessionId);
       if (row.sessionId !== sessionId && row.state.length > 0) {
-        applyAwarenessUpdate(awareness, base64ToBytes(row.state), "remote");
+        try {
+          applyAwarenessUpdate(awareness, base64ToBytes(row.state), "remote");
+        } catch (error) {
+          reportAsync(error);
+        }
       }
     }
     const staleClientIds: number[] = [];
@@ -395,17 +401,23 @@ export function useCollabDoc(
   ]);
 
   const viewers = useMemo<CollabViewer[]>(() => {
-    const rows = (presenceResult ?? []).map((row) => ({
-      sessionId: row.sessionId,
-      userId: row.userId,
-      name: row.name,
-      email: row.email,
-      color: row.color,
-      image: row.image,
-      isSelf: row.sessionId === sessionId,
-    }));
-    rows.sort((a, b) => (a.isSelf === b.isSelf ? 0 : a.isSelf ? -1 : 1));
-    return rows;
+    const byUser = new Map<string, CollabViewer>();
+    for (const row of presenceResult ?? []) {
+      const isSelf = row.sessionId === sessionId;
+      const current = byUser.get(row.userId);
+      if (!current || (isSelf && !current.isSelf)) {
+        byUser.set(row.userId, {
+          sessionId: row.sessionId,
+          userId: row.userId,
+          name: row.name,
+          email: row.email,
+          color: row.color,
+          image: row.image,
+          isSelf,
+        });
+      }
+    }
+    return [...byUser.values()].sort((a, b) => (a.isSelf === b.isSelf ? 0 : a.isSelf ? -1 : 1));
   }, [presenceResult, sessionId]);
   if (!engine) {
     return null;
@@ -415,6 +427,7 @@ export function useCollabDoc(
     awareness: engine.awareness,
     ready,
     syncing,
+    blocked,
     lastSyncedAt,
     viewers,
   };

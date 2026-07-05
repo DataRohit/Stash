@@ -4,6 +4,7 @@ import { accessForProject, requireProjectAccess } from "./documents";
 
 const PRESENCE_TTL = 15 * 1000;
 const PRESENCE_SWEEP_TTL = 60 * 1000;
+const MAX_STATE_LENGTH = 16 * 1024;
 
 export const heartbeat = mutation({
   args: {
@@ -35,7 +36,7 @@ export const heartbeat = mutation({
       email: args.email?.slice(0, 120) ?? undefined,
       color: args.color.slice(0, 32),
       image: args.image,
-      state: args.state.slice(0, 4096),
+      state: args.state.length > MAX_STATE_LENGTH ? "" : args.state,
       lastSeen: Date.now(),
     };
     if (existing) {
@@ -81,17 +82,18 @@ export const list = query({
       .query("presence")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
       .collect();
-    const freshestByUser = new Map<string, (typeof rows)[number]>();
+    const freshestBySession = new Map<string, (typeof rows)[number]>();
     for (const row of rows) {
       if (row.lastSeen < cutoff) {
         continue;
       }
-      const current = freshestByUser.get(row.userId);
+      const key = row.sessionId ?? row.userId;
+      const current = freshestBySession.get(key);
       if (!current || row.lastSeen > current.lastSeen) {
-        freshestByUser.set(row.userId, row);
+        freshestBySession.set(key, row);
       }
     }
-    return [...freshestByUser.values()]
+    return [...freshestBySession.values()]
       .sort((a, b) => a.lastSeen - b.lastSeen)
       .map((row) => ({
         sessionId: row.sessionId ?? row.userId,

@@ -27,9 +27,11 @@ export default async function OnboardingPage() {
   const { maxOrganizations } = limitsFromFeatures(featureSlugs);
   const client = await clerkClient();
   const memberships = await client.users.getOrganizationMembershipList({ userId, limit: 100 });
-  const count = memberships.totalCount;
-  const atLimit = count >= maxOrganizations;
-  const hasOrganizations = count > 0;
+  const ownedCount = memberships.data.filter(
+    (membership) => membership.organization.createdBy === userId,
+  ).length;
+  const atLimit = ownedCount >= maxOrganizations;
+  const hasOrganizations = memberships.totalCount > 0;
   const organizations = memberships.data.map((membership) => ({
     id: membership.organization.id,
     name: membership.organization.name,
@@ -88,7 +90,7 @@ export default async function OnboardingPage() {
               />
             </div>
           ) : (
-            <CreateOrgForm used={count} max={maxOrganizations} />
+            <CreateOrgForm used={ownedCount} max={maxOrganizations} />
           )}
 
           {hasOrganizations ? <OrgList organizations={organizations} /> : null}

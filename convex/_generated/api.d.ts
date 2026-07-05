@@ -11,6 +11,7 @@
 import type * as collab from "../collab.js";
 import type * as crons from "../crons.js";
 import type * as documents from "../documents.js";
+import type * as limits from "../limits.js";
 import type * as members from "../members.js";
 import type * as organizations from "../organizations.js";
 import type * as presence from "../presence.js";
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   collab: typeof collab;
   crons: typeof crons;
   documents: typeof documents;
+  limits: typeof limits;
   members: typeof members;
   organizations: typeof organizations;
   presence: typeof presence;

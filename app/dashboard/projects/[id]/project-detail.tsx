@@ -1,10 +1,12 @@
 "use client";
 
+import { useAuth } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
   Calendar,
   Check,
+  HardDrive,
   ImagePlus,
   Loader2,
   Pencil,
@@ -16,7 +18,14 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type ChangeEvent, type FormEvent, type KeyboardEvent, useRef, useState } from "react";
+import {
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { ProjectAccessManager } from "@/app/dashboard/projects/[id]/project-access-manager";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -35,10 +44,41 @@ type ProjectDetailProps = {
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
 
+const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
+
+function formatMb(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+function AccessLostState({ reason }: { reason: "org" | "access" }) {
+  return (
+    <section className="glass rounded-lg p-6 text-center sm:p-8">
+      <div className="mx-auto flex max-w-md flex-col items-center gap-3">
+        <p className="font-serif text-2xl tracking-display">Project access changed</p>
+        <p className="text-muted-foreground text-sm leading-relaxed">
+          {reason === "org"
+            ? "Your active organization changed in another tab. This project view is no longer tied to your current organization."
+            : "You no longer have access to this project, or it was removed while this tab was open."}
+        </p>
+        <Link
+          href="/dashboard/projects"
+          className={cn(buttonVariants({ variant: "primary" }), "mt-1 w-40")}
+        >
+          Back to projects
+        </Link>
+      </div>
+    </section>
+  );
+}
+
 export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const router = useRouter();
+  const { orgId, isLoaded: authLoaded } = useAuth();
+  const orgChanged = authLoaded && orgId !== clerkOrgId;
   const pid = projectId as Id<"projects">;
-  const project = useQuery(api.projects.get, { projectId: pid });
+  const project = useQuery(api.projects.get, orgChanged ? "skip" : { projectId: pid });
+  const accessLost = orgChanged ? "org" : project === null ? "access" : null;
+  const usage = useQuery(api.documents.usage, accessLost ? "skip" : { projectId: pid });
 
   const updateProject = useMutation(api.projects.update);
   const removeProject = useMutation(api.projects.remove);
@@ -59,6 +99,16 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const [confirmTitle, setConfirmTitle] = useState("");
   const [deleting, setDeleting] = useState(false);
 
+  useEffect(() => {
+    if (orgChanged) {
+      router.refresh();
+    }
+  }, [orgChanged, router]);
+
+  if (accessLost) {
+    return <AccessLostState reason={accessLost} />;
+  }
+
   if (project === undefined) {
     return (
       <section className="glass flex items-center gap-2 rounded-lg p-6 text-muted-foreground text-sm sm:p-8">
@@ -68,13 +118,8 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
     );
   }
   if (project === null) {
-    return (
-      <section className="glass rounded-lg p-6 text-muted-foreground text-sm sm:p-8">
-        This project is not available.
-      </section>
-    );
+    return <AccessLostState reason="access" />;
   }
-
   const isAdmin = project.isAdmin;
   const iconUrl = project.imageUrl ?? orgAvatarUrl(project.id);
 
@@ -279,6 +324,39 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                 </span>
                 <span className="text-sm">{dateFormatter.format(new Date(project.createdAt))}</span>
               </div>
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <span className="flex items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
+                  <HardDrive className="size-3.5" aria-hidden="true" />
+                  Storage
+                </span>
+                {(() => {
+                  const usedBytes = usage?.usedBytes ?? 0;
+                  const maxBytes = usage?.maxSizeBytes ?? DEFAULT_MAX_PROJECT_BYTES;
+                  const usedPercent =
+                    maxBytes > 0 ? Math.min(100, Math.round((usedBytes / maxBytes) * 100)) : 100;
+                  return (
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center gap-3">
+                        <div className="h-1.5 max-w-xs flex-1 overflow-hidden rounded-full bg-foreground/10">
+                          <div
+                            className={cn(
+                              "h-full rounded-full",
+                              usedPercent >= 90 ? "bg-destructive" : "bg-accent",
+                            )}
+                            style={{ width: `${usedPercent}%` }}
+                          />
+                        </div>
+                        <span className="shrink-0 font-mono text-muted-foreground text-xs tabular-nums">
+                          {formatMb(usedBytes)}/{formatMb(maxBytes)} MB
+                        </span>
+                      </div>
+                      <span className="text-muted-foreground text-xs">
+                        {usedPercent}% of your plan’s project storage used.
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
 
             <div className="grid gap-8 border-hairline border-t pt-6 lg:grid-cols-3">
@@ -311,6 +389,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                 projectId={project.id}
                 clerkOrgId={clerkOrgId}
                 accessUserIds={project.accessUserIds}
+                maxCollaborators={project.maxCollaborators}
               />
             ) : null}
 

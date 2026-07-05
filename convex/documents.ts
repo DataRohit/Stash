@@ -1,13 +1,41 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
+import { clampInt, HARD_MAX_PROJECT_BYTES, MIN_PROJECT_BYTES } from "./limits";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_FILE_BYTES = 512 * 1024;
 const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
 const MAX_NODES_PER_PROJECT = 2000;
 const MAX_DEPTH = 16;
+const PURGE_COLLAB_BATCH = 200;
+const PURGE_DOCUMENT_BATCH = 20;
+const WINDOWS_RESERVED_NAMES = new Set([
+  "con",
+  "prn",
+  "aux",
+  "nul",
+  "com1",
+  "com2",
+  "com3",
+  "com4",
+  "com5",
+  "com6",
+  "com7",
+  "com8",
+  "com9",
+  "lpt1",
+  "lpt2",
+  "lpt3",
+  "lpt4",
+  "lpt5",
+  "lpt6",
+  "lpt7",
+  "lpt8",
+  "lpt9",
+]);
 
 type Access = { project: Doc<"projects">; userId: string; isAdmin: boolean };
 
@@ -17,7 +45,14 @@ export function byteLength(text: string): number {
 
 function cleanName(raw: string, fallback?: string): string {
   const name = raw.replaceAll("/", "").replaceAll("\\", "").trim().slice(0, MAX_NAME_LENGTH).trim();
-  if (name.length === 0 || name === "." || name === "..") {
+  const stem = name.split(".")[0]?.toLowerCase() ?? "";
+  if (
+    name.length === 0 ||
+    name === "." ||
+    name === ".." ||
+    /[. ]$/.test(name) ||
+    WINDOWS_RESERVED_NAMES.has(stem)
+  ) {
     if (fallback) {
       return fallback;
     }
@@ -42,8 +77,7 @@ async function callerFor(ctx: QueryCtx, clerkOrgId: string) {
   if (!identity) {
     return null;
   }
-  const claimedOrg = identity.org_id;
-  if (typeof claimedOrg === "string" && claimedOrg !== clerkOrgId) {
+  if (identity.org_id !== clerkOrgId) {
     return null;
   }
   return { userId: identity.subject, isAdmin: identity.org_role === "org:admin" };
@@ -54,7 +88,7 @@ export async function accessForProject(
   projectId: Id<"projects">,
 ): Promise<Access | null> {
   const project = await ctx.db.get(projectId);
-  if (!project) {
+  if (!project || project.deletedAt) {
     return null;
   }
   const caller = await callerFor(ctx, project.clerkOrgId);
@@ -111,7 +145,7 @@ async function assertParent(
     return;
   }
   const parent = await ctx.db.get(parentId);
-  if (!parent || parent.projectId !== projectId || parent.kind !== "folder") {
+  if (!parent || parent.deletingAt || parent.projectId !== projectId || parent.kind !== "folder") {
     throw new Error("invalid-parent");
   }
 }
@@ -121,7 +155,7 @@ async function assertCapacity(ctx: QueryCtx, projectId: Id<"projects">): Promise
     .query("documents")
     .withIndex("by_project", (q) => q.eq("projectId", projectId))
     .collect();
-  if (docs.length >= MAX_NODES_PER_PROJECT) {
+  if (docs.filter((doc) => !doc.deletingAt).length >= MAX_NODES_PER_PROJECT) {
     throw new Error("too-many-nodes");
   }
 }
@@ -131,7 +165,7 @@ async function depthOf(ctx: QueryCtx, parentId: Id<"documents"> | null): Promise
   let current = parentId;
   while (current !== null) {
     const node = await ctx.db.get(current);
-    if (!node) {
+    if (!node || node.deletingAt) {
       break;
     }
     depth += 1;
@@ -172,7 +206,22 @@ async function nameTaken(
 ): Promise<boolean> {
   const siblings = await childrenOf(ctx, projectId, parentId);
   const key = name.trim().toLowerCase();
-  return siblings.some((doc) => doc._id !== exclude && doc.name.toLowerCase() === key);
+  return siblings.some(
+    (doc) => !doc.deletingAt && doc._id !== exclude && doc.name.toLowerCase() === key,
+  );
+}
+
+async function orgMaxSizeBytes(ctx: QueryCtx, clerkOrgId: string): Promise<number> {
+  const row = await ctx.db
+    .query("organizations")
+    .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", clerkOrgId))
+    .unique();
+  return typeof row?.maxSizeBytes === "number" ? row.maxSizeBytes : DEFAULT_MAX_PROJECT_BYTES;
+}
+
+export async function maxProjectBytes(ctx: QueryCtx, project: Doc<"projects">): Promise<number> {
+  const orgCap = await orgMaxSizeBytes(ctx, project.clerkOrgId);
+  return Math.min(project.maxSizeBytes ?? orgCap, orgCap);
 }
 
 async function uniqueName(
@@ -182,7 +231,9 @@ async function uniqueName(
   baseName: string,
 ): Promise<string> {
   const siblings = await childrenOf(ctx, projectId, parentId);
-  const taken = new Set(siblings.map((doc) => doc.name.toLowerCase()));
+  const taken = new Set(
+    siblings.filter((doc) => !doc.deletingAt).map((doc) => doc.name.toLowerCase()),
+  );
   if (!taken.has(baseName.toLowerCase())) {
     return baseName;
   }
@@ -204,6 +255,25 @@ export async function projectTotalBytes(ctx: QueryCtx, projectId: Id<"projects">
     .withIndex("by_project", (q) => q.eq("projectId", projectId))
     .collect();
   return docs.reduce((sum, doc) => sum + doc.size, 0);
+}
+
+export async function cachedProjectBytes(ctx: QueryCtx, project: Doc<"projects">): Promise<number> {
+  if (typeof project.totalBytes === "number") {
+    return project.totalBytes;
+  }
+  return await projectTotalBytes(ctx, project._id);
+}
+
+export async function addProjectBytes(
+  ctx: MutationCtx,
+  project: Doc<"projects">,
+  delta: number,
+): Promise<void> {
+  if (delta === 0) {
+    return;
+  }
+  const base = await cachedProjectBytes(ctx, project);
+  await ctx.db.patch(project._id, { totalBytes: Math.max(0, base + delta) });
 }
 
 async function subtree(
@@ -228,29 +298,186 @@ async function subtree(
   return all;
 }
 
-export async function purgeDocCollab(ctx: MutationCtx, documentId: Id<"documents">): Promise<void> {
+function descendantIds(docs: Doc<"documents">[], rootId: Id<"documents">): Set<Id<"documents">> {
+  const children = new Map<Id<"documents"> | null, Doc<"documents">[]>();
+  for (const doc of docs) {
+    const list = children.get(doc.parentId) ?? [];
+    list.push(doc);
+    children.set(doc.parentId, list);
+  }
+  const ids = new Set<Id<"documents">>();
+  const queue: Id<"documents">[] = [rootId];
+  while (queue.length > 0) {
+    const id = queue.shift() as Id<"documents">;
+    if (ids.has(id)) {
+      continue;
+    }
+    ids.add(id);
+    for (const child of children.get(id) ?? []) {
+      queue.push(child._id);
+    }
+  }
+  return ids;
+}
+
+function visibleDocuments(docs: Doc<"documents">[]): Doc<"documents">[] {
+  const byId = new Map(docs.map((doc) => [doc._id, doc]));
+  const hidden = new Set<Id<"documents">>();
+  for (const doc of docs) {
+    let current: Doc<"documents"> | undefined = doc;
+    const seen = new Set<Id<"documents">>();
+    while (current && !seen.has(current._id)) {
+      seen.add(current._id);
+      if (current.deletingAt) {
+        hidden.add(doc._id);
+        break;
+      }
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+  }
+  return docs.filter((doc) => !hidden.has(doc._id));
+}
+
+function depthFromRoot(
+  doc: Doc<"documents">,
+  byId: Map<Id<"documents">, Doc<"documents">>,
+  rootId: Id<"documents">,
+): number {
+  let depth = 0;
+  let current: Doc<"documents"> | undefined = doc;
+  const seen = new Set<Id<"documents">>();
+  while (current && current._id !== rootId && !seen.has(current._id)) {
+    seen.add(current._id);
+    depth += 1;
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return depth;
+}
+
+export async function purgeDocCollabBatch(
+  ctx: MutationCtx,
+  documentId: Id<"documents">,
+): Promise<boolean> {
   const updates = await ctx.db
     .query("yjsUpdates")
     .withIndex("by_document", (q) => q.eq("documentId", documentId))
-    .collect();
+    .take(PURGE_COLLAB_BATCH);
   for (const row of updates) {
     await ctx.db.delete(row._id);
+  }
+  if (updates.length > 0) {
+    return true;
   }
   const snapshots = await ctx.db
     .query("yjsSnapshots")
     .withIndex("by_document", (q) => q.eq("documentId", documentId))
-    .collect();
+    .take(PURGE_COLLAB_BATCH);
   for (const row of snapshots) {
     await ctx.db.delete(row._id);
+  }
+  if (snapshots.length > 0) {
+    return true;
   }
   const rows = await ctx.db
     .query("presence")
     .withIndex("by_document", (q) => q.eq("documentId", documentId))
-    .collect();
+    .take(PURGE_COLLAB_BATCH);
   for (const row of rows) {
     await ctx.db.delete(row._id);
   }
+  return rows.length > 0;
 }
+
+export async function purgeDocCollab(ctx: MutationCtx, documentId: Id<"documents">): Promise<void> {
+  let more = true;
+  while (more) {
+    more = await purgeDocCollabBatch(ctx, documentId);
+  }
+}
+
+export const purgeSubtreeBatch = internalMutation({
+  args: { projectId: v.id("projects"), rootId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const ids = descendantIds(docs, args.rootId);
+    const byId = new Map(docs.map((doc) => [doc._id, doc]));
+    const batch = docs
+      .filter((doc) => ids.has(doc._id))
+      .sort((a, b) => depthFromRoot(b, byId, args.rootId) - depthFromRoot(a, byId, args.rootId))
+      .slice(0, PURGE_DOCUMENT_BATCH);
+    if (batch.length === 0) {
+      return;
+    }
+    let freed = 0;
+    for (const doc of batch) {
+      if (doc.kind === "file") {
+        const hasMoreCollab = await purgeDocCollabBatch(ctx, doc._id);
+        if (hasMoreCollab) {
+          await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, args);
+          return;
+        }
+      }
+      if (doc.storageId) {
+        await ctx.storage.delete(doc.storageId);
+      }
+      freed += doc.size;
+      await ctx.db.delete(doc._id);
+    }
+    if (freed > 0) {
+      const project = await ctx.db.get(args.projectId);
+      if (project) {
+        await addProjectBytes(ctx, project, -freed);
+      }
+    }
+    await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, args);
+  },
+});
+
+export const resumePurges = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const pending = await ctx.db
+      .query("documents")
+      .withIndex("by_deleting", (q) => q.gt("deletingAt", 0))
+      .take(100);
+    const projectIds = [...new Set(pending.map((doc) => doc.projectId))];
+    const docs = (
+      await Promise.all(
+        projectIds.map((projectId) =>
+          ctx.db
+            .query("documents")
+            .withIndex("by_project", (q) => q.eq("projectId", projectId))
+            .collect(),
+        ),
+      )
+    ).flat();
+    const byId = new Map(docs.map((doc) => [doc._id, doc]));
+    const roots = pending.filter((doc) => {
+      if (!doc.deletingAt) {
+        return false;
+      }
+      let current = doc.parentId ? byId.get(doc.parentId) : undefined;
+      const seen = new Set<Id<"documents">>();
+      while (current && !seen.has(current._id)) {
+        seen.add(current._id);
+        if (current.deletingAt) {
+          return false;
+        }
+        current = current.parentId ? byId.get(current.parentId) : undefined;
+      }
+      return true;
+    });
+    for (const root of roots) {
+      await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, {
+        projectId: root.projectId,
+        rootId: root._id,
+      });
+    }
+  },
+});
 
 export const listByProject = query({
   args: { projectId: v.id("projects") },
@@ -264,7 +491,7 @@ export const listByProject = query({
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
     return Promise.all(
-      docs.map(async (doc) => ({
+      visibleDocuments(docs).map(async (doc) => ({
         id: doc._id,
         parentId: doc.parentId,
         kind: doc.kind,
@@ -284,6 +511,13 @@ export const getDocument = query({
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
     if (!doc) {
+      return null;
+    }
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", doc.projectId))
+      .collect();
+    if (!visibleDocuments(docs).some((visible) => visible._id === doc._id)) {
       return null;
     }
     const access = await accessForProject(ctx, doc.projectId);
@@ -315,8 +549,8 @@ export const usage = query({
       return { usedBytes: 0, maxSizeBytes: DEFAULT_MAX_PROJECT_BYTES };
     }
     return {
-      usedBytes: await projectTotalBytes(ctx, args.projectId),
-      maxSizeBytes: access.project.maxSizeBytes ?? DEFAULT_MAX_PROJECT_BYTES,
+      usedBytes: await cachedProjectBytes(ctx, access.project),
+      maxSizeBytes: await maxProjectBytes(ctx, access.project),
     };
   },
 });
@@ -399,7 +633,7 @@ export const rename = mutation({
   args: { documentId: v.id("documents"), name: v.string() },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (!doc) {
+    if (!doc || doc.deletingAt) {
       throw new Error("not-found");
     }
     await requireProjectAccess(ctx, doc.projectId);
@@ -422,7 +656,7 @@ export const move = mutation({
   args: { documentId: v.id("documents"), parentId: v.union(v.id("documents"), v.null()) },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (!doc) {
+    if (!doc || doc.deletingAt) {
       throw new Error("not-found");
     }
     await requireProjectAccess(ctx, doc.projectId);
@@ -450,7 +684,7 @@ export const setContent = mutation({
   args: { documentId: v.id("documents"), content: v.string() },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (doc?.kind !== "file") {
+    if (doc?.kind !== "file" || doc.deletingAt) {
       throw new Error("not-found");
     }
     const access = await requireProjectAccess(ctx, doc.projectId);
@@ -458,12 +692,13 @@ export const setContent = mutation({
     if (newSize > MAX_FILE_BYTES) {
       throw new Error("file-too-large");
     }
-    const total = await projectTotalBytes(ctx, doc.projectId);
-    const max = access.project.maxSizeBytes ?? DEFAULT_MAX_PROJECT_BYTES;
+    const total = await cachedProjectBytes(ctx, access.project);
+    const max = await maxProjectBytes(ctx, access.project);
     if (total - doc.size + newSize > max) {
       throw new Error("project-full");
     }
     await ctx.db.patch(doc._id, { content: args.content, size: newSize, updatedAt: Date.now() });
+    await addProjectBytes(ctx, access.project, newSize - doc.size);
   },
 });
 
@@ -471,20 +706,15 @@ export const remove = mutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (!doc) {
+    if (!doc || doc.deletingAt) {
       return;
     }
-    await requireProjectAccess(ctx, doc.projectId);
-    const nodes = await subtree(ctx, doc.projectId, doc._id);
-    for (const node of nodes) {
-      if (node.storageId) {
-        await ctx.storage.delete(node.storageId);
-      }
-      if (node.kind === "file") {
-        await purgeDocCollab(ctx, node._id);
-      }
-      await ctx.db.delete(node._id);
-    }
+    const access = await requireProjectAccess(ctx, doc.projectId);
+    await ctx.db.patch(doc._id, { deletingAt: Date.now(), updatedAt: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, {
+      projectId: access.project._id,
+      rootId: doc._id,
+    });
   },
 });
 
@@ -525,8 +755,8 @@ export const createAsset = mutation({
       await ctx.storage.delete(args.storageId);
       throw error;
     }
-    const total = await projectTotalBytes(ctx, args.projectId);
-    const max = access.project.maxSizeBytes ?? DEFAULT_MAX_PROJECT_BYTES;
+    const total = await cachedProjectBytes(ctx, access.project);
+    const max = await maxProjectBytes(ctx, access.project);
     if (total + meta.size > max) {
       await ctx.storage.delete(args.storageId);
       throw new Error("project-full");
@@ -538,7 +768,7 @@ export const createAsset = mutation({
       cleanName(args.name, "asset"),
     );
     const now = Date.now();
-    return await ctx.db.insert("documents", {
+    const id = await ctx.db.insert("documents", {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
       parentId: args.parentId,
@@ -552,13 +782,21 @@ export const createAsset = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await addProjectBytes(ctx, access.project, meta.size);
+    return id;
   },
 });
 
 export const setMaxSize = mutation({
   args: { projectId: v.id("projects"), maxSizeBytes: v.number() },
   handler: async (ctx, args) => {
-    await requireProjectAdmin(ctx, args.projectId);
-    await ctx.db.patch(args.projectId, { maxSizeBytes: args.maxSizeBytes });
+    const access = await requireProjectAdmin(ctx, args.projectId);
+    const orgCap = await orgMaxSizeBytes(ctx, access.project.clerkOrgId);
+    await ctx.db.patch(args.projectId, {
+      maxSizeBytes: Math.min(
+        clampInt(args.maxSizeBytes, MIN_PROJECT_BYTES, HARD_MAX_PROJECT_BYTES),
+        orgCap,
+      ),
+    });
   },
 });

@@ -1,13 +1,21 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
-import type { Id } from "./_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
-import { accessForProject, byteLength, projectTotalBytes, requireProjectAccess } from "./documents";
+import { internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
+import {
+  accessForProject,
+  addProjectBytes,
+  byteLength,
+  cachedProjectBytes,
+  maxProjectBytes,
+  requireProjectAccess,
+} from "./documents";
 
 const COMPACT_THRESHOLD = 200;
+const COMPACT_OVERLAP = 64;
 const MAX_FILE_BYTES = 512 * 1024;
-const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
 const MAX_COLLAB_UPDATE_BYTES = 768 * 1024;
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -27,40 +35,46 @@ async function documentProject(
   return doc.projectId;
 }
 
-async function nextSeq(ctx: MutationCtx, documentId: Id<"documents">): Promise<number> {
+async function latestSeq(ctx: QueryCtx, documentId: Id<"documents">): Promise<number> {
   const latest = await ctx.db
     .query("yjsUpdates")
     .withIndex("by_document", (q) => q.eq("documentId", documentId))
     .order("desc")
     .first();
-  return (latest?.seq ?? 0) + 1;
+  return latest?.seq ?? 0;
 }
 
 async function materializedContent(
   ctx: QueryCtx,
-  documentId: Id<"documents">,
+  doc: Doc<"documents">,
   pendingUpdate: ArrayBuffer,
-): Promise<string> {
+): Promise<{ content: string; state: ArrayBuffer }> {
   const ydoc = new Y.Doc();
-  const snapshot = await ctx.db
-    .query("yjsSnapshots")
-    .withIndex("by_document", (q) => q.eq("documentId", documentId))
-    .unique();
-  if (snapshot) {
-    Y.applyUpdate(ydoc, new Uint8Array(snapshot.snapshot));
+  let baseSeq = doc.contentSeq ?? 0;
+  if (doc.contentState) {
+    Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+  } else {
+    const snapshot = await ctx.db
+      .query("yjsSnapshots")
+      .withIndex("by_document", (q) => q.eq("documentId", doc._id))
+      .unique();
+    if (snapshot) {
+      Y.applyUpdate(ydoc, new Uint8Array(snapshot.snapshot));
+    }
+    baseSeq = snapshot?.throughSeq ?? 0;
   }
-  const baseSeq = snapshot?.throughSeq ?? 0;
   const updates = await ctx.db
     .query("yjsUpdates")
-    .withIndex("by_document", (q) => q.eq("documentId", documentId).gt("seq", baseSeq))
+    .withIndex("by_document", (q) => q.eq("documentId", doc._id).gt("seq", baseSeq))
     .collect();
   for (const row of updates) {
     Y.applyUpdate(ydoc, new Uint8Array(row.update));
   }
   Y.applyUpdate(ydoc, new Uint8Array(pendingUpdate));
   const content = ydoc.getText("codemirror").toString();
+  const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
   ydoc.destroy();
-  return content;
+  return { content, state };
 }
 
 export const pullUpdates = query({
@@ -101,26 +115,98 @@ export const pushUpdate = mutation({
     if (args.update.byteLength > MAX_COLLAB_UPDATE_BYTES) {
       throw new Error("update-too-large");
     }
-    const content = await materializedContent(ctx, args.documentId, args.update);
+    const seq = (await latestSeq(ctx, args.documentId)) + 1;
+    const { content, state } = await materializedContent(ctx, doc, args.update);
     const newSize = byteLength(content);
     if (newSize > MAX_FILE_BYTES) {
       throw new Error("file-too-large");
     }
-    const total = await projectTotalBytes(ctx, doc.projectId);
-    const max = access.project.maxSizeBytes ?? DEFAULT_MAX_PROJECT_BYTES;
+    const total = await cachedProjectBytes(ctx, access.project);
+    const max = await maxProjectBytes(ctx, access.project);
     if (total - doc.size + newSize > max) {
       throw new Error("project-full");
     }
-    const seq = await nextSeq(ctx, args.documentId);
     await ctx.db.insert("yjsUpdates", {
       documentId: args.documentId,
       seq,
       update: args.update,
       createdAt: Date.now(),
     });
-    await ctx.db.patch(doc._id, { content, size: newSize, updatedAt: Date.now() });
-    const shouldCompact = seq % COMPACT_THRESHOLD === 0;
-    return { seq, shouldCompact };
+    await ctx.db.patch(doc._id, {
+      content,
+      contentSeq: seq,
+      contentState: state,
+      size: newSize,
+      updatedAt: Date.now(),
+    });
+    await addProjectBytes(ctx, access.project, newSize - doc.size);
+    if (seq % COMPACT_THRESHOLD === 0) {
+      await ctx.scheduler.runAfter(0, internal.collab.compactDocument, {
+        documentId: args.documentId,
+      });
+    }
+    return { seq };
+  },
+});
+
+export const compactDocument = internalMutation({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file") {
+      return;
+    }
+    const ydoc = new Y.Doc();
+    const snapshot = await ctx.db
+      .query("yjsSnapshots")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .unique();
+    if (snapshot) {
+      Y.applyUpdate(ydoc, new Uint8Array(snapshot.snapshot));
+    }
+    const baseSeq = snapshot?.throughSeq ?? 0;
+    const updates = await ctx.db
+      .query("yjsUpdates")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId).gt("seq", baseSeq))
+      .collect();
+    if (updates.length === 0) {
+      ydoc.destroy();
+      return;
+    }
+    let maxSeq = baseSeq;
+    for (const row of updates) {
+      Y.applyUpdate(ydoc, new Uint8Array(row.update));
+      if (row.seq > maxSeq) {
+        maxSeq = row.seq;
+      }
+    }
+    const encoded = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+    ydoc.destroy();
+    if (snapshot) {
+      await ctx.db.patch(snapshot._id, {
+        snapshot: encoded,
+        throughSeq: maxSeq,
+        updatedAt: Date.now(),
+      });
+    } else {
+      await ctx.db.insert("yjsSnapshots", {
+        documentId: args.documentId,
+        snapshot: encoded,
+        throughSeq: maxSeq,
+        updatedAt: Date.now(),
+      });
+    }
+    const pruneThrough = maxSeq - COMPACT_OVERLAP;
+    if (pruneThrough <= 0) {
+      return;
+    }
+    const stale = await ctx.db
+      .query("yjsUpdates")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId).lte("seq", pruneThrough))
+      .collect();
+    for (const row of stale) {
+      await ctx.db.delete(row._id);
+    }
   },
 });
 
@@ -146,61 +232,18 @@ export const ensureSeed = mutation({
     const seedDoc = new Y.Doc();
     seedDoc.getText("codemirror").insert(0, doc.content);
     const update = Y.encodeStateAsUpdate(seedDoc);
+    const state = toArrayBuffer(update);
     seedDoc.destroy();
     await ctx.db.insert("yjsUpdates", {
       documentId: args.documentId,
       seq: 1,
-      update: toArrayBuffer(update),
+      update: state,
       createdAt: Date.now(),
     });
+    await ctx.db.patch(doc._id, {
+      contentSeq: 1,
+      contentState: state,
+    });
     return { seeded: true };
-  },
-});
-
-export const saveSnapshot = mutation({
-  args: {
-    documentId: v.id("documents"),
-    snapshot: v.bytes(),
-    throughSeq: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const projectId = await documentProject(ctx, args.documentId);
-    if (!projectId) {
-      throw new Error("not-found");
-    }
-    await requireProjectAccess(ctx, projectId);
-    if (args.snapshot.byteLength > MAX_COLLAB_UPDATE_BYTES) {
-      throw new Error("snapshot-too-large");
-    }
-    const existing = await ctx.db
-      .query("yjsSnapshots")
-      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .unique();
-    if (existing) {
-      if (args.throughSeq <= existing.throughSeq) {
-        return;
-      }
-      await ctx.db.patch(existing._id, {
-        snapshot: args.snapshot,
-        throughSeq: args.throughSeq,
-        updatedAt: Date.now(),
-      });
-    } else {
-      await ctx.db.insert("yjsSnapshots", {
-        documentId: args.documentId,
-        snapshot: args.snapshot,
-        throughSeq: args.throughSeq,
-        updatedAt: Date.now(),
-      });
-    }
-    const stale = await ctx.db
-      .query("yjsUpdates")
-      .withIndex("by_document", (q) =>
-        q.eq("documentId", args.documentId).lte("seq", args.throughSeq),
-      )
-      .collect();
-    for (const row of stale) {
-      await ctx.db.delete(row._id);
-    }
   },
 });

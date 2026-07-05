@@ -1,12 +1,7 @@
 "use server";
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import {
-  deleteAllOrgMembers,
-  deleteAllOrgProjects,
-  removeOrgDetails,
-  saveOrgDetails,
-} from "@/lib/convex-server";
+import { saveOrgDetails } from "@/lib/convex-server";
 import { MAX_IMAGE_BYTES, MAX_TAGS, MIN_ORG_NAME_LENGTH, sanitizeTags } from "@/lib/org";
 import { fetchOrgAvatarFile } from "@/lib/org-avatar";
 
@@ -90,10 +85,7 @@ export async function deleteOrganization(): Promise<DeleteOrganizationResult> {
   }
 
   try {
-    await deleteAllOrgMembers(orgId);
-    await deleteAllOrgProjects(orgId);
     await client.organizations.deleteOrganization(orgId);
-    await removeOrgDetails(orgId);
     return { nextOrgId: next.organization.id };
   } catch {
     return { error: "failed" };

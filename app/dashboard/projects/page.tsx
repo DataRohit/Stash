@@ -2,6 +2,7 @@ import { auth, clerkClient } from "@clerk/nextjs/server";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ProjectsBoard } from "@/app/dashboard/projects/projects-board";
+import { setOrgPlanLimits } from "@/lib/convex-server";
 import { orgAvatarUrl } from "@/lib/org-avatar";
 import { limitsFromFeatures } from "@/lib/plan-limits";
 import { getUserSubscription } from "@/lib/subscription";
@@ -27,6 +28,14 @@ export default async function ProjectsPage() {
   ]);
   const limits = limitsFromFeatures(subscription.featureSlugs);
   const orgIconUrl = organization.hasImage ? organization.imageUrl : orgAvatarUrl(orgId);
+
+  if (organization.createdBy === userId && !subscription.degraded) {
+    await setOrgPlanLimits(orgId, {
+      maxProjects: limits.maxProjectsPerOrganization,
+      maxCollaborators: limits.maxCollaboratorsPerProject,
+      maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+    });
+  }
 
   return (
     <main className="flex w-full flex-col items-center px-3 pt-32 pb-16 sm:px-6 lg:pt-28">

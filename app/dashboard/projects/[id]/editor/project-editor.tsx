@@ -1,9 +1,10 @@
 "use client";
 
-import { useUser } from "@clerk/nextjs";
+import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { ArrowLeft, Check, Code2, Columns2, Eye, Loader2, PanelLeft } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
@@ -27,6 +28,7 @@ import { cn } from "@/lib/utils";
 type ProjectEditorProps = {
   projectId: string;
   projectTitle: string;
+  clerkOrgId: string;
   canEdit: boolean;
   isAdmin: boolean;
 };
@@ -206,11 +208,51 @@ function ViewerPresence({ viewers, canOpen }: { viewers: CollabViewer[]; canOpen
   );
 }
 
-export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: ProjectEditorProps) {
+function AccessLostState({ projectId, reason }: { projectId: string; reason: "org" | "access" }) {
+  return (
+    <div className="glass flex min-h-0 flex-1 items-center justify-center rounded-lg p-6 text-center">
+      <div className="flex max-w-md flex-col items-center gap-3">
+        <p className="font-serif text-2xl tracking-display">Project access changed</p>
+        <p className="text-muted-foreground text-sm leading-relaxed">
+          {reason === "org"
+            ? "Your active organization changed in another tab. This editor is paused so it does not show stale project data."
+            : "You no longer have access to this project, or it was removed while this tab was open."}
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+          <Link
+            href="/dashboard/projects"
+            className="inline-flex h-9 items-center justify-center rounded-sm bg-primary px-4 font-medium text-primary-foreground text-sm transition-colors hover:bg-primary/90"
+          >
+            Back to projects
+          </Link>
+          <Link
+            href={`/dashboard/projects/${projectId}`}
+            className="inline-flex h-9 items-center justify-center rounded-sm border border-hairline px-4 font-medium text-sm transition-colors hover:bg-foreground/[0.06]"
+          >
+            Check access
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ProjectEditor({
+  projectId,
+  projectTitle,
+  clerkOrgId,
+  canEdit,
+  isAdmin,
+}: ProjectEditorProps) {
   const pid = projectId as Id<"projects">;
-  const nodesData = useQuery(api.documents.listByProject, { projectId: pid });
+  const router = useRouter();
+  const { orgId, isLoaded: authLoaded } = useAuth();
+  const orgChanged = authLoaded && orgId !== clerkOrgId;
+  const project = useQuery(api.projects.get, orgChanged ? "skip" : { projectId: pid });
+  const accessLost = orgChanged ? "org" : project === null ? "access" : null;
+  const nodesData = useQuery(api.documents.listByProject, accessLost ? "skip" : { projectId: pid });
   const nodes = useMemo(() => (nodesData ?? []) as TreeNode[], [nodesData]);
-  const usage = useQuery(api.documents.usage, { projectId: pid });
+  const usage = useQuery(api.documents.usage, accessLost ? "skip" : { projectId: pid });
 
   const createFolder = useMutation(api.documents.createFolder);
   const createFile = useMutation(api.documents.createFile);
@@ -225,6 +267,7 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const lastSeeded = useRef<string | null>(null);
+  const previewFrameRef = useRef<HTMLIFrameElement>(null);
 
   const startResize = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -253,7 +296,7 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
   const selectedFileId = selectedNode?.kind === "file" ? (effectiveSelectedId as string) : null;
   const doc = useQuery(
     api.documents.getDocument,
-    selectedFileId ? { documentId: selectedFileId as Id<"documents"> } : "skip",
+    selectedFileId && !accessLost ? { documentId: selectedFileId as Id<"documents"> } : "skip",
   );
 
   const collabUser = useMemo(
@@ -267,6 +310,12 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
     [user],
   );
   const collab = useCollabDoc(selectedFileId, canEdit, collabUser);
+
+  useEffect(() => {
+    if (orgChanged) {
+      router.refresh();
+    }
+  }, [orgChanged, router]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -304,6 +353,9 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
+      if (event.source !== previewFrameRef.current?.contentWindow) {
+        return;
+      }
       if (event.data?.type === "stash-open-doc") {
         const target = nodes.find((node) => node.id === event.data.id);
         if (target?.kind === "file") {
@@ -363,10 +415,14 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
     : "";
   const usedBytes = usage?.usedBytes ?? 0;
   const maxBytes = usage?.maxSizeBytes ?? 8 * 1024 * 1024;
-  const usedPercent = Math.min(100, Math.round((usedBytes / maxBytes) * 100));
+  const usedPercent = maxBytes > 0 ? Math.min(100, Math.round((usedBytes / maxBytes) * 100)) : 100;
   const maxEditableBytes = doc
     ? Math.min(MAX_FILE_BYTES, doc.size + Math.max(0, maxBytes - usedBytes))
     : MAX_FILE_BYTES;
+
+  if (accessLost) {
+    return <AccessLostState projectId={projectId} reason={accessLost} />;
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -525,40 +581,48 @@ export function ProjectEditor({ projectId, projectTitle, canEdit, isAdmin }: Pro
 
         <div className="glass flex min-w-0 flex-1 overflow-hidden rounded-lg">
           {selectedNode?.kind === "file" && doc && doc.id === selectedFileId ? (
-            <div className="flex min-w-0 flex-1">
-              {viewMode !== "preview" ? (
-                <div
-                  className={cn(
-                    "min-w-0 overflow-auto",
-                    viewMode === "split" ? "flex-1 border-hairline border-r" : "flex-1",
-                  )}
-                >
-                  <DocEditor
-                    key={`${selectedFileId}:${doc.fileType}`}
-                    initialContent={doc.content}
-                    language={doc.fileType === "html" ? "html" : "md"}
-                    readOnly={!canEdit}
-                    onChange={setBuffer}
-                    maxContentBytes={canEdit ? maxEditableBytes : undefined}
-                    onLimit={() =>
-                      notify.error("Edit is too large", {
-                        description: mapDocError(new Error("file-too-large")),
-                      })
-                    }
-                    ytext={canEdit ? collab?.ytext : undefined}
-                    awareness={canEdit ? collab?.awareness : undefined}
-                  />
+            <div className="flex min-w-0 flex-1 flex-col">
+              {collab?.blocked ? (
+                <div className="shrink-0 border-destructive/30 border-b bg-destructive/6 px-4 py-2 text-destructive text-xs">
+                  {collab.blocked} Editing is paused until this file can sync again.
                 </div>
               ) : null}
-              {viewMode !== "editor" ? (
-                <div className="min-w-0 flex-1">
-                  <DocPreview
-                    fileNode={selectedNode}
-                    content={canEdit ? buffer : doc.content}
-                    nodes={nodes}
-                  />
-                </div>
-              ) : null}
+              <div className="flex min-h-0 flex-1">
+                {viewMode !== "preview" ? (
+                  <div
+                    className={cn(
+                      "min-w-0 overflow-auto",
+                      viewMode === "split" ? "flex-1 border-hairline border-r" : "flex-1",
+                    )}
+                  >
+                    <DocEditor
+                      key={`${selectedFileId}:${doc.fileType}`}
+                      initialContent={doc.content}
+                      language={doc.fileType === "html" ? "html" : "md"}
+                      readOnly={!canEdit || Boolean(collab?.blocked)}
+                      onChange={setBuffer}
+                      maxContentBytes={canEdit ? maxEditableBytes : undefined}
+                      onLimit={() =>
+                        notify.error("Edit is too large", {
+                          description: mapDocError(new Error("file-too-large")),
+                        })
+                      }
+                      ytext={canEdit ? collab?.ytext : undefined}
+                      awareness={canEdit ? collab?.awareness : undefined}
+                    />
+                  </div>
+                ) : null}
+                {viewMode !== "editor" ? (
+                  <div className="min-w-0 flex-1">
+                    <DocPreview
+                      fileNode={selectedNode}
+                      content={canEdit ? buffer : doc.content}
+                      nodes={nodes}
+                      iframeRef={previewFrameRef}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </div>
           ) : selectedNode?.kind === "asset" && selectedNode.assetUrl ? (
             <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-6">

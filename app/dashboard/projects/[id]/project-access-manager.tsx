@@ -9,11 +9,13 @@ import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { labelClass } from "@/lib/ui";
+import { cn } from "@/lib/utils";
 
 type ProjectAccessManagerProps = {
   projectId: string;
   clerkOrgId: string;
   accessUserIds: string[];
+  maxCollaborators: number;
 };
 
 function initial(firstName: string | null, lastName: string | null, email: string): string {
@@ -25,6 +27,7 @@ export function ProjectAccessManager({
   projectId,
   clerkOrgId,
   accessUserIds,
+  maxCollaborators,
 }: ProjectAccessManagerProps) {
   const people = useQuery(api.members.listByOrg, { clerkOrgId });
   const grant = useMutation(api.projects.grantAccess);
@@ -33,6 +36,8 @@ export function ProjectAccessManager({
 
   const pid = projectId as Id<"projects">;
   const accessSet = new Set(accessUserIds);
+  const used = accessUserIds.length;
+  const full = used >= maxCollaborators;
 
   const toggle = async (userId: string, hasAccess: boolean) => {
     setBusyId(userId);
@@ -42,8 +47,15 @@ export function ProjectAccessManager({
       } else {
         await grant({ projectId: pid, userId });
       }
-    } catch {
-      notify.error("Couldn’t update access", { description: "Please try again." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("too-many-collaborators")) {
+        notify.error("Collaborator limit reached", {
+          description: "Upgrade your plan to grant access to more members on this project.",
+        });
+      } else {
+        notify.error("Couldn’t update access", { description: "Please try again." });
+      }
     } finally {
       setBusyId(null);
     }
@@ -53,12 +65,27 @@ export function ProjectAccessManager({
 
   return (
     <div className="flex flex-col gap-3 border-hairline border-t pt-6">
-      <div className="flex flex-col gap-1">
-        <span className={labelClass}>Access</span>
-        <p className="text-muted-foreground text-sm">
-          Admins always have access. Grant specific members to unlock this project for them.
-        </p>
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <div className="flex flex-col gap-1">
+          <span className={labelClass}>Access</span>
+          <p className="text-muted-foreground text-sm">
+            Admins always have access. Grant specific members to unlock this project for them.
+          </p>
+        </div>
+        <span
+          className={cn(
+            "shrink-0 font-mono text-xs tabular-nums",
+            full ? "text-warning" : "text-muted-foreground",
+          )}
+        >
+          {used} of {maxCollaborators} collaborators
+        </span>
       </div>
+      {full ? (
+        <p className="text-warning text-xs">
+          You’ve reached your plan’s collaborator limit for this project. Upgrade to add more.
+        </p>
+      ) : null}
       <ul className="flex flex-col divide-y divide-hairline">
         {members.map((person) => {
           const userId = person.memberUserId;
@@ -124,7 +151,7 @@ export function ProjectAccessManager({
                   size="sm"
                   className="w-28"
                   onClick={() => userId && toggle(userId, false)}
-                  disabled={busy || !userId}
+                  disabled={busy || !userId || full}
                   aria-label="Grant access"
                 >
                   {busy ? (

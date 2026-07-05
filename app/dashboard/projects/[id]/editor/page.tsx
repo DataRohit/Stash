@@ -2,8 +2,8 @@ import { auth } from "@clerk/nextjs/server";
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { ProjectEditor } from "@/app/dashboard/projects/[id]/editor/project-editor";
-import { fetchProject, setProjectMaxSize } from "@/lib/convex-server";
-import { getUserPlanLimits } from "@/lib/plan-limits";
+import { fetchProject, setOrgPlanLimits, setProjectMaxSize } from "@/lib/convex-server";
+import { getUserPlanLimitsForSync } from "@/lib/plan-limits";
 
 export const metadata: Metadata = {
   title: "Editor",
@@ -25,9 +25,16 @@ export default async function ProjectEditorPage({ params }: { params: Promise<{ 
     notFound();
   }
 
-  if (project.isAdmin) {
-    const limits = await getUserPlanLimits();
-    await setProjectMaxSize(id, limits.maxProjectSizeMb * 1024 * 1024);
+  if (project.viewerIsOwner) {
+    const limits = await getUserPlanLimitsForSync();
+    if (limits) {
+      await setOrgPlanLimits(orgId, {
+        maxProjects: limits.maxProjectsPerOrganization,
+        maxCollaborators: limits.maxCollaboratorsPerProject,
+        maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+      });
+      await setProjectMaxSize(id, limits.maxProjectSizeMb * 1024 * 1024);
+    }
   }
 
   return (
@@ -35,6 +42,7 @@ export default async function ProjectEditorPage({ params }: { params: Promise<{ 
       <ProjectEditor
         projectId={id}
         projectTitle={project.title}
+        clerkOrgId={orgId}
         canEdit
         isAdmin={project.isAdmin}
       />

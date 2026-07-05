@@ -2,6 +2,7 @@
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import {
+  claimReconcile,
   mirrorDeleteInvitation,
   mirrorDeleteMember,
   mirrorUpsertPending,
@@ -18,6 +19,7 @@ export type MemberActionResult = { ok: true } | { error: string };
 const ALLOWED_ROLES: MemberRole[] = ["org:admin", "org:member"];
 const PAGE_SIZE = 100;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const RECONCILE_STALE_MS = 30_000;
 
 type ClerkMember = {
   role: string;
@@ -79,6 +81,15 @@ async function fetchAllPending(
   return all;
 }
 
+async function revokeUserSessions(client: ClerkClient, userId: string): Promise<void> {
+  try {
+    const sessions = await client.sessions.getSessionList({ userId, status: "active" });
+    await Promise.all(
+      sessions.data.map((session) => client.sessions.revokeSession(session.id).catch(() => null)),
+    );
+  } catch {}
+}
+
 function toReconcileMembers(members: ClerkMember[]) {
   return members
     .filter((member) => member.publicUserData?.userId)
@@ -92,10 +103,27 @@ function toReconcileMembers(members: ClerkMember[]) {
     }));
 }
 
+function memberUserIdsForEmail(
+  matchingUsers: Awaited<ReturnType<ClerkClient["users"]["getUserList"]>>,
+) {
+  return new Set(matchingUsers.data.map((user) => user.id));
+}
+
+function hasEmailMatchedMember(members: ClerkMember[], userIds: Set<string>): boolean {
+  return members.some((member) => {
+    const memberUserId = member.publicUserData?.userId;
+    return !!memberUserId && userIds.has(memberUserId);
+  });
+}
+
 export async function reconcileMembers(): Promise<MemberActionResult> {
   const { userId, orgId } = await auth();
   if (!userId || !orgId) {
     return { error: "unauthenticated" };
+  }
+
+  if (!(await claimReconcile(orgId, RECONCILE_STALE_MS))) {
+    return { ok: true };
   }
 
   try {
@@ -152,14 +180,15 @@ export async function inviteMember(input: {
     if (members.length + pending.length >= limits.maxMembersPerOrganization) {
       return { error: "limit-reached" };
     }
-    if (members.some((member) => member.publicUserData?.identifier?.toLowerCase() === email)) {
-      return { error: "already-member" };
-    }
+    const matchingUserIds = memberUserIdsForEmail(matchingUsers);
     if (pending.some((invite) => invite.emailAddress.toLowerCase() === email)) {
       return { error: "already-invited" };
     }
     if (matchingUsers.totalCount === 0) {
       return { error: "no-account" };
+    }
+    if (hasEmailMatchedMember(members, matchingUserIds)) {
+      return { error: "already-member" };
     }
 
     const invitation = await client.organizations.createOrganizationInvitation({
@@ -168,6 +197,32 @@ export async function inviteMember(input: {
       emailAddress: email,
       role,
     });
+    const [latestMembers, latestPending] = await Promise.all([
+      fetchAllMembers(client, orgId),
+      fetchAllPending(client, orgId),
+    ]);
+    const isOverLimit =
+      latestMembers.length + latestPending.length > limits.maxMembersPerOrganization;
+    const isNowMember = hasEmailMatchedMember(latestMembers, matchingUserIds);
+    const duplicatePending =
+      latestPending.filter((invite) => invite.emailAddress.toLowerCase() === email).length > 1;
+    if (isOverLimit || isNowMember || duplicatePending) {
+      await client.organizations
+        .revokeOrganizationInvitation({
+          organizationId: orgId,
+          invitationId: invitation.id,
+          requestingUserId: userId,
+        })
+        .catch(() => null);
+      await mirrorDeleteInvitation(orgId, invitation.id).catch(() => null);
+      if (isNowMember) {
+        return { error: "already-member" };
+      }
+      if (duplicatePending) {
+        return { error: "already-invited" };
+      }
+      return { error: "limit-reached" };
+    }
     await mirrorUpsertPending(orgId, email, role, invitation.id);
     return { ok: true };
   } catch {
@@ -258,6 +313,7 @@ export async function removeMember(input: { memberUserId: string }): Promise<Mem
     });
     await mirrorDeleteMember(orgId, input.memberUserId);
     await revokeAllProjectAccessForUser(orgId, input.memberUserId);
+    await revokeUserSessions(client, input.memberUserId);
     return { ok: true };
   } catch {
     return { error: "failed" };
