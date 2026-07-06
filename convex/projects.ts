@@ -71,6 +71,41 @@ function accessRowsFor(ctx: QueryCtx, projectId: Doc<"projects">["_id"]) {
     .collect();
 }
 
+async function lastSavedAtFor(
+  ctx: QueryCtx,
+  projectId: Doc<"projects">["_id"],
+): Promise<number | null> {
+  const docs = await ctx.db
+    .query("documents")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  let latest: number | null = null;
+  for (const doc of docs) {
+    if (doc.kind !== "folder" && doc.deletingAt === undefined) {
+      latest = latest === null ? doc.updatedAt : Math.max(latest, doc.updatedAt);
+    }
+  }
+  return latest;
+}
+
+async function privilegedMemberIds(ctx: QueryCtx, clerkOrgId: string): Promise<string[]> {
+  const members = await ctx.db
+    .query("members")
+    .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", clerkOrgId))
+    .collect();
+  const ids: string[] = [];
+  for (const member of members) {
+    if (
+      member.status === "accepted" &&
+      member.memberUserId !== null &&
+      (member.isOwner || member.role === "org:admin")
+    ) {
+      ids.push(member.memberUserId);
+    }
+  }
+  return ids;
+}
+
 function acceptedMemberFor(ctx: QueryCtx, clerkOrgId: string, userId: string) {
   return ctx.db
     .query("members")
@@ -187,6 +222,8 @@ export const listByOrg = query({
 
     projects.sort((a, b) => b.createdAt - a.createdAt);
 
+    const privilegedIds = caller.isAdmin ? await privilegedMemberIds(ctx, args.clerkOrgId) : [];
+
     return Promise.all(
       projects.map(async (project) => {
         const owner = await ctx.db
@@ -210,7 +247,12 @@ export const listByOrg = query({
           ownerName,
           ownerEmail: owner?.email ?? null,
           ownerImageUrl: owner?.imageUrl ?? null,
-          accessCount: caller.isAdmin ? (await accessRowsFor(ctx, project._id)).length : 0,
+          accessCount: caller.isAdmin
+            ? new Set([
+                ...privilegedIds,
+                ...(await accessRowsFor(ctx, project._id)).map((row) => row.userId),
+              ]).size
+            : 0,
         };
       }),
     );
@@ -249,6 +291,7 @@ export const get = query({
       tags: project.tags,
       imageUrl: project.imageStorageId ? await ctx.storage.getUrl(project.imageStorageId) : null,
       createdAt: project.createdAt,
+      lastSavedAt: await lastSavedAtFor(ctx, project._id),
       isAdmin: caller.isAdmin,
       viewerIsOwner: viewerMember?.isOwner === true,
       accessUserIds: access.map((row) => row.userId),

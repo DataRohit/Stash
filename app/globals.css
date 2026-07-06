@@ -19,6 +19,9 @@
   --info: oklch(0.62 0.18 245);
   --surface: oklch(1 0.002 95);
   --surface-2: oklch(0.955 0.004 95);
+  --editor-workspace: color-mix(in oklab, var(--surface) 96%, var(--background) 4%);
+  --editor-panel: color-mix(in oklab, var(--surface) 98%, var(--background) 2%);
+  --editor-control: color-mix(in oklab, var(--surface-2) 94%, var(--foreground) 6%);
   --card: oklch(0.995 0.002 95);
   --card-foreground: var(--foreground);
   --popover: var(--surface);
@@ -128,6 +131,44 @@ samp {
   background: color-mix(in oklab, var(--accent) 22%, transparent);
 }
 
+.thin-scrollbar {
+  scrollbar-color: color-mix(in oklab, var(--foreground) 26%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.thin-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  border: none;
+}
+
+.thin-scrollbar::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  min-height: 2.5rem;
+  background: color-mix(in oklab, var(--foreground) 26%, transparent);
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 999px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--foreground) 44%, transparent);
+  background-clip: content-box;
+}
+
+.thin-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 @layer components {
   .glass {
     background: color-mix(in oklab, var(--surface) 60%, transparent);
@@ -143,6 +184,16 @@ samp {
     box-shadow: var(--shadow-larry);
     -webkit-backdrop-filter: saturate(190%) blur(28px);
     backdrop-filter: saturate(190%) blur(28px);
+  }
+
+  .editor-surface {
+    background: var(--editor-workspace);
+    border: 1px solid var(--hairline);
+    box-shadow: var(--shadow-glass);
+  }
+
+  .editor-panel {
+    background: var(--editor-panel);
   }
 
   .hairline {

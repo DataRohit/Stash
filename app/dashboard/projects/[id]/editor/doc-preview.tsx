@@ -14,6 +14,11 @@ type DocPreviewProps = {
 const BASE_CSS = `
 html,body{margin:0}
 body{background:#0b0d12;color:#e6e8ee;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+body{scrollbar-color:#6b7280 #0f1219;scrollbar-width:thin}
+::-webkit-scrollbar{width:12px;height:12px}
+::-webkit-scrollbar-track{background:#0f1219}
+::-webkit-scrollbar-thumb{min-height:3rem;background:#6b7280;border:3px solid #0f1219;border-radius:999px;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#9ca3af}
 .doc{max-width:880px;margin:0 auto;padding:2rem;line-height:1.7}
 .doc h1,.doc h2,.doc h3,.doc h4{font-weight:600;line-height:1.25;margin:1.4em 0 .5em}
 .doc h1{font-size:1.9rem}.doc h2{font-size:1.5rem}.doc h3{font-size:1.2rem}
@@ -29,11 +34,19 @@ body{background:#0b0d12;color:#e6e8ee;font-family:ui-sans-serif,system-ui,-apple
 .doc hr{border:none;border-top:1px solid #2a2f3a;margin:1.5em 0}
 .doc a.missing-ref{color:#f87171;text-decoration-style:wavy}
 .mermaid{background:#12151c;border:1px solid #2a2f3a;border-radius:8px;color:#cbd5e1;margin:1em 0;overflow:auto;padding:1rem;white-space:pre}
+.mermaid-diagram{display:flex;justify-content:center;background:#12151c;border:1px solid #2a2f3a;border-radius:8px;margin:1em 0;overflow:auto;padding:1rem}
+.mermaid-diagram svg{max-width:100%;height:auto}
+.mermaid-diagram pre.mermaid{background:none;border:none;margin:0;padding:0}
 `;
 
 const HTML_BASE_CSS = `
 html,body{margin:0}
 body{background:#ffffff;color:#0f172a;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
+body{scrollbar-color:#94a3b8 #f8fafc;scrollbar-width:thin}
+::-webkit-scrollbar{width:12px;height:12px}
+::-webkit-scrollbar-track{background:#f8fafc}
+::-webkit-scrollbar-thumb{min-height:3rem;background:#94a3b8;border:3px solid #f8fafc;border-radius:999px;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#64748b}
 img{max-width:100%}
 a.missing-ref{color:#dc2626;text-decoration-style:wavy}
 `;
@@ -94,20 +107,59 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-const markedInstance = new Marked({ gfm: true });
-markedInstance.use({
-  renderer: {
-    code({ text, lang }) {
-      if ((lang ?? "").trim().toLowerCase() === "mermaid") {
-        return `<pre class="mermaid">${escapeHtml(text)}</pre>`;
-      }
-      return `<pre class="code"><code>${escapeHtml(text)}</code></pre>`;
+type MermaidBlock = { id: string; code: string };
+
+let mermaidSeq = 0;
+
+function nextMermaidId(): string {
+  mermaidSeq += 1;
+  return `mmd-${mermaidSeq}`;
+}
+
+function createMarked(onMermaid: (source: string) => string): Marked {
+  const instance = new Marked({ gfm: true });
+  instance.use({
+    renderer: {
+      code({ text, lang }) {
+        if ((lang ?? "").trim().toLowerCase() === "mermaid") {
+          return onMermaid(text);
+        }
+        return `<pre class="code"><code>${escapeHtml(text)}</code></pre>`;
+      },
+      html({ text }) {
+        return `<pre class="code"><code>${escapeHtml(text)}</code></pre>`;
+      },
     },
-    html({ text }) {
-      return `<pre class="code"><code>${escapeHtml(text)}</code></pre>`;
-    },
-  },
-});
+  });
+  return instance;
+}
+
+let mermaidReady = false;
+
+async function renderMermaid(blocks: MermaidBlock[]): Promise<Map<string, string>> {
+  const mod = await import("mermaid");
+  const mermaid = mod.default;
+  if (!mermaidReady) {
+    mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
+    mermaidReady = true;
+  }
+  const results = new Map<string, string>();
+  for (const block of blocks) {
+    try {
+      const { svg } = await mermaid.render(`${block.id}-svg`, block.code);
+      results.set(block.id, svg);
+    } catch {}
+  }
+  return results;
+}
+
+function assembleSrcDoc(inner: string, isMd: boolean): string {
+  const css = isMd ? BASE_CSS : HTML_BASE_CSS;
+  const body = isMd ? `<div class="doc">${inner}</div>` : inner;
+  const nonce = previewNonce();
+  const script = previewScript();
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${iframeCsp(nonce)}"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style></head><body>${body}<script nonce="${nonce}">${script}</script></body></html>`;
+}
 
 function rewriteRefs(rawHtml: string, fromNode: TreeNode, nodes: TreeNode[]): string {
   const doc = new DOMParser().parseFromString(rawHtml, "text/html");
@@ -143,22 +195,51 @@ function rewriteRefs(rawHtml: string, fromNode: TreeNode, nodes: TreeNode[]): st
 
 export function DocPreview({ fileNode, content, nodes, iframeRef }: DocPreviewProps) {
   const [debounced, setDebounced] = useState(content);
+  const [rendered, setRendered] = useState<{ key: string; doc: string } | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(content), 400);
     return () => clearTimeout(timer);
   }, [content]);
 
-  const srcDoc = useMemo(() => {
+  const base = useMemo(() => {
     const isMd = fileNode.fileType === "md";
-    const rendered = isMd ? (markedInstance.parse(debounced) as string) : debounced;
-    const body = rewriteRefs(rendered, fileNode, nodes);
-    const css = isMd ? BASE_CSS : HTML_BASE_CSS;
-    const inner = isMd ? `<div class="doc">${body}</div>` : body;
-    const script = previewScript();
-    const nonce = previewNonce();
-    return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${iframeCsp(nonce)}"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style></head><body>${inner}<script nonce="${nonce}">${script}</script></body></html>`;
+    const blocks: MermaidBlock[] = [];
+    const parsed = isMd
+      ? (createMarked((source) => {
+          const id = nextMermaidId();
+          blocks.push({ id, code: source });
+          return `<div class="mermaid-diagram" data-mmd="${id}"><pre class="mermaid">${escapeHtml(source)}</pre></div>`;
+        }).parse(debounced) as string)
+      : debounced;
+    const inner = rewriteRefs(parsed, fileNode, nodes);
+    return { inner, isMd, blocks, doc: assembleSrcDoc(inner, isMd) };
   }, [debounced, fileNode, nodes]);
+
+  useEffect(() => {
+    if (base.blocks.length === 0) {
+      return;
+    }
+    let cancelled = false;
+    void renderMermaid(base.blocks).then((svgs) => {
+      if (cancelled || svgs.size === 0) {
+        return;
+      }
+      const dom = new DOMParser().parseFromString(base.inner, "text/html");
+      for (const [id, svg] of svgs) {
+        const slot = dom.querySelector(`[data-mmd="${id}"]`);
+        if (slot) {
+          slot.innerHTML = svg;
+        }
+      }
+      setRendered({ key: base.inner, doc: assembleSrcDoc(dom.body.innerHTML, base.isMd) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [base]);
+
+  const srcDoc = rendered?.key === base.inner ? rendered.doc : base.doc;
 
   return (
     <iframe

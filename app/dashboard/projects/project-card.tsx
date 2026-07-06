@@ -96,7 +96,10 @@ export function ProjectCard({
           </span>
         </div>
         {isAdmin ? (
-          <div className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-xs">
+          <div
+            className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-xs"
+            title={`${accessCount} ${accessCount === 1 ? "member has" : "members have"} access`}
+          >
             <Users className="size-3.5" aria-hidden="true" />
             {accessCount}
           </div>

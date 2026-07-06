@@ -91,8 +91,19 @@ const schema = defineSchema({
     documentId: v.id("documents"),
     snapshot: v.bytes(),
     throughSeq: v.number(),
+    purpose: v.optional(v.union(v.literal("base"), v.literal("history"))),
+    label: v.optional(v.string()),
+    authorUserId: v.optional(v.string()),
+    authorName: v.optional(v.string()),
+    authorEmail: v.optional(v.string()),
+    createdAt: v.optional(v.number()),
+    expiresAt: v.optional(v.number()),
+    sizeBytes: v.optional(v.number()),
     updatedAt: v.number(),
-  }).index("by_document", ["documentId"]),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_document_purpose", ["documentId", "purpose"])
+    .index("by_purpose_created", ["purpose", "createdAt"]),
 
   presence: defineTable({
     documentId: v.id("documents"),

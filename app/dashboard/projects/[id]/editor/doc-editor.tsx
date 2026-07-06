@@ -7,11 +7,8 @@ import {
   completionKeymap,
 } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { html } from "@codemirror/lang-html";
-import { markdown } from "@codemirror/lang-markdown";
 import {
   bracketMatching,
-  defaultHighlightStyle,
   foldGutter,
   foldKeymap,
   indentOnInput,
@@ -45,12 +42,18 @@ import {
   lineNumbers,
   type Panel,
   rectangularSelection,
+  ViewPlugin,
 } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
 import { UndoManager } from "yjs";
+import {
+  editorHighlightStyle,
+  editorTheme,
+  languageExtension,
+} from "@/app/dashboard/projects/[id]/editor/lib/editor-theme";
 
 type DocEditorProps = {
   initialContent: string;
@@ -62,117 +65,6 @@ type DocEditorProps = {
   ytext?: Y.Text;
   awareness?: Awareness;
 };
-
-const editorTheme = EditorView.theme(
-  {
-    "&": { height: "100%", backgroundColor: "transparent", fontSize: "13px" },
-    ".cm-scroller": {
-      fontFamily: "var(--font-mono), monospace",
-      lineHeight: "1.6",
-      padding: "0.5rem 0",
-      scrollbarColor:
-        "color-mix(in oklab, var(--foreground) 38%, transparent) color-mix(in oklab, var(--surface) 62%, transparent)",
-      scrollbarWidth: "thin",
-    },
-    ".cm-scroller::-webkit-scrollbar": {
-      width: "12px",
-      height: "12px",
-    },
-    ".cm-scroller::-webkit-scrollbar-track": {
-      backgroundColor: "color-mix(in oklab, var(--surface) 62%, transparent)",
-      borderLeft: "1px solid var(--hairline)",
-    },
-    ".cm-scroller::-webkit-scrollbar-thumb": {
-      minHeight: "3rem",
-      backgroundColor: "color-mix(in oklab, var(--foreground) 32%, transparent)",
-      border: "3px solid transparent",
-      borderRadius: "999px",
-      backgroundClip: "content-box",
-    },
-    ".cm-scroller::-webkit-scrollbar-thumb:hover": {
-      backgroundColor: "color-mix(in oklab, var(--accent) 72%, var(--foreground) 18%)",
-    },
-    ".cm-scroller::-webkit-scrollbar-corner": {
-      backgroundColor: "transparent",
-    },
-    ".cm-content": { caretColor: "var(--foreground)" },
-    ".cm-gutters": {
-      backgroundColor: "transparent",
-      color: "color-mix(in oklab, var(--muted-foreground) 70%, transparent)",
-      border: "none",
-    },
-    ".cm-activeLine": {
-      backgroundColor: "color-mix(in oklab, var(--foreground) 4%, transparent)",
-    },
-    ".cm-activeLineGutter": { backgroundColor: "transparent" },
-    ".cm-cursor": { borderLeftColor: "var(--foreground)" },
-    "&.cm-focused": { outline: "none" },
-    ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-      backgroundColor: "color-mix(in oklab, var(--accent) 24%, transparent)",
-    },
-    ".cm-panels": {
-      backgroundColor: "color-mix(in oklab, var(--surface) 96%, transparent)",
-      color: "var(--foreground)",
-      fontFamily: "var(--font-mono), monospace",
-    },
-    ".cm-panels.cm-panels-top": {
-      borderBottom: "1px solid var(--hairline)",
-    },
-    ".cm-panels.cm-panels-bottom": {
-      borderTop: "1px solid var(--hairline)",
-    },
-    ".cm-searchMatch": {
-      backgroundColor: "color-mix(in oklab, var(--warning) 30%, transparent)",
-      borderRadius: "2px",
-    },
-    ".cm-searchMatch.cm-searchMatch-selected": {
-      backgroundColor: "color-mix(in oklab, var(--accent) 42%, transparent)",
-    },
-    ".cm-selectionMatch": {
-      backgroundColor: "color-mix(in oklab, var(--accent) 16%, transparent)",
-    },
-    ".cm-tooltip": {
-      backgroundColor: "var(--surface)",
-      color: "var(--foreground)",
-      border: "1px solid var(--hairline)",
-      borderRadius: "8px",
-      overflow: "hidden",
-      boxShadow: "0 12px 32px color-mix(in oklab, #000 34%, transparent)",
-    },
-    ".cm-tooltip.cm-tooltip-autocomplete > ul": {
-      fontFamily: "var(--font-mono), monospace",
-      fontSize: "12px",
-      maxHeight: "15rem",
-    },
-    ".cm-tooltip.cm-tooltip-autocomplete > ul > li": {
-      padding: "3px 8px",
-    },
-    ".cm-tooltip-autocomplete ul li[aria-selected]": {
-      backgroundColor: "color-mix(in oklab, var(--accent) 88%, transparent)",
-      color: "var(--accent-foreground)",
-    },
-    ".cm-completionIcon": {
-      color: "var(--muted-foreground)",
-      opacity: "0.8",
-    },
-    ".cm-tooltip.cm-completionInfo": {
-      backgroundColor: "var(--surface)",
-      border: "1px solid var(--hairline)",
-    },
-    ".cm-foldPlaceholder": {
-      backgroundColor: "color-mix(in oklab, var(--foreground) 10%, transparent)",
-      color: "var(--muted-foreground)",
-      border: "1px solid var(--hairline)",
-      borderRadius: "4px",
-      padding: "0 6px",
-    },
-    ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": {
-      backgroundColor: "color-mix(in oklab, var(--accent) 26%, transparent)",
-      outline: "1px solid color-mix(in oklab, var(--accent) 45%, transparent)",
-    },
-  },
-  { dark: true },
-);
 
 const remoteCursorTheme = EditorView.theme({
   ".cm-ySelectionInfo": {
@@ -198,20 +90,66 @@ const remoteCursorTheme = EditorView.theme({
   ".cm-ySelectionCaretDot": {
     display: "none",
   },
+  ".cm-ySelectionInfo.cm-ySelectionInfo-below": {
+    top: "calc(100% + 2px)",
+  },
+  ".cm-ySelectionInfo.cm-ySelectionInfo-flip-x": {
+    left: "auto",
+    right: "-1px",
+  },
 });
 
+const CARET_INFO_MARGIN = 4;
+
+function placeRemoteCaretInfo(view: EditorView, caret: HTMLElement): void {
+  const info = caret.querySelector<HTMLElement>(".cm-ySelectionInfo");
+  if (!info) {
+    return;
+  }
+  info.classList.remove("cm-ySelectionInfo-below", "cm-ySelectionInfo-flip-x");
+  const scroller = view.scrollDOM.getBoundingClientRect();
+  const caretRect = caret.getBoundingClientRect();
+  const infoRect = info.getBoundingClientRect();
+  if (caretRect.top - scroller.top < infoRect.height + CARET_INFO_MARGIN) {
+    info.classList.add("cm-ySelectionInfo-below");
+  }
+  if (caretRect.left + infoRect.width + CARET_INFO_MARGIN > scroller.right) {
+    info.classList.add("cm-ySelectionInfo-flip-x");
+  }
+}
+
+const remoteCursorInfoPlacement = ViewPlugin.fromClass(
+  class {
+    constructor(private readonly view: EditorView) {
+      view.scrollDOM.addEventListener("pointerover", this.onPointerOver);
+    }
+
+    onPointerOver = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      const caret = target?.closest<HTMLElement>(".cm-ySelectionCaret");
+      if (caret) {
+        placeRemoteCaretInfo(this.view, caret);
+      }
+    };
+
+    destroy() {
+      this.view.scrollDOM.removeEventListener("pointerover", this.onPointerOver);
+    }
+  },
+);
+
 const SEARCH_INPUT =
-  "h-7 w-48 max-w-[45vw] rounded-md border border-hairline bg-surface/60 px-2.5 font-mono text-foreground text-xs outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-accent/50 focus:ring-1 focus:ring-ring";
+  "h-7 w-48 max-w-[45vw] rounded-md border border-hairline bg-[var(--editor-control)] px-2.5 font-mono text-foreground text-xs outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-accent/50 focus:ring-1 focus:ring-ring";
 const SEARCH_ACTION_GROUP = "grid w-[246px] grid-cols-6 gap-1.5";
 const SEARCH_REPLACE_GROUP = "grid w-[246px] grid-cols-2 gap-1.5";
 const SEARCH_ACTION_BTN =
-  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-foreground/[0.04] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
 const SEARCH_REPLACE_BTN =
-  "flex h-7 w-full shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-foreground/[0.04] px-2 font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "flex h-7 w-full shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] px-2 font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
 const SEARCH_TOGGLE_ON =
   "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-accent/40 bg-accent/15 font-medium font-mono text-[10px] text-foreground";
 const SEARCH_TOGGLE_OFF =
-  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
 const SEARCH_CLOSE =
   "ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive";
 
@@ -409,7 +347,7 @@ function editorExtensions(language: "md" | "html", collab: boolean) {
     dropCursor(),
     EditorState.allowMultipleSelections.of(true),
     indentOnInput(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    syntaxHighlighting(editorHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
     autocompletion(),
@@ -418,7 +356,7 @@ function editorExtensions(language: "md" | "html", collab: boolean) {
     search({ top: true, createPanel: createStashSearchPanel }),
     highlightActiveLine(),
     highlightSelectionMatches(),
-    language === "html" ? html() : markdown(),
+    languageExtension(language),
     editorTheme,
     EditorView.lineWrapping,
     keymap.of(editorKeymap),
@@ -491,6 +429,7 @@ export function DocEditor({
       collabExtensions.push(
         yCollab(ytext, awareness, { undoManager }),
         remoteCursorTheme,
+        remoteCursorInfoPlacement,
         Prec.high(keymap.of(yUndoManagerKeymap)),
         wordBoundaryUndo(undoManager),
       );

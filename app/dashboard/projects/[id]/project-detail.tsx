@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Calendar,
   Check,
+  Clock,
   HardDrive,
   ImagePlus,
   Loader2,
@@ -43,6 +44,10 @@ type ProjectDetailProps = {
 };
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
+const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
 
 const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
 
@@ -316,15 +321,32 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
 
         {mode === "view" ? (
           <div className="mt-8 flex flex-col gap-8">
-            <div className="grid gap-6 sm:grid-cols-3">
-              <div className="flex flex-col gap-1.5">
-                <span className="flex items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
-                  <Calendar className="size-3.5" aria-hidden="true" />
-                  Created
-                </span>
-                <span className="text-sm">{dateFormatter.format(new Date(project.createdAt))}</span>
+            <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-wrap gap-x-12 gap-y-6">
+                <div className="flex flex-col gap-1.5">
+                  <span className="flex items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
+                    <Calendar className="size-3.5" aria-hidden="true" />
+                    Created
+                  </span>
+                  <span className="text-sm">
+                    {dateFormatter.format(new Date(project.createdAt))}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <span className="flex items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
+                    <Clock className="size-3.5" aria-hidden="true" />
+                    Updated
+                  </span>
+                  <span className="text-sm">
+                    {project.lastSavedAt === null ? (
+                      <span className="text-muted-foreground">No saves yet</span>
+                    ) : (
+                      dateTimeFormatter.format(new Date(project.lastSavedAt))
+                    )}
+                  </span>
+                </div>
               </div>
-              <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <div className="flex flex-col gap-1.5 sm:items-end">
                 <span className="flex items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
                   <HardDrive className="size-3.5" aria-hidden="true" />
                   Storage
@@ -335,9 +357,9 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                   const usedPercent =
                     maxBytes > 0 ? Math.min(100, Math.round((usedBytes / maxBytes) * 100)) : 100;
                   return (
-                    <div className="flex flex-col gap-1.5">
+                    <div className="flex w-full max-w-sm flex-col gap-1.5">
                       <div className="flex items-center gap-3">
-                        <div className="h-1.5 max-w-xs flex-1 overflow-hidden rounded-full bg-foreground/10">
+                        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-foreground/10">
                           <div
                             className={cn(
                               "h-full rounded-full",
@@ -350,7 +372,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                           {formatMb(usedBytes)}/{formatMb(maxBytes)} MB
                         </span>
                       </div>
-                      <span className="text-muted-foreground text-xs">
+                      <span className="text-muted-foreground text-xs sm:text-right">
                         {usedPercent}% of your plan’s project storage used.
                       </span>
                     </div>

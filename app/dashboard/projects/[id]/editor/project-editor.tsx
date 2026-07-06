@@ -2,7 +2,7 @@
 
 import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowLeft, Check, Code2, Columns2, Eye, Loader2, PanelLeft } from "lucide-react";
+import { ArrowLeft, Check, Code2, Columns2, Eye, History, Loader2, PanelLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -15,11 +15,13 @@ import {
 import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { FileTree } from "@/app/dashboard/projects/[id]/editor/file-tree";
+import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import {
   type CollabViewer,
   useCollabDoc,
 } from "@/app/dashboard/projects/[id]/editor/lib/use-collab-doc";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { VersionHistoryModal } from "@/app/dashboard/projects/[id]/editor/version-history";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -40,38 +42,6 @@ const MAX_FILE_BYTES = 512 * 1024;
 
 function sidebarStorageKey(projectId: string): string {
   return `stash:editor:sidebar:${projectId}`;
-}
-
-function mapDocError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  if (message.includes("project-full")) {
-    return "This project has reached its size limit. Upgrade or remove files.";
-  }
-  if (message.includes("file-too-large")) {
-    return "This file is too large (max 512 KB per file).";
-  }
-  if (message.includes("invalid-asset")) {
-    return "Only image and SVG files can be uploaded.";
-  }
-  if (message.includes("invalid-type")) {
-    return "Files must end in .md or .html.";
-  }
-  if (message.includes("invalid-parent")) {
-    return "That folder no longer exists. Refresh and try again.";
-  }
-  if (message.includes("invalid-name")) {
-    return "That name isn’t allowed.";
-  }
-  if (message.includes("too-many-nodes")) {
-    return "This project has too many files and folders.";
-  }
-  if (message.includes("too-deep")) {
-    return "Folders can’t be nested that deeply.";
-  }
-  if (message.includes("name-taken")) {
-    return "A file or folder with that name already exists here.";
-  }
-  return "Something went wrong. Please try again.";
 }
 
 function formatMb(bytes: number): string {
@@ -266,6 +236,10 @@ export function ProjectEditor({
   const [buffer, setBuffer] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [historyState, setHistoryState] = useState<{ documentId: string | null; open: boolean }>({
+    documentId: null,
+    open: false,
+  });
   const lastSeeded = useRef<string | null>(null);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
 
@@ -294,6 +268,9 @@ export function ProjectEditor({
       : null;
   const selectedNode = nodes.find((node) => node.id === effectiveSelectedId) ?? null;
   const selectedFileId = selectedNode?.kind === "file" ? (effectiveSelectedId as string) : null;
+  const historyOpen = Boolean(
+    selectedFileId && historyState.open && historyState.documentId === selectedFileId,
+  );
   const doc = useQuery(
     api.documents.getDocument,
     selectedFileId && !accessLost ? { documentId: selectedFileId as Id<"documents"> } : "skip",
@@ -482,29 +459,50 @@ export function ProjectEditor({
             </span>
           </div>
           {selectedFileId ? (
-            <div className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
-              {(
-                [
-                  ["editor", Code2, "Editor"],
-                  ["split", Columns2, "Split"],
-                  ["preview", Eye, "Preview"],
-                ] as const
-              ).map(([mode, Icon, label]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setViewMode(mode)}
-                  aria-label={label}
-                  className={cn(
-                    "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
-                    viewMode === mode
-                      ? "bg-foreground/[0.08] text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <Icon className="size-4" aria-hidden="true" />
-                </button>
-              ))}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() =>
+                  setHistoryState((value) => ({
+                    documentId: selectedFileId,
+                    open: value.documentId === selectedFileId ? !value.open : true,
+                  }))
+                }
+                aria-label="Version history"
+                aria-pressed={historyOpen}
+                className={cn(
+                  "flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                  historyOpen
+                    ? "bg-foreground/[0.08] text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                )}
+              >
+                <History className="size-4" aria-hidden="true" />
+              </button>
+              <div className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
+                {(
+                  [
+                    ["editor", Code2, "Editor"],
+                    ["split", Columns2, "Split"],
+                    ["preview", Eye, "Preview"],
+                  ] as const
+                ).map(([mode, Icon, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setViewMode(mode)}
+                    aria-label={label}
+                    className={cn(
+                      "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
+                      viewMode === mode
+                        ? "bg-foreground/[0.08] text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="size-4" aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
         </div>
@@ -579,11 +577,11 @@ export function ProjectEditor({
           <span className="h-8 w-1 rounded-full bg-hairline transition-colors group-hover:bg-foreground/30" />
         </button>
 
-        <div className="glass flex min-w-0 flex-1 overflow-hidden rounded-lg">
+        <div className="editor-surface flex min-w-0 flex-1 overflow-hidden rounded-lg">
           {selectedNode?.kind === "file" && doc && doc.id === selectedFileId ? (
             <div className="flex min-w-0 flex-1 flex-col">
               {collab?.blocked ? (
-                <div className="shrink-0 border-destructive/30 border-b bg-destructive/6 px-4 py-2 text-destructive text-xs">
+                <div className="shrink-0 border-destructive/30 border-b bg-destructive/8 px-4 py-2 text-destructive text-xs">
                   {collab.blocked} Editing is paused until this file can sync again.
                 </div>
               ) : null}
@@ -625,7 +623,7 @@ export function ProjectEditor({
               </div>
             </div>
           ) : selectedNode?.kind === "asset" && selectedNode.assetUrl ? (
-            <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto p-6">
+            <div className="editor-panel flex min-w-0 flex-1 items-center justify-center overflow-auto p-6">
               <img
                 src={selectedNode.assetUrl}
                 alt={selectedNode.name}
@@ -633,7 +631,7 @@ export function ProjectEditor({
               />
             </div>
           ) : (
-            <div className="flex flex-1 items-center justify-center p-6 text-center text-muted-foreground text-sm">
+            <div className="editor-panel flex flex-1 items-center justify-center p-6 text-center text-muted-foreground text-sm">
               {nodes.length === 0
                 ? canEdit
                   ? "Create a .md or .html file to start writing."
@@ -643,6 +641,24 @@ export function ProjectEditor({
           )}
         </div>
       </div>
+      {historyOpen && selectedFileId && selectedNode?.kind === "file" && doc ? (
+        <VersionHistoryModal
+          key={selectedFileId}
+          documentId={selectedFileId}
+          fileNode={selectedNode}
+          nodes={nodes}
+          currentContent={canEdit ? buffer : doc.content}
+          language={doc.fileType === "html" ? "html" : "md"}
+          canCheckpoint={canEdit && !collab?.syncing}
+          canManage={isAdmin}
+          onClose={() => setHistoryState({ documentId: selectedFileId, open: false })}
+          onRestored={(documentId) => {
+            setSelectedId(documentId);
+            setHistoryState({ documentId, open: false });
+            setViewMode("split");
+          }}
+        />
+      ) : null}
     </div>
   );
 }
