@@ -9,6 +9,7 @@
  */
 
 import type * as collab from "../collab.js";
+import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
 import type * as documents from "../documents.js";
 import type * as limits from "../limits.js";
@@ -16,6 +17,7 @@ import type * as members from "../members.js";
 import type * as organizations from "../organizations.js";
 import type * as presence from "../presence.js";
 import type * as projects from "../projects.js";
+import type * as sharing from "../sharing.js";
 
 import type {
   ApiFromModules,
@@ -25,6 +27,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   collab: typeof collab;
+  comments: typeof comments;
   crons: typeof crons;
   documents: typeof documents;
   limits: typeof limits;
@@ -32,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   organizations: typeof organizations;
   presence: typeof presence;
   projects: typeof projects;
+  sharing: typeof sharing;
 }>;
 
 /**

@@ -54,6 +54,7 @@ type Engine = { ydoc: Y.Doc; ytext: Y.Text; awareness: Awareness };
 type CursorColor = (typeof CURSOR_COLORS)[number];
 
 type CollabDoc = {
+  ydoc: Y.Doc;
   ytext: Y.Text;
   awareness: Awareness;
   ready: boolean;
@@ -61,6 +62,10 @@ type CollabDoc = {
   blocked: string | null;
   lastSyncedAt: Date | null;
   viewers: CollabViewer[];
+  sessionId: string | null;
+  userLabel: string;
+  color: string;
+  colorLight: string;
 };
 
 function colorForUser(seed: string): CursorColor {
@@ -314,7 +319,7 @@ export function useCollabDoc(
     if (isEmpty) {
       setReady(true);
     }
-    if (isEmpty && canEdit && !seeded.current) {
+    if (isEmpty && !seeded.current) {
       seeded.current = true;
       void ensureSeed({ documentId: documentId as Id<"documents"> });
     }
@@ -423,6 +428,7 @@ export function useCollabDoc(
     return null;
   }
   return {
+    ydoc: engine.ydoc,
     ytext: engine.ytext,
     awareness: engine.awareness,
     ready,
@@ -430,5 +436,9 @@ export function useCollabDoc(
     blocked,
     lastSyncedAt,
     viewers,
+    sessionId,
+    userLabel,
+    color: userColor.color,
+    colorLight: userColor.light,
   };
 }

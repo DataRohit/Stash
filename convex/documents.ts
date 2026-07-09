@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import * as Y from "yjs";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -385,7 +386,57 @@ export async function purgeDocCollabBatch(
   for (const row of rows) {
     await ctx.db.delete(row._id);
   }
-  return rows.length > 0;
+  if (rows.length > 0) {
+    return true;
+  }
+  const shareEvents = await ctx.db
+    .query("documentShareEvents")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of shareEvents) {
+    await ctx.db.delete(row._id);
+  }
+  if (shareEvents.length > 0) {
+    return true;
+  }
+  const shares = await ctx.db
+    .query("documentShares")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of shares) {
+    await ctx.db.delete(row._id);
+  }
+  if (shares.length > 0) {
+    return true;
+  }
+  const messages = await ctx.db
+    .query("commentMessages")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of messages) {
+    await ctx.db.delete(row._id);
+  }
+  if (messages.length > 0) {
+    return true;
+  }
+  const notifications = await ctx.db
+    .query("notifications")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of notifications) {
+    await ctx.db.delete(row._id);
+  }
+  if (notifications.length > 0) {
+    return true;
+  }
+  const comments = await ctx.db
+    .query("comments")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of comments) {
+    await ctx.db.delete(row._id);
+  }
+  return comments.length > 0;
 }
 
 export async function purgeDocCollab(ctx: MutationCtx, documentId: Id<"documents">): Promise<void> {
@@ -629,6 +680,41 @@ export const createFile = mutation({
   },
 });
 
+export const createDocument = mutation({
+  args: {
+    projectId: v.id("projects"),
+    parentId: v.union(v.id("documents"), v.null()),
+    name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const access = await requireProjectAccess(ctx, args.projectId);
+    await assertParent(ctx, args.projectId, args.parentId);
+    await assertCapacity(ctx, args.projectId);
+    if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) {
+      throw new Error("too-deep");
+    }
+    const name = cleanName(args.name);
+    if (await nameTaken(ctx, args.projectId, args.parentId, name)) {
+      throw new Error("name-taken");
+    }
+    const now = Date.now();
+    return await ctx.db.insert("documents", {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      parentId: args.parentId,
+      kind: "file",
+      name,
+      fileType: "doc",
+      content: "",
+      storageId: null,
+      mimeType: null,
+      size: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
 export const rename = mutation({
   args: { documentId: v.id("documents"), name: v.string() },
   handler: async (ctx, args) => {
@@ -640,9 +726,13 @@ export const rename = mutation({
     const name = cleanName(args.name);
     let fileType = doc.fileType;
     if (doc.kind === "file") {
-      fileType = fileTypeFromName(name);
-      if (!fileType) {
-        throw new Error("invalid-type");
+      if (doc.fileType === "doc") {
+        fileType = "doc";
+      } else {
+        fileType = fileTypeFromName(name);
+        if (!fileType) {
+          throw new Error("invalid-type");
+        }
       }
     }
     if (await nameTaken(ctx, doc.projectId, doc.parentId, name, doc._id)) {
@@ -784,6 +874,265 @@ export const createAsset = mutation({
     });
     await addProjectBytes(ctx, access.project, meta.size);
     return id;
+  },
+});
+
+const SEARCH_LIMIT = 40;
+const SNIPPET_RADIUS = 90;
+const MAX_SEARCH_TERM = 200;
+
+function locateMatch(haystack: string, term: string): { index: number; length: number } | null {
+  const lower = haystack.toLowerCase();
+  let best: { index: number; length: number } | null = null;
+  for (const token of term.toLowerCase().split(/\s+/)) {
+    if (token.length === 0) {
+      continue;
+    }
+    const at = lower.indexOf(token);
+    if (at >= 0 && (best === null || at < best.index)) {
+      best = { index: at, length: token.length };
+    }
+  }
+  return best;
+}
+
+function buildSnippet(
+  content: string,
+  term: string,
+): { before: string; match: string; after: string } {
+  const collapsed = content.replace(/\s+/g, " ").trim();
+  const loc = locateMatch(collapsed, term);
+  if (!loc) {
+    const head = collapsed.slice(0, SNIPPET_RADIUS * 2);
+    return { before: head, match: "", after: head.length < collapsed.length ? "…" : "" };
+  }
+  const start = Math.max(0, loc.index - SNIPPET_RADIUS);
+  const end = Math.min(collapsed.length, loc.index + loc.length + SNIPPET_RADIUS);
+  return {
+    before: (start > 0 ? "…" : "") + collapsed.slice(start, loc.index),
+    match: collapsed.slice(loc.index, loc.index + loc.length),
+    after: collapsed.slice(loc.index + loc.length, end) + (end < collapsed.length ? "…" : ""),
+  };
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function safeUrl(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (/^(?:https?:|mailto:|tel:|\/|#)/i.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function markedText(text: string, attrs: Record<string, unknown>): string {
+  let out = escapeHtml(text);
+  if (attrs.code) {
+    out = `<code>${out}</code>`;
+  }
+  if (attrs.bold || attrs.strong) {
+    out = `<strong>${out}</strong>`;
+  }
+  if (attrs.italic || attrs.em) {
+    out = `<em>${out}</em>`;
+  }
+  if (attrs.strike) {
+    out = `<s>${out}</s>`;
+  }
+  const link = safeUrl(asRecord(attrs.link).href ?? attrs.href);
+  if (link) {
+    out = `<a href="${escapeHtml(link)}">${out}</a>`;
+  }
+  return out;
+}
+
+function textHtml(node: Y.XmlText): string {
+  let out = "";
+  for (const op of node.toDelta() as Array<{ insert?: unknown; attributes?: unknown }>) {
+    if (typeof op.insert === "string") {
+      out += markedText(op.insert, asRecord(op.attributes));
+    }
+  }
+  return out;
+}
+
+function plainText(node: Y.XmlFragment | Y.XmlElement | Y.XmlText): string {
+  if (node instanceof Y.XmlText) {
+    return (node.toDelta() as Array<{ insert?: unknown }>)
+      .map((op) => (typeof op.insert === "string" ? op.insert : ""))
+      .join("");
+  }
+  return node
+    .toArray()
+    .map((child) => plainText(child as Y.XmlFragment | Y.XmlElement | Y.XmlText))
+    .join("");
+}
+
+function elementLevel(element: Y.XmlElement): number {
+  const raw = element.getAttribute("level");
+  const value = typeof raw === "number" ? raw : Number(raw);
+  return Number.isFinite(value) ? Math.min(6, Math.max(1, value)) : 1;
+}
+
+function childrenHtml(element: Y.XmlElement | Y.XmlFragment): string {
+  return element
+    .toArray()
+    .map((child) => richNodeHtml(child as Y.XmlFragment | Y.XmlElement | Y.XmlText))
+    .join("");
+}
+
+function richNodeHtml(node: Y.XmlFragment | Y.XmlElement | Y.XmlText): string {
+  if (node instanceof Y.XmlText) {
+    return textHtml(node);
+  }
+  if (!(node instanceof Y.XmlElement)) {
+    return childrenHtml(node);
+  }
+  const name = node.nodeName;
+  const inner = childrenHtml(node);
+  if (name === "paragraph") {
+    return `<p>${inner || "<br>"}</p>`;
+  }
+  if (name === "heading") {
+    const level = elementLevel(node);
+    return `<h${level}>${inner}</h${level}>`;
+  }
+  if (name === "bulletList" || name === "bullet_list") {
+    return `<ul>${inner}</ul>`;
+  }
+  if (name === "orderedList" || name === "ordered_list") {
+    return `<ol>${inner}</ol>`;
+  }
+  if (name === "listItem" || name === "list_item") {
+    return `<li>${inner}</li>`;
+  }
+  if (name === "blockquote") {
+    return `<blockquote>${inner}</blockquote>`;
+  }
+  if (name === "codeBlock" || name === "code_block") {
+    return `<pre><code>${escapeHtml(plainText(node))}</code></pre>`;
+  }
+  if (name === "horizontalRule" || name === "horizontal_rule") {
+    return "<hr>";
+  }
+  if (name === "hardBreak" || name === "hard_break") {
+    return "<br>";
+  }
+  const imageSrc = safeUrl(node.getAttribute("src"));
+  if (name === "image" && imageSrc) {
+    const alt = escapeHtml(String(node.getAttribute("alt") ?? ""));
+    const title = escapeHtml(String(node.getAttribute("title") ?? ""));
+    return `<img src="${escapeHtml(imageSrc)}" alt="${alt}"${title ? ` title="${title}"` : ""}>`;
+  }
+  return inner;
+}
+
+function fallbackRichTextHtml(content: string): string {
+  const paragraphs = content
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (paragraphs.length === 0) {
+    return "<p><br></p>";
+  }
+  return paragraphs.map((part) => `<p>${escapeHtml(part).replace(/\n/g, "<br>")}</p>`).join("");
+}
+
+function richDocumentHtml(doc: Doc<"documents">): string {
+  let body = doc.content ? fallbackRichTextHtml(doc.content) : "<p><br></p>";
+  if (doc.contentState) {
+    const ydoc = new Y.Doc();
+    try {
+      Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+      const fragment = ydoc.getXmlFragment("prosemirror");
+      const rendered = childrenHtml(fragment);
+      if (rendered.trim().length > 0) {
+        body = rendered;
+      }
+    } finally {
+      ydoc.destroy();
+    }
+  }
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(doc.name)}</title><style>body{margin:0;background:#fff;color:#1a1d24;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}.doc{max-width:820px;margin:0 auto;padding:2.5rem 2rem;line-height:1.7}.doc h1,.doc h2,.doc h3{line-height:1.25}.doc blockquote{border-left:3px solid #cbd0d8;margin:1em 0;padding-left:1rem;color:#5b626e}.doc pre{background:#f4f5f7;border:1px solid #e2e4e9;border-radius:8px;overflow:auto;padding:1rem}.doc code{font-family:ui-monospace,SFMono-Regular,monospace}.doc img{max-width:100%;height:auto}.doc table{border-collapse:collapse;width:100%}.doc th,.doc td{border:1px solid #e2e4e9;padding:.4rem .6rem;text-align:left}@page{margin:1.6cm}</style></head><body><main class="doc">${body}</main></body></html>`;
+}
+
+export const search = query({
+  args: { projectId: v.id("projects"), query: v.string() },
+  handler: async (ctx, args) => {
+    const access = await accessForProject(ctx, args.projectId);
+    if (!access) {
+      return [];
+    }
+    const term = args.query.trim().slice(0, MAX_SEARCH_TERM);
+    if (term.length === 0) {
+      return [];
+    }
+    const hits = await ctx.db
+      .query("documents")
+      .withSearchIndex("search_content", (q) =>
+        q.search("content", term).eq("projectId", args.projectId).eq("kind", "file"),
+      )
+      .take(SEARCH_LIMIT);
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const visibleIds = new Set(visibleDocuments(docs).map((doc) => doc._id));
+    return hits
+      .filter((doc) => visibleIds.has(doc._id) && !doc.deletingAt)
+      .map((doc) => ({
+        id: doc._id,
+        parentId: doc.parentId,
+        name: doc.name,
+        fileType: doc.fileType,
+        snippet: buildSnippet(doc.content, term),
+      }));
+  },
+});
+
+export const exportBundle = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const access = await accessForProject(ctx, args.projectId);
+    if (!access) {
+      return null;
+    }
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const nodes = await Promise.all(
+      visibleDocuments(docs).map(async (doc) => ({
+        id: doc._id,
+        parentId: doc.parentId,
+        kind: doc.kind,
+        name: doc.name,
+        fileType: doc.fileType,
+        content:
+          doc.kind === "file" && doc.fileType === "doc"
+            ? richDocumentHtml(doc)
+            : doc.kind === "file"
+              ? doc.content
+              : "",
+        mimeType: doc.mimeType,
+        assetUrl:
+          doc.kind === "asset" && doc.storageId ? await ctx.storage.getUrl(doc.storageId) : null,
+      })),
+    );
+    return { projectTitle: access.project.title, nodes };
   },
 });
 

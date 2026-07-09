@@ -2,6 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { Check, ChevronDown, Loader2, Send, Trash2, UserPlus, X } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useRef, useState, useTransition } from "react";
 import {
@@ -273,9 +274,12 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
               return (
                 <li key={key} className="flex items-center gap-3 py-3">
                   {person.imageUrl ? (
-                    <img
+                    <Image
                       src={person.imageUrl}
                       alt=""
+                      width={36}
+                      height={36}
+                      unoptimized
                       className="size-9 shrink-0 rounded-md border border-hairline object-cover"
                     />
                   ) : (

@@ -2,6 +2,7 @@
 
 import { useClerk } from "@clerk/nextjs";
 import { ChevronRight, Loader2 } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 
@@ -40,9 +41,12 @@ export function OrgList({ organizations }: { organizations: OrgListItem[] }) {
             disabled={pending}
             className="flex w-full cursor-pointer items-center gap-3 bg-surface/20 px-4 py-3 text-left transition-colors hover:bg-foreground/[0.04] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <img
+            <Image
               src={org.iconUrl}
               alt=""
+              width={32}
+              height={32}
+              unoptimized
               className="size-8 shrink-0 rounded-md border border-hairline bg-surface/60 object-cover"
             />
             <span className="flex-1 truncate font-medium text-sm">{org.name}</span>

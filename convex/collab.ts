@@ -28,6 +28,37 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
+function collectXmlText(node: Y.XmlFragment | Y.XmlElement | Y.XmlText, out: string[]): void {
+  if (node instanceof Y.XmlText) {
+    for (const op of node.toDelta() as Array<{ insert?: unknown }>) {
+      if (typeof op.insert === "string") {
+        out.push(op.insert);
+      }
+    }
+    return;
+  }
+  for (const child of node.toArray()) {
+    collectXmlText(child as Y.XmlFragment | Y.XmlElement | Y.XmlText, out);
+  }
+  if (node instanceof Y.XmlElement) {
+    out.push("\n");
+  }
+}
+
+function xmlFragmentToText(ydoc: Y.Doc): string {
+  const out: string[] = [];
+  collectXmlText(ydoc.getXmlFragment("prosemirror"), out);
+  return out
+    .join("")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function docContent(ydoc: Y.Doc, fileType: Doc<"documents">["fileType"]): string {
+  return fileType === "doc" ? xmlFragmentToText(ydoc) : ydoc.getText("codemirror").toString();
+}
+
 async function documentProject(
   ctx: QueryCtx,
   documentId: Id<"documents">,
@@ -91,7 +122,7 @@ async function materializedContent(
     Y.applyUpdate(ydoc, new Uint8Array(row.update));
   }
   Y.applyUpdate(ydoc, new Uint8Array(pendingUpdate));
-  const content = ydoc.getText("codemirror").toString();
+  const content = docContent(ydoc, doc.fileType);
   const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
   ydoc.destroy();
   return { content, state };
@@ -119,10 +150,10 @@ async function materializedState(ctx: QueryCtx, doc: Doc<"documents">): Promise<
   return state;
 }
 
-function contentFromState(state: ArrayBuffer): string {
+function contentFromState(state: ArrayBuffer, fileType: Doc<"documents">["fileType"]): string {
   const ydoc = new Y.Doc();
   Y.applyUpdate(ydoc, new Uint8Array(state));
-  const content = ydoc.getText("codemirror").toString();
+  const content = docContent(ydoc, fileType);
   ydoc.destroy();
   return content;
 }
@@ -390,6 +421,9 @@ export const ensureSeed = mutation({
       throw new Error("not-found");
     }
     await requireProjectAccess(ctx, doc.projectId);
+    if (doc.fileType === "doc") {
+      return { seeded: false };
+    }
     const existing = await ctx.db
       .query("yjsUpdates")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -518,7 +552,7 @@ export const getHistoryPreview = query({
       return null;
     }
     return {
-      content: contentFromState(snapshot.snapshot),
+      content: contentFromState(snapshot.snapshot, doc.fileType),
       label: snapshot.label ?? `Snapshot ${snapshot.throughSeq}`,
       authorName: snapshot.authorName ?? "Unknown",
       authorEmail: await snapshotAuthorEmail(ctx, doc, snapshot),
@@ -538,8 +572,11 @@ export const restoreHistory = mutation({
     if (doc?.kind !== "file") {
       throw new Error("not-found");
     }
+    if (doc.fileType === "doc") {
+      throw new Error("unsupported-filetype");
+    }
     const access = await requireProjectAdmin(ctx, doc.projectId);
-    const targetContent = contentFromState(snapshot.snapshot);
+    const targetContent = contentFromState(snapshot.snapshot, doc.fileType);
     const newSize = byteLength(targetContent);
     if (newSize > MAX_FILE_BYTES) {
       throw new Error("file-too-large");

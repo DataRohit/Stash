@@ -131,6 +131,19 @@ samp {
   background: color-mix(in oklab, var(--accent) 22%, transparent);
 }
 
+:where(
+  a,
+  button,
+  input,
+  textarea,
+  select,
+  [role="button"],
+  [tabindex]:not([tabindex="-1"])
+):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
 .thin-scrollbar {
   scrollbar-color: color-mix(in oklab, var(--foreground) 26%, transparent) transparent;
   scrollbar-width: thin;
@@ -395,6 +408,17 @@ html.theme-transition::view-transition-new(root) {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0s;
+    animation-duration: 0.001ms;
+    animation-iteration-count: 1;
+    scroll-behavior: auto;
+    transition-delay: 0s;
+    transition-duration: 0.001ms;
+  }
+
   html {
     scroll-behavior: auto;
   }
@@ -412,4 +436,150 @@ html.theme-transition::view-transition-new(root) {
     animation-delay: 0s;
     animation-duration: 0s;
   }
+}
+
+.tiptap-doc {
+  background: var(--editor-panel);
+}
+
+.tiptap-doc-content {
+  max-width: 46rem;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 2.5rem 2rem 40vh;
+  color: var(--foreground);
+  font-size: 0.975rem;
+  line-height: 1.7;
+  outline: none;
+}
+
+.tiptap-doc-content > * + * {
+  margin-top: 0.75em;
+}
+
+.tiptap-doc-content h1 {
+  margin: 1.4em 0 0.5em;
+  font-size: 1.85rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.tiptap-doc-content h2 {
+  margin: 1.3em 0 0.4em;
+  font-size: 1.45rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.tiptap-doc-content h3 {
+  margin: 1.2em 0 0.3em;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.tiptap-doc-content a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.tiptap-doc-content ul,
+.tiptap-doc-content ol {
+  padding-left: 1.4rem;
+}
+
+.tiptap-doc-content ul {
+  list-style: disc;
+}
+
+.tiptap-doc-content ol {
+  list-style: decimal;
+}
+
+.tiptap-doc-content li {
+  margin: 0.2em 0;
+}
+
+.tiptap-doc-content li > p {
+  margin: 0.2em 0;
+}
+
+.tiptap-doc-content blockquote {
+  padding-left: 1rem;
+  border-left: 3px solid var(--hairline);
+  color: var(--muted-foreground);
+}
+
+.tiptap-doc-content pre {
+  padding: 0.9rem 1rem;
+  overflow: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--editor-control);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.85em;
+}
+
+.tiptap-doc-content code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.tiptap-doc-content :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: var(--editor-control);
+}
+
+.tiptap-doc-content pre code {
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.tiptap-doc-content hr {
+  margin: 1.5em 0;
+  border: none;
+  border-top: 1px solid var(--hairline);
+}
+
+.tiptap-doc-content:focus {
+  outline: none;
+}
+
+.tiptap-doc-content p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.collaboration-carets__caret {
+  position: relative;
+  margin-right: -1px;
+  margin-left: -1px;
+  border-right-width: 1px;
+  border-left-width: 1px;
+  border-style: solid;
+  box-sizing: border-box;
+  word-break: normal;
+  pointer-events: none;
+}
+
+.collaboration-carets__label {
+  position: absolute;
+  top: -1.45em;
+  left: -1px;
+  padding: 0.15rem 0.4rem;
+  border-radius: 5px;
+  color: #fff;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.66rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  z-index: 20;
 }

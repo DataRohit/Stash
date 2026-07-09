@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
   Calendar,
@@ -10,6 +10,7 @@ import {
   HardDrive,
   ImagePlus,
   Loader2,
+  Package,
   Pencil,
   Plus,
   RotateCcw,
@@ -17,6 +18,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -27,6 +29,10 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  type BundleNode,
+  exportProjectZip,
+} from "@/app/dashboard/projects/[id]/editor/lib/export-doc";
 import { ProjectAccessManager } from "@/app/dashboard/projects/[id]/project-access-manager";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -85,6 +91,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const accessLost = orgChanged ? "org" : project === null ? "access" : null;
   const usage = useQuery(api.documents.usage, accessLost ? "skip" : { projectId: pid });
 
+  const convex = useConvex();
   const updateProject = useMutation(api.projects.update);
   const removeProject = useMutation(api.projects.remove);
   const generateUploadUrl = useMutation(api.projects.generateUploadUrl);
@@ -103,6 +110,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [exportingZip, setExportingZip] = useState(false);
 
   useEffect(() => {
     if (orgChanged) {
@@ -237,6 +245,23 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
     }
   };
 
+  const handleExportZip = async () => {
+    setExportingZip(true);
+    try {
+      const bundle = await convex.query(api.documents.exportBundle, { projectId: pid });
+      if (!bundle || bundle.nodes.length === 0) {
+        notify.error("Nothing to export", { description: "This project has no files yet." });
+        return;
+      }
+      await exportProjectZip(bundle.projectTitle, bundle.nodes as BundleNode[]);
+      notify.success("Project exported");
+    } catch {
+      notify.error("Export failed", { description: "Couldn’t prepare the download. Try again." });
+    } finally {
+      setExportingZip(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <Link
@@ -251,9 +276,12 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
             {mode === "view" ? (
-              <img
+              <Image
                 src={iconUrl}
                 alt=""
+                width={56}
+                height={56}
+                unoptimized
                 className="size-14 shrink-0 rounded-lg border border-hairline object-cover"
               />
             ) : null}
@@ -276,6 +304,19 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                     <SquarePen className="size-4" aria-hidden="true" />
                     Open editor
                   </Link>
+                  <Button
+                    variant="secondary"
+                    className="w-40"
+                    onClick={handleExportZip}
+                    disabled={exportingZip}
+                  >
+                    {exportingZip ? (
+                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Package className="size-4" aria-hidden="true" />
+                    )}
+                    {exportingZip ? "Exporting…" : "Export ZIP"}
+                  </Button>
                   {isAdmin ? (
                     <>
                       <Button variant="secondary" className="w-40" onClick={beginEdit}>
@@ -465,9 +506,12 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
               <div className="flex flex-col gap-2">
                 <span className={labelClass}>Icon</span>
                 <div className="flex items-center gap-3">
-                  <img
+                  <Image
                     src={iconUrl}
                     alt=""
+                    width={40}
+                    height={40}
+                    unoptimized
                     className="size-10 shrink-0 rounded-md border border-hairline object-cover"
                   />
                   <input

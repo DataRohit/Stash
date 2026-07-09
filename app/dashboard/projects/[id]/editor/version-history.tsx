@@ -338,7 +338,7 @@ export function VersionHistoryModal({
         }
       }}
     >
-      <div className="glass-strong relative flex h-[92vh] w-full max-w-[1400px] flex-col overflow-hidden rounded-lg border border-hairline shadow-[var(--shadow-glass)]">
+      <div className="glass-strong relative flex h-[92dvh] w-full max-w-[1400px] flex-col overflow-hidden rounded-lg border border-hairline shadow-[var(--shadow-glass)]">
         <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-hairline border-b pr-2 pl-3">
           <div className="flex min-w-0 items-center gap-2">
             <History className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -393,8 +393,8 @@ export function VersionHistoryModal({
             </div>
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1">
-            <aside className="flex w-72 shrink-0 flex-col border-hairline border-r">
+          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+            <aside className="flex max-h-52 w-full shrink-0 flex-col border-hairline border-b lg:max-h-none lg:w-72 lg:border-r lg:border-b-0">
               <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-hairline border-b px-3">
                 <span className="font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                   {snapshots.length} version{snapshots.length === 1 ? "" : "s"}
@@ -460,8 +460,8 @@ export function VersionHistoryModal({
             </aside>
 
             <div className="flex min-w-0 flex-1 flex-col">
-              <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-hairline border-b px-2">
-                <div className="grid grid-cols-3 gap-0.5 rounded-sm border border-hairline p-0.5">
+              <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-2 border-hairline border-b px-2 py-1.5">
+                <div className="grid min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-sm border border-hairline p-0.5 sm:flex-none">
                   <TabButton active={tab === "file"} label="File" onClick={() => setTab("file")} />
                   <TabButton
                     active={tab === "diff"}
@@ -502,7 +502,7 @@ export function VersionHistoryModal({
               </div>
 
               {tab === "compare" ? (
-                <div className="flex shrink-0 items-end gap-3 border-hairline border-b px-3 py-2.5">
+                <div className="flex shrink-0 flex-col items-stretch gap-3 border-hairline border-b px-3 py-2.5 sm:flex-row sm:items-end">
                   <VersionSelect
                     label="Base"
                     value={effectiveBaseId}
@@ -562,7 +562,7 @@ export function VersionHistoryModal({
                 ) : null}
               </div>
 
-              <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-hairline border-t pr-2 pl-3">
+              <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-2 border-hairline border-t px-3 py-2">
                 <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
                   {selectedSnapshot ? (
                     <>

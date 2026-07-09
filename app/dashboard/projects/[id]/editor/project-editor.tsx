@@ -2,9 +2,23 @@
 
 import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
-import { ArrowLeft, Check, Code2, Columns2, Eye, History, Loader2, PanelLeft } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  Code2,
+  Columns2,
+  Eye,
+  History,
+  Loader2,
+  MessageSquare,
+  PanelLeft,
+  Share2,
+  X,
+} from "lucide-react";
+import dynamic from "next/dynamic";
+import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
@@ -12,14 +26,34 @@ import {
   useRef,
   useState,
 } from "react";
+import * as Y from "yjs";
+import {
+  CommentsRail,
+  type CommentThread,
+  type MentionCandidate,
+  type ResolvedCommentRange,
+} from "@/app/dashboard/projects/[id]/editor/comments-rail";
+import type {
+  CommentFocusRequest,
+  CommentRange,
+  DocEditorHandle,
+  EditorSelectionState,
+} from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
+import { ExportMenu } from "@/app/dashboard/projects/[id]/editor/export-menu";
 import { FileTree } from "@/app/dashboard/projects/[id]/editor/file-tree";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import {
   type CollabViewer,
   useCollabDoc,
 } from "@/app/dashboard/projects/[id]/editor/lib/use-collab-doc";
+import { SearchPanel } from "@/app/dashboard/projects/[id]/editor/search-panel";
+import {
+  type ShareMode,
+  SharePopover,
+  type ShareState,
+} from "@/app/dashboard/projects/[id]/editor/share-popover";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { VersionHistoryModal } from "@/app/dashboard/projects/[id]/editor/version-history";
 import { notify } from "@/components/ui/toast";
@@ -37,6 +71,19 @@ type ProjectEditorProps = {
 
 type ViewMode = "editor" | "split" | "preview";
 
+const RichDocEditor = dynamic(
+  () => import("@/app/dashboard/projects/[id]/editor/rich-doc-editor"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground text-sm">
+        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+        Loading editor…
+      </div>
+    ),
+  },
+);
+
 const MAX_ASSET_BYTES = 5 * 1024 * 1024;
 const MAX_FILE_BYTES = 512 * 1024;
 
@@ -52,6 +99,12 @@ function formatSaveTime(date: Date): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function initialsOf(name: string): string {
   const parts = name.trim().split(/\s+/);
   const first = parts[0]?.[0] ?? "?";
@@ -63,9 +116,12 @@ function ViewerAvatar({ viewer, size }: { viewer: CollabViewer; size: number }) 
   const dimension = `${size}px`;
   if (viewer.image) {
     return (
-      <img
+      <Image
         src={viewer.image}
         alt={viewer.name}
+        width={size}
+        height={size}
+        unoptimized
         style={{ width: dimension, height: dimension, outline: `1.5px solid ${viewer.color}` }}
         className="shrink-0 rounded-full border-2 border-surface object-cover"
       />
@@ -216,6 +272,7 @@ export function ProjectEditor({
 }: ProjectEditorProps) {
   const pid = projectId as Id<"projects">;
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { orgId, isLoaded: authLoaded } = useAuth();
   const orgChanged = authLoaded && orgId !== clerkOrgId;
   const project = useQuery(api.projects.get, orgChanged ? "skip" : { projectId: pid });
@@ -226,22 +283,38 @@ export function ProjectEditor({
 
   const createFolder = useMutation(api.documents.createFolder);
   const createFile = useMutation(api.documents.createFile);
+  const createDocument = useMutation(api.documents.createDocument);
   const renameDoc = useMutation(api.documents.rename);
   const removeDoc = useMutation(api.documents.remove);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const createAsset = useMutation(api.documents.createAsset);
+  const createCommentThread = useMutation(api.comments.createThread);
+  const replyToComment = useMutation(api.comments.reply);
+  const setCommentResolved = useMutation(api.comments.setResolved);
+  const setShareMode = useMutation(api.sharing.setMode);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [buffer, setBuffer] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [editorSelection, setEditorSelection] = useState<EditorSelectionState | null>(null);
+  const [focusRequest, setFocusRequest] = useState<CommentFocusRequest | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [origin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [historyState, setHistoryState] = useState<{ documentId: string | null; open: boolean }>({
     documentId: null,
     open: false,
   });
   const lastSeeded = useRef<string | null>(null);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
+  const editorRef = useRef<DocEditorHandle | null>(null);
+  const handledDeepLinkRef = useRef<string | null>(null);
+  const mobileCloseRef = useRef<HTMLButtonElement>(null);
 
   const startResize = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -268,6 +341,7 @@ export function ProjectEditor({
       : null;
   const selectedNode = nodes.find((node) => node.id === effectiveSelectedId) ?? null;
   const selectedFileId = selectedNode?.kind === "file" ? (effectiveSelectedId as string) : null;
+  const isDoc = selectedNode?.kind === "file" && selectedNode.fileType === "doc";
   const historyOpen = Boolean(
     selectedFileId && historyState.open && historyState.documentId === selectedFileId,
   );
@@ -287,12 +361,99 @@ export function ProjectEditor({
     [user],
   );
   const collab = useCollabDoc(selectedFileId, canEdit, collabUser);
+  const commentThreadsData = useQuery(
+    api.comments.listForDocument,
+    selectedFileId && !accessLost ? { documentId: selectedFileId as Id<"documents"> } : "skip",
+  );
+  const mentionCandidatesData = useQuery(
+    api.comments.mentionCandidates,
+    accessLost ? "skip" : { projectId: pid },
+  );
+  const shareStateData = useQuery(
+    api.sharing.getState,
+    selectedFileId && isAdmin && !accessLost
+      ? { documentId: selectedFileId as Id<"documents"> }
+      : "skip",
+  );
+  const commentThreads = useMemo(
+    () => (commentThreadsData ?? []) as CommentThread[],
+    [commentThreadsData],
+  );
+  const mentionCandidates = useMemo(
+    () => (mentionCandidatesData ?? []) as MentionCandidate[],
+    [mentionCandidatesData],
+  );
+  const shareState = useMemo(
+    () => shareStateData as ShareState | null | undefined,
+    [shareStateData],
+  );
+  const resolvedCommentRanges = useMemo(() => {
+    const ranges = new Map<string, ResolvedCommentRange>();
+    if (!collab?.ydoc || !collab.ytext) {
+      return ranges;
+    }
+    for (const thread of commentThreads) {
+      try {
+        const start = Y.createAbsolutePositionFromRelativePosition(
+          Y.decodeRelativePosition(new Uint8Array(thread.startRel)),
+          collab.ydoc,
+        );
+        const end = Y.createAbsolutePositionFromRelativePosition(
+          Y.decodeRelativePosition(new Uint8Array(thread.endRel)),
+          collab.ydoc,
+        );
+        if (!start || !end || start.type !== collab.ytext || end.type !== collab.ytext) {
+          continue;
+        }
+        const from = Math.min(start.index, end.index);
+        const to = Math.max(start.index, end.index);
+        if (from < to) {
+          ranges.set(thread.id, { id: thread.id, from, to, status: thread.status });
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV === "development") {
+          console.error(error);
+        }
+      }
+    }
+    return ranges;
+  }, [collab, commentThreads]);
+  const commentRanges = useMemo<CommentRange[]>(
+    () => [...resolvedCommentRanges.values()],
+    [resolvedCommentRanges],
+  );
+  const unresolvedCommentCount = commentThreads.filter((thread) => thread.status === "open").length;
+  const commentSelection = viewMode === "preview" ? null : editorSelection;
 
   useEffect(() => {
     if (orgChanged) {
       router.refresh();
     }
   }, [orgChanged, router]);
+
+  useEffect(() => {
+    const fileId = searchParams.get("file");
+    const threadId = searchParams.get("thread");
+    if (!fileId) {
+      return;
+    }
+    const key = `${fileId}:${threadId ?? ""}`;
+    if (handledDeepLinkRef.current === key) {
+      return;
+    }
+    const target = nodes.find((node) => node.id === fileId);
+    if (target?.kind === "file") {
+      const timer = window.setTimeout(() => {
+        handledDeepLinkRef.current = key;
+        setSelectedId(target.id);
+        if (threadId) {
+          setCommentsOpen(true);
+          setActiveCommentId(threadId);
+        }
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [nodes, searchParams]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -311,9 +472,30 @@ export function ProjectEditor({
   }, [sidebarCollapsed, projectId]);
 
   useEffect(() => {
+    if (!mobileFilesOpen) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileFilesOpen(false);
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    window.setTimeout(() => mobileCloseRef.current?.focus(), 0);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [mobileFilesOpen]);
+
+  useEffect(() => {
     if (doc && doc.id === selectedFileId && lastSeeded.current !== selectedFileId) {
       setBuffer(doc.content);
       lastSeeded.current = selectedFileId;
+      setEditorSelection(null);
+      setShareOpen(false);
     }
   }, [doc, selectedFileId]);
 
@@ -343,6 +525,19 @@ export function ProjectEditor({
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
   }, [nodes]);
+
+  useEffect(() => {
+    if (!activeCommentId) {
+      return;
+    }
+    const range = resolvedCommentRanges.get(activeCommentId);
+    if (range) {
+      const timer = window.setTimeout(() => {
+        editorRef.current?.focusRange(range.from, range.to);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+  }, [activeCommentId, resolvedCommentRanges]);
 
   const guard = async (action: () => Promise<unknown>) => {
     try {
@@ -383,6 +578,170 @@ export function ProjectEditor({
     });
   };
 
+  const createThreadFromSelection = async (body: string, mentionUserIds: string[]) => {
+    if (
+      !selectedFileId ||
+      !collab?.ytext ||
+      !collab.ready ||
+      !editorSelection ||
+      viewMode === "preview" ||
+      editorSelection.from >= editorSelection.to
+    ) {
+      notify.error("Select text first", {
+        description:
+          viewMode === "preview"
+            ? "Switch to editor or split view before starting a thread."
+            : "Comments need a highlighted range in the editor.",
+      });
+      return;
+    }
+    try {
+      const startRel = Y.createRelativePositionFromTypeIndex(collab.ytext, editorSelection.from);
+      const endRel = Y.createRelativePositionFromTypeIndex(collab.ytext, editorSelection.to);
+      const commentId = await createCommentThread({
+        documentId: selectedFileId as Id<"documents">,
+        startRel: toArrayBuffer(Y.encodeRelativePosition(startRel)),
+        endRel: toArrayBuffer(Y.encodeRelativePosition(endRel)),
+        quote: editorSelection.text,
+        body,
+        mentionUserIds,
+      });
+      setCommentsOpen(true);
+      setActiveCommentId(commentId);
+      notify.success("Comment added");
+    } catch (error) {
+      notify.error("Comment failed", { description: mapDocError(error) });
+      throw error;
+    }
+  };
+
+  const replyToThread = async (commentId: string, body: string, mentionUserIds: string[]) => {
+    try {
+      await replyToComment({
+        commentId: commentId as Id<"comments">,
+        body,
+        mentionUserIds,
+      });
+      setActiveCommentId(commentId);
+    } catch (error) {
+      notify.error("Reply failed", { description: mapDocError(error) });
+      throw error;
+    }
+  };
+
+  const resolveThread = async (commentId: string, resolved: boolean) => {
+    try {
+      await setCommentResolved({ commentId: commentId as Id<"comments">, resolved });
+      setActiveCommentId(commentId);
+    } catch (error) {
+      notify.error("Update failed", { description: mapDocError(error) });
+      throw error;
+    }
+  };
+
+  const updateShareMode = async (mode: ShareMode) => {
+    if (!selectedFileId) {
+      return;
+    }
+    try {
+      await setShareMode({ documentId: selectedFileId as Id<"documents">, mode });
+      notify.success(mode === "private" ? "Share link revoked" : "Share settings updated");
+    } catch (error) {
+      notify.error("Share update failed", { description: mapDocError(error) });
+      throw error;
+    }
+  };
+
+  const copyShareLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      notify.success("Share link copied");
+    } catch (error) {
+      notify.error("Copy failed", { description: mapDocError(error) });
+      throw error;
+    }
+  };
+
+  const focusThread = (commentId: string) => {
+    setActiveCommentId(commentId);
+    const range = resolvedCommentRanges.get(commentId);
+    if (range) {
+      setFocusRequest({ id: commentId, from: range.from, to: range.to, nonce: Date.now() });
+      editorRef.current?.focusRange(range.from, range.to);
+    }
+  };
+
+  const selectNode = (id: string) => {
+    setSelectedId(id);
+    setMobileFilesOpen(false);
+  };
+
+  const renderFileBrowser = () => (
+    <SearchPanel
+      projectId={pid}
+      nodes={nodes}
+      query={searchQuery}
+      onQueryChange={setSearchQuery}
+      selectedId={effectiveSelectedId}
+      onSelect={selectNode}
+    >
+      <FileTree
+        nodes={nodes}
+        selectedId={effectiveSelectedId}
+        canEdit={canEdit}
+        onSelect={(node) => selectNode(node.id)}
+        onCreateFolder={(parentId, name) =>
+          guard(() =>
+            createFolder({
+              projectId: pid,
+              parentId: parentId as Id<"documents"> | null,
+              name,
+            }),
+          )
+        }
+        onCreateFile={(parentId, name) =>
+          guard(() =>
+            createFile({
+              projectId: pid,
+              parentId: parentId as Id<"documents"> | null,
+              name,
+            }),
+          )
+        }
+        onCreateDocument={(parentId, name) =>
+          guard(() =>
+            createDocument({
+              projectId: pid,
+              parentId: parentId as Id<"documents"> | null,
+              name,
+            }),
+          )
+        }
+        onRename={(id, name) => guard(() => renameDoc({ documentId: id as Id<"documents">, name }))}
+        onRemove={(node) =>
+          guard(async () => {
+            await removeDoc({ documentId: node.id as Id<"documents"> });
+            const removedIds = new Set<string>([node.id]);
+            let changed = true;
+            while (changed) {
+              changed = false;
+              for (const child of nodes) {
+                if (child.parentId && removedIds.has(child.parentId) && !removedIds.has(child.id)) {
+                  removedIds.add(child.id);
+                  changed = true;
+                }
+              }
+            }
+            if (effectiveSelectedId && removedIds.has(effectiveSelectedId)) {
+              setSelectedId(null);
+            }
+          })
+        }
+        onUpload={handleUpload}
+      />
+    </SearchPanel>
+  );
+
   const saveStatus = selectedFileId
     ? collab?.syncing
       ? "Syncing..."
@@ -405,6 +764,16 @@ export function ProjectEditor({
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="glass relative z-[60] flex h-14 shrink-0 items-center justify-between gap-3 rounded-lg px-4">
         <div className="flex min-w-0 items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setMobileFilesOpen(true)}
+            aria-label="Open file drawer"
+            aria-controls="mobile-file-drawer"
+            aria-expanded={mobileFilesOpen}
+            className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground sm:hidden"
+          >
+            <PanelLeft className="size-4" aria-hidden="true" />
+          </button>
           <button
             type="button"
             onClick={() => setSidebarCollapsed((value) => !value)}
@@ -439,13 +808,29 @@ export function ProjectEditor({
               {saveStatus}
             </span>
           ) : null}
+          <span className="sr-only" aria-live="polite">
+            {saveStatus ? `Save state: ${saveStatus}` : "No document selected"}
+          </span>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
+        <div className="thin-scrollbar flex min-w-0 shrink items-center gap-3 overflow-x-auto">
           {selectedFileId && collab ? (
-            <ViewerPresence viewers={collab.viewers} canOpen={isAdmin} />
+            <>
+              <ViewerPresence viewers={collab.viewers} canOpen={isAdmin} />
+              <span className="sr-only" aria-live="polite">
+                {collab.viewers.length} {collab.viewers.length === 1 ? "person" : "people"} in this
+                file
+              </span>
+            </>
           ) : null}
           <div className="hidden items-center gap-2 sm:flex">
-            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-foreground/10">
+            <div
+              className="h-1.5 w-24 overflow-hidden rounded-full bg-foreground/10"
+              role="progressbar"
+              aria-label="Project storage used"
+              aria-valuemin={0}
+              aria-valuemax={maxBytes}
+              aria-valuenow={usedBytes}
+            >
               <div
                 className={cn(
                   "h-full rounded-full",
@@ -458,8 +843,56 @@ export function ProjectEditor({
               {formatMb(usedBytes)}/{formatMb(maxBytes)} MB
             </span>
           </div>
-          {selectedFileId ? (
+          {selectedFileId && !isDoc ? (
             <div className="flex items-center gap-1">
+              {isAdmin ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShareOpen((value) => !value)}
+                    aria-label="Share document"
+                    aria-pressed={shareOpen}
+                    className={cn(
+                      "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                      shareOpen
+                        ? "bg-foreground/[0.08] text-foreground"
+                        : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                    )}
+                  >
+                    <Share2 className="size-4" aria-hidden="true" />
+                    {shareState?.mode && shareState.mode !== "private" ? (
+                      <span className="absolute -top-1 -right-1 size-2 rounded-full bg-accent" />
+                    ) : null}
+                  </button>
+                  {shareOpen ? (
+                    <SharePopover
+                      state={shareState}
+                      origin={origin}
+                      onSetMode={updateShareMode}
+                      onCopy={copyShareLink}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => setCommentsOpen((value) => !value)}
+                aria-label={`Comments, ${unresolvedCommentCount} open`}
+                aria-pressed={commentsOpen}
+                className={cn(
+                  "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                  commentsOpen
+                    ? "bg-foreground/[0.08] text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                )}
+              >
+                <MessageSquare className="size-4" aria-hidden="true" />
+                {unresolvedCommentCount > 0 ? (
+                  <span className="absolute -top-1 -right-1 flex min-w-4 items-center justify-center rounded-full bg-accent px-1 font-mono text-[9px] text-background">
+                    {unresolvedCommentCount}
+                  </span>
+                ) : null}
+              </button>
               <button
                 type="button"
                 onClick={() =>
@@ -479,7 +912,16 @@ export function ProjectEditor({
               >
                 <History className="size-4" aria-hidden="true" />
               </button>
-              <div className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
+              {selectedNode?.kind === "file" && doc ? (
+                <ExportMenu
+                  projectId={pid}
+                  fileNode={selectedNode}
+                  content={canEdit ? buffer : doc.content}
+                  nodes={nodes}
+                />
+              ) : null}
+              <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
+                <legend className="sr-only">View mode</legend>
                 {(
                   [
                     ["editor", Code2, "Editor"],
@@ -492,6 +934,7 @@ export function ProjectEditor({
                     type="button"
                     onClick={() => setViewMode(mode)}
                     aria-label={label}
+                    aria-pressed={viewMode === mode}
                     className={cn(
                       "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
                       viewMode === mode
@@ -502,13 +945,46 @@ export function ProjectEditor({
                     <Icon className="size-4" aria-hidden="true" />
                   </button>
                 ))}
-              </div>
+              </fieldset>
             </div>
           ) : null}
         </div>
       </div>
 
       <div className="relative z-0 flex min-h-0 flex-1">
+        {mobileFilesOpen ? (
+          <div className="fixed inset-0 z-[95] p-3 pt-24 sm:hidden">
+            <button
+              type="button"
+              aria-label="Close file drawer overlay"
+              className="absolute inset-0 cursor-default bg-black/45"
+              onClick={() => setMobileFilesOpen(false)}
+            />
+            <section
+              id="mobile-file-drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Project files"
+              className="glass relative flex h-[min(82dvh,calc(100dvh-7rem))] w-full flex-col overflow-hidden rounded-lg"
+            >
+              <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-hairline border-b pr-2 pl-3">
+                <span className="font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
+                  Project files
+                </span>
+                <button
+                  ref={mobileCloseRef}
+                  type="button"
+                  onClick={() => setMobileFilesOpen(false)}
+                  aria-label="Close file drawer"
+                  className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <X className="size-4" aria-hidden="true" />
+                </button>
+              </div>
+              <div className="min-h-0 flex-1">{renderFileBrowser()}</div>
+            </section>
+          </div>
+        ) : null}
         <div
           className={cn(
             "glass hidden shrink-0 overflow-hidden rounded-lg",
@@ -516,53 +992,7 @@ export function ProjectEditor({
           )}
           style={{ width: `${sidebarWidth}px` }}
         >
-          <FileTree
-            nodes={nodes}
-            selectedId={effectiveSelectedId}
-            canEdit={canEdit}
-            onSelect={(node) => setSelectedId(node.id)}
-            onCreateFolder={(parentId, name) =>
-              guard(() =>
-                createFolder({
-                  projectId: pid,
-                  parentId: parentId as Id<"documents"> | null,
-                  name,
-                }),
-              )
-            }
-            onCreateFile={(parentId, name) =>
-              guard(() =>
-                createFile({ projectId: pid, parentId: parentId as Id<"documents"> | null, name }),
-              )
-            }
-            onRename={(id, name) =>
-              guard(() => renameDoc({ documentId: id as Id<"documents">, name }))
-            }
-            onRemove={(node) =>
-              guard(async () => {
-                await removeDoc({ documentId: node.id as Id<"documents"> });
-                const removedIds = new Set<string>([node.id]);
-                let changed = true;
-                while (changed) {
-                  changed = false;
-                  for (const child of nodes) {
-                    if (
-                      child.parentId &&
-                      removedIds.has(child.parentId) &&
-                      !removedIds.has(child.id)
-                    ) {
-                      removedIds.add(child.id);
-                      changed = true;
-                    }
-                  }
-                }
-                if (effectiveSelectedId && removedIds.has(effectiveSelectedId)) {
-                  setSelectedId(null);
-                }
-              })
-            }
-            onUpload={handleUpload}
-          />
+          {renderFileBrowser()}
         </div>
 
         <button
@@ -585,48 +1015,80 @@ export function ProjectEditor({
                   {collab.blocked} Editing is paused until this file can sync again.
                 </div>
               ) : null}
-              <div className="flex min-h-0 flex-1">
-                {viewMode !== "preview" ? (
-                  <div
-                    className={cn(
-                      "min-w-0 overflow-auto",
-                      viewMode === "split" ? "flex-1 border-hairline border-r" : "flex-1",
-                    )}
-                  >
-                    <DocEditor
-                      key={`${selectedFileId}:${doc.fileType}`}
-                      initialContent={doc.content}
-                      language={doc.fileType === "html" ? "html" : "md"}
-                      readOnly={!canEdit || Boolean(collab?.blocked)}
-                      onChange={setBuffer}
-                      maxContentBytes={canEdit ? maxEditableBytes : undefined}
-                      onLimit={() =>
-                        notify.error("Edit is too large", {
-                          description: mapDocError(new Error("file-too-large")),
-                        })
-                      }
-                      ytext={canEdit ? collab?.ytext : undefined}
-                      awareness={canEdit ? collab?.awareness : undefined}
-                    />
+              {isDoc ? (
+                collab?.ready && collab.sessionId ? (
+                  <RichDocEditor
+                    key={selectedFileId}
+                    ydoc={collab.ydoc}
+                    awareness={collab.awareness}
+                    editable={canEdit && !collab.blocked}
+                    userName={collab.userLabel}
+                    userColor={collab.color}
+                    userColorLight={collab.colorLight}
+                    sessionId={collab.sessionId}
+                  />
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-muted-foreground text-sm">
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    Loading document…
                   </div>
-                ) : null}
-                {viewMode !== "editor" ? (
-                  <div className="min-w-0 flex-1">
-                    <DocPreview
-                      fileNode={selectedNode}
-                      content={canEdit ? buffer : doc.content}
-                      nodes={nodes}
-                      iframeRef={previewFrameRef}
-                    />
-                  </div>
-                ) : null}
-              </div>
+                )
+              ) : (
+                <div className="flex min-h-0 flex-1">
+                  {viewMode !== "preview" ? (
+                    <div
+                      className={cn(
+                        "min-w-0 overflow-auto",
+                        viewMode === "split" ? "flex-1 border-hairline border-r" : "flex-1",
+                      )}
+                    >
+                      <DocEditor
+                        ref={editorRef}
+                        key={`${selectedFileId}:${doc.fileType}`}
+                        initialContent={doc.content}
+                        language={doc.fileType === "html" ? "html" : "md"}
+                        readOnly={!canEdit || Boolean(collab?.blocked)}
+                        onChange={setBuffer}
+                        maxContentBytes={canEdit ? maxEditableBytes : undefined}
+                        onLimit={() =>
+                          notify.error("Edit is too large", {
+                            description: mapDocError(new Error("file-too-large")),
+                          })
+                        }
+                        ytext={collab?.ytext}
+                        awareness={collab?.awareness}
+                        commentRanges={commentRanges}
+                        activeCommentId={activeCommentId}
+                        focusRequest={focusRequest}
+                        onSelectionChange={setEditorSelection}
+                        onCommentRangeClick={(commentId) => {
+                          setCommentsOpen(true);
+                          focusThread(commentId);
+                        }}
+                      />
+                    </div>
+                  ) : null}
+                  {viewMode !== "editor" ? (
+                    <div className="min-w-0 flex-1">
+                      <DocPreview
+                        fileNode={selectedNode}
+                        content={canEdit ? buffer : doc.content}
+                        nodes={nodes}
+                        iframeRef={previewFrameRef}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
           ) : selectedNode?.kind === "asset" && selectedNode.assetUrl ? (
             <div className="editor-panel flex min-w-0 flex-1 items-center justify-center overflow-auto p-6">
-              <img
+              <Image
                 src={selectedNode.assetUrl}
                 alt={selectedNode.name}
+                width={1600}
+                height={1200}
+                unoptimized
                 className="max-h-full max-w-full rounded-md border border-hairline object-contain"
               />
             </div>
@@ -634,12 +1096,26 @@ export function ProjectEditor({
             <div className="editor-panel flex flex-1 items-center justify-center p-6 text-center text-muted-foreground text-sm">
               {nodes.length === 0
                 ? canEdit
-                  ? "Create a .md or .html file to start writing."
+                  ? "Create a file or document to start writing."
                   : "This project has no documents yet."
                 : "Select a file to open it."}
             </div>
           )}
         </div>
+        {commentsOpen && selectedFileId && !isDoc ? (
+          <CommentsRail
+            threads={commentThreads}
+            candidates={mentionCandidates}
+            ranges={resolvedCommentRanges}
+            activeThreadId={activeCommentId}
+            selection={commentSelection}
+            onClose={() => setCommentsOpen(false)}
+            onCreate={createThreadFromSelection}
+            onReply={replyToThread}
+            onResolve={resolveThread}
+            onFocusThread={focusThread}
+          />
+        ) : null}
       </div>
       {historyOpen && selectedFileId && selectedNode?.kind === "file" && doc ? (
         <VersionHistoryModal

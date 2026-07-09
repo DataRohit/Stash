@@ -1,4 +1,5 @@
 import { Users } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { orgAvatarUrl } from "@/lib/org-avatar";
@@ -38,17 +39,23 @@ export function ProjectCard({
       className="glass flex flex-col gap-4 rounded-lg p-6 transition-colors hover:border-foreground/20"
     >
       <div className="flex items-start gap-4">
-        <img
+        <Image
           src={imageUrl ?? orgAvatarUrl(id)}
           alt=""
+          width={56}
+          height={56}
+          unoptimized
           className="size-14 shrink-0 rounded-lg border border-hairline object-cover"
         />
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <p className="truncate font-serif text-xl tracking-display">{title}</p>
           <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
-            <img
+            <Image
               src={orgIconUrl}
               alt=""
+              width={16}
+              height={16}
+              unoptimized
               className="size-4 shrink-0 rounded-xs border border-hairline object-cover"
             />
             <span className="truncate">{orgName}</span>
@@ -74,9 +81,12 @@ export function ProjectCard({
       <div className="mt-auto flex items-center justify-between gap-3 border-hairline border-t pt-4">
         <div className="flex min-w-0 items-center gap-2">
           {ownerImageUrl ? (
-            <img
+            <Image
               src={ownerImageUrl}
               alt=""
+              width={24}
+              height={24}
+              unoptimized
               className="size-6 shrink-0 rounded-full border border-hairline object-cover"
             />
           ) : (

@@ -27,6 +27,24 @@ export function mapDocError(error: unknown): string {
   if (message.includes("name-taken")) {
     return "A file or folder with that name already exists here.";
   }
+  if (message.includes("empty-comment")) {
+    return "Write a comment before posting.";
+  }
+  if (message.includes("comment-too-long")) {
+    return "Comments can be up to 2,000 characters.";
+  }
+  if (message.includes("empty-selection")) {
+    return "Select text before starting a thread.";
+  }
+  if (message.includes("invalid-mention")) {
+    return "Mentions must be project members with access.";
+  }
+  if (message.includes("public-sharing-disabled")) {
+    return "Public sharing is not enabled for this plan.";
+  }
+  if (message.includes("unsupported-filetype")) {
+    return "That action isn’t available for this document type.";
+  }
   return "Something went wrong. Please try again.";
 }
 

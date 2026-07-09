@@ -6,6 +6,7 @@ import {
   FileCode,
   FilePlus,
   FileText,
+  FileType,
   Folder,
   FolderPlus,
   Image as ImageIcon,
@@ -31,12 +32,14 @@ type FileTreeProps = {
   onSelect: (node: TreeNode) => void;
   onCreateFolder: (parentId: string | null, name: string) => Promise<void>;
   onCreateFile: (parentId: string | null, name: string) => Promise<void>;
+  onCreateDocument: (parentId: string | null, name: string) => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onRemove: (node: TreeNode) => Promise<void>;
   onUpload: (parentId: string | null, file: File) => Promise<void>;
 };
 
-type Draft = { kind: "folder" | "file"; parentId: string | null };
+type DraftKind = "folder" | "file" | "doc";
+type Draft = { kind: DraftKind; parentId: string | null };
 
 const INDENT = 12;
 const PAD_BASE = 8;
@@ -47,16 +50,24 @@ function rowPadding(depth: number) {
   return `${PAD_BASE + depth * INDENT}px`;
 }
 
+function fileGlyph(node: TreeNode) {
+  if (node.fileType === "html") {
+    return <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />;
+  }
+  if (node.fileType === "doc") {
+    return <FileType className="size-4 shrink-0 text-info" aria-hidden="true" />;
+  }
+  return <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />;
+}
+
 function NodeGlyph({ node }: { node: TreeNode }) {
   const icon =
     node.kind === "folder" ? (
       <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
     ) : node.kind === "asset" ? (
       <ImageIcon className="size-4 shrink-0 text-info" aria-hidden="true" />
-    ) : node.fileType === "html" ? (
-      <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />
     ) : (
-      <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />
+      fileGlyph(node)
     );
   return <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>;
 }
@@ -68,19 +79,17 @@ function StaticNodeGlyph({ node }: { node: TreeNode }) {
   if (node.kind === "asset") {
     return <ImageIcon className="size-4 shrink-0 text-info" aria-hidden="true" />;
   }
-  return node.fileType === "html" ? (
-    <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />
-  ) : (
-    <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />
-  );
+  return fileGlyph(node);
 }
 
-function DraftGlyph({ kind }: { kind: "folder" | "file" }) {
-  return kind === "folder" ? (
-    <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-  ) : (
-    <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />
-  );
+function DraftGlyph({ kind }: { kind: DraftKind }) {
+  if (kind === "folder") {
+    return <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
+  }
+  if (kind === "doc") {
+    return <FileType className="size-4 shrink-0 text-info" aria-hidden="true" />;
+  }
+  return <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />;
 }
 
 function IndentGuides({ depth }: { depth: number }) {
@@ -136,6 +145,7 @@ export function FileTree({
   onSelect,
   onCreateFolder,
   onCreateFile,
+  onCreateDocument,
   onRename,
   onRemove,
   onUpload,
@@ -146,8 +156,10 @@ export function FileTree({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameName, setRenameName] = useState("");
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+  const treeRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLInputElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
+  const uploadRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (draft) {
@@ -163,11 +175,37 @@ export function FileTree({
   }, [renaming]);
 
   const childrenByParent = new Map<string | null, TreeNode[]>();
+  const nodeById = new Map<string, TreeNode>();
   for (const node of nodes) {
+    nodeById.set(node.id, node);
     const list = childrenByParent.get(node.parentId) ?? [];
     list.push(node);
     childrenByParent.set(node.parentId, list);
   }
+
+  const selectedAncestorIds = new Set<string>();
+  let selectedNode = selectedId ? nodeById.get(selectedId) : undefined;
+  while (selectedNode?.parentId) {
+    selectedAncestorIds.add(selectedNode.parentId);
+    selectedNode = nodeById.get(selectedNode.parentId);
+  }
+
+  const isExpanded = (id: string) => expanded.has(id) || selectedAncestorIds.has(id);
+
+  const sortedChildren = (parentId: string | null) =>
+    sortNodes(childrenByParent.get(parentId) ?? []);
+
+  const visibleNodes: TreeNode[] = [];
+  const collectVisible = (parentId: string | null) => {
+    for (const node of sortedChildren(parentId)) {
+      visibleNodes.push(node);
+      if (node.kind === "folder" && isExpanded(node.id)) {
+        collectVisible(node.id);
+      }
+    }
+  };
+  collectVisible(null);
+  const visibleIds = visibleNodes.map((node) => node.id);
 
   const openNode = nodes.find((node) => node.id === selectedId) ?? null;
   const activeParent =
@@ -196,7 +234,49 @@ export function FileTree({
     setActiveFolderId(node.parentId);
   };
 
-  const startDraftIn = (kind: "folder" | "file", parentId: string | null) => {
+  const focusNode = (id: string | undefined) => {
+    if (!id) {
+      return;
+    }
+    treeRef.current?.querySelector<HTMLButtonElement>(`[data-tree-node-id="${id}"]`)?.focus();
+  };
+
+  const onNodeKey = (event: KeyboardEvent<HTMLButtonElement>, node: TreeNode) => {
+    const index = visibleIds.indexOf(node.id);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusNode(visibleIds[Math.min(visibleIds.length - 1, index + 1)]);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusNode(visibleIds[Math.max(0, index - 1)]);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      focusNode(visibleIds[0]);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      focusNode(visibleIds.at(-1));
+    } else if (event.key === "ArrowRight" && node.kind === "folder") {
+      event.preventDefault();
+      if (!isExpanded(node.id)) {
+        setExpanded((prev) => new Set(prev).add(node.id));
+      } else {
+        focusNode(sortedChildren(node.id)[0]?.id);
+      }
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      if (node.kind === "folder" && isExpanded(node.id)) {
+        setExpanded((prev) => {
+          const next = new Set(prev);
+          next.delete(node.id);
+          return next;
+        });
+      } else {
+        focusNode(node.parentId ?? undefined);
+      }
+    }
+  };
+
+  const startDraftIn = (kind: DraftKind, parentId: string | null) => {
     if (parentId) {
       setExpanded((prev) => new Set(prev).add(parentId));
     }
@@ -204,7 +284,7 @@ export function FileTree({
     setDraftName("");
   };
 
-  const startDraft = (kind: "folder" | "file") => startDraftIn(kind, activeParent);
+  const startDraft = (kind: DraftKind) => startDraftIn(kind, activeParent);
 
   const submitDraft = async () => {
     if (!draft || draftName.trim().length === 0) {
@@ -216,6 +296,8 @@ export function FileTree({
     setDraftName("");
     if (draft.kind === "folder") {
       await onCreateFolder(draft.parentId, name);
+    } else if (draft.kind === "doc") {
+      await onCreateDocument(draft.parentId, name);
     } else {
       await onCreateFile(draft.parentId, name);
     }
@@ -254,7 +336,13 @@ export function FileTree({
             onChange={(event) => setDraftName(event.target.value)}
             onBlur={submitDraft}
             onKeyDown={onDraftKey}
-            placeholder={draft.kind === "folder" ? "folder name" : "name.md or name.html"}
+            placeholder={
+              draft.kind === "folder"
+                ? "folder name"
+                : draft.kind === "doc"
+                  ? "document name"
+                  : "name.md or name.html"
+            }
             className={BARE_INPUT}
           />
         </div>
@@ -262,12 +350,12 @@ export function FileTree({
     ) : null;
 
   const renderNodes = (parentId: string | null, depth: number) => {
-    const list = sortNodes(childrenByParent.get(parentId) ?? []);
+    const list = sortedChildren(parentId);
     return (
-      <ul className="flex flex-col">
+      <ul className="flex flex-col" role={depth === 0 ? "presentation" : "group"}>
         {draft?.parentId === parentId ? renderDraft(depth) : null}
         {list.map((node) => {
-          const isOpen = expanded.has(node.id);
+          const isOpen = isExpanded(node.id);
           const isSelected = node.id === selectedId;
           const isActiveFolder = node.kind === "folder" && node.id === activeFolderId;
           const isRenaming = renaming === node.id;
@@ -315,6 +403,13 @@ export function FileTree({
                   <button
                     type="button"
                     onClick={() => activate(node)}
+                    onKeyDown={(event) => onNodeKey(event, node)}
+                    data-tree-node-id={node.id}
+                    role="treeitem"
+                    aria-level={depth + 1}
+                    aria-selected={isSelected}
+                    aria-expanded={node.kind === "folder" ? isOpen : undefined}
+                    tabIndex={isSelected || (!selectedId && visibleIds[0] === node.id) ? 0 : -1}
                     className="flex h-full w-full min-w-0 cursor-pointer items-center gap-1.5 bg-transparent pr-24 text-left"
                     style={{ paddingLeft: rowPadding(depth) }}
                   >
@@ -352,6 +447,12 @@ export function FileTree({
                           onClick={() => startDraftIn("file", node.id)}
                         >
                           <FilePlus className="size-3.5" aria-hidden="true" />
+                        </ActionButton>
+                        <ActionButton
+                          label="New document in folder"
+                          onClick={() => startDraftIn("doc", node.id)}
+                        >
+                          <FileType className="size-3.5" aria-hidden="true" />
                         </ActionButton>
                         <ActionButton
                           label="New folder in folder"
@@ -402,30 +503,28 @@ export function FileTree({
             </button>
             <button
               type="button"
+              onClick={() => startDraft("doc")}
+              className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+              aria-label="New document"
+            >
+              <FileType className="size-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
               onClick={() => startDraft("folder")}
               className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
               aria-label="New folder"
             >
               <FolderPlus className="size-4" aria-hidden="true" />
             </button>
-            <label
+            <button
+              type="button"
+              onClick={() => uploadRef.current?.click()}
               className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
               aria-label="Upload asset"
             >
               <Upload className="size-4" aria-hidden="true" />
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = "";
-                  if (file) {
-                    void onUpload(activeParent, file);
-                  }
-                }}
-              />
-            </label>
+            </button>
           </div>
         ) : null}
       </div>
@@ -435,9 +534,24 @@ export function FileTree({
             {canEdit ? "No files yet — create one above." : "No files yet."}
           </p>
         ) : (
-          renderNodes(null, 0)
+          <div ref={treeRef} role="tree" aria-label="Project files">
+            {renderNodes(null, 0)}
+          </div>
         )}
       </div>
+      <input
+        ref={uploadRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+        className="hidden"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          event.target.value = "";
+          if (file) {
+            void onUpload(activeParent, file);
+          }
+        }}
+      />
     </div>
   );
 }

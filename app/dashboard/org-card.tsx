@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   type ChangeEvent,
@@ -252,9 +253,12 @@ export function OrgCard(props: OrgCardProps) {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-4">
           {mode === "view" ? (
-            <img
+            <Image
               src={iconUrl}
               alt=""
+              width={56}
+              height={56}
+              unoptimized
               className="size-14 shrink-0 rounded-lg border border-hairline bg-surface/60 object-cover"
             />
           ) : null}
@@ -408,9 +412,12 @@ export function OrgCard(props: OrgCardProps) {
             <div className="flex flex-col gap-2">
               <span className={labelClass}>Icon</span>
               <div className="flex items-center gap-3">
-                <img
+                <Image
                   src={iconUrl}
                   alt=""
+                  width={40}
+                  height={40}
+                  unoptimized
                   className="size-10 shrink-0 rounded-md border border-hairline bg-surface/60 object-cover"
                 />
                 <input

@@ -3,6 +3,7 @@
 import { useOrganizationList } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
 import { Check, Loader2, MailPlus, X } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { declineInvitation } from "@/app/dashboard/members-actions";
@@ -95,9 +96,12 @@ export function OrgInvitations() {
           const rejectBusy = busy?.id === invitation.id && busy.action === "reject";
           return (
             <li key={invitation.id} className="flex items-center gap-3 py-3">
-              <img
+              <Image
                 src={org.imageUrl}
                 alt=""
+                width={40}
+                height={40}
+                unoptimized
                 className="size-10 shrink-0 rounded-md border border-hairline object-cover"
               />
               <div className="min-w-0 flex-1">

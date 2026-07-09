@@ -32,6 +32,7 @@ import {
 import { EditorState, Prec } from "@codemirror/state";
 import {
   crosshairCursor,
+  Decoration,
   drawSelection,
   dropCursor,
   EditorView,
@@ -44,7 +45,7 @@ import {
   rectangularSelection,
   ViewPlugin,
 } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
@@ -64,6 +65,35 @@ type DocEditorProps = {
   onLimit?: () => void;
   ytext?: Y.Text;
   awareness?: Awareness;
+  commentRanges?: CommentRange[];
+  activeCommentId?: string | null;
+  focusRequest?: CommentFocusRequest | null;
+  onSelectionChange?: (selection: EditorSelectionState) => void;
+  onCommentRangeClick?: (commentId: string) => void;
+};
+
+export type DocEditorHandle = {
+  focusRange: (from: number, to: number) => void;
+};
+
+export type EditorSelectionState = {
+  from: number;
+  to: number;
+  text: string;
+};
+
+export type CommentRange = {
+  id: string;
+  from: number;
+  to: number;
+  status: "open" | "resolved";
+};
+
+export type CommentFocusRequest = {
+  id: string;
+  from: number;
+  to: number;
+  nonce: number;
 };
 
 const remoteCursorTheme = EditorView.theme({
@@ -138,20 +168,36 @@ const remoteCursorInfoPlacement = ViewPlugin.fromClass(
   },
 );
 
+const commentTheme = EditorView.theme({
+  ".cm-commentRange": {
+    borderBottom: "1px solid color-mix(in oklab, var(--accent) 70%, transparent)",
+    backgroundColor: "color-mix(in oklab, var(--accent) 12%, transparent)",
+    cursor: "pointer",
+  },
+  ".cm-commentRangeResolved": {
+    borderBottomColor: "color-mix(in oklab, var(--muted-foreground) 45%, transparent)",
+    backgroundColor: "color-mix(in oklab, var(--muted-foreground) 10%, transparent)",
+  },
+  ".cm-commentRangeActive": {
+    backgroundColor: "color-mix(in oklab, var(--accent) 22%, transparent)",
+    borderBottomColor: "var(--accent)",
+  },
+});
+
 const SEARCH_INPUT =
-  "h-7 w-48 max-w-[45vw] rounded-md border border-hairline bg-[var(--editor-control)] px-2.5 font-mono text-foreground text-xs outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-accent/50 focus:ring-1 focus:ring-ring";
-const SEARCH_ACTION_GROUP = "grid w-[246px] grid-cols-6 gap-1.5";
-const SEARCH_REPLACE_GROUP = "grid w-[246px] grid-cols-2 gap-1.5";
+  "h-8 min-w-0 flex-1 rounded-md border border-hairline bg-[var(--editor-control)] px-2.5 font-mono text-foreground text-xs outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-accent/50 focus:ring-1 focus:ring-ring sm:h-7 sm:w-48 sm:flex-none";
+const SEARCH_ACTION_GROUP = "grid min-w-0 flex-1 grid-cols-3 gap-1.5 sm:w-[246px] sm:grid-cols-6";
+const SEARCH_REPLACE_GROUP = "grid min-w-0 flex-1 grid-cols-2 gap-1.5 sm:w-[246px]";
 const SEARCH_ACTION_BTN =
-  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "flex h-8 min-w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground sm:h-7";
 const SEARCH_REPLACE_BTN =
-  "flex h-7 w-full shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] px-2 font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "flex h-8 w-full shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] px-2 font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground sm:h-7";
 const SEARCH_TOGGLE_ON =
-  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-accent/40 bg-accent/15 font-medium font-mono text-[10px] text-foreground";
+  "flex h-8 min-w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-accent/40 bg-accent/15 font-medium font-mono text-[10px] text-foreground sm:h-7";
 const SEARCH_TOGGLE_OFF =
-  "flex h-7 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground";
+  "flex h-8 min-w-9 shrink-0 cursor-pointer items-center justify-center rounded-md border border-hairline bg-[var(--editor-control)] font-medium font-mono text-[10px] text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground sm:h-7";
 const SEARCH_CLOSE =
-  "ml-auto flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive";
+  "ml-auto flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-sm text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive sm:size-7";
 
 function createStashSearchPanel(view: EditorView): Panel {
   const initial = getSearchQuery(view.state);
@@ -199,6 +245,7 @@ function createStashSearchPanel(view: EditorView): Panel {
     button.className = SEARCH_ACTION_BTN;
     button.textContent = label;
     button.title = title;
+    button.ariaLabel = title;
     button.onclick = () => {
       run(view);
       view.focus();
@@ -212,6 +259,7 @@ function createStashSearchPanel(view: EditorView): Panel {
     button.className = SEARCH_REPLACE_BTN;
     button.textContent = label;
     button.title = title;
+    button.ariaLabel = title;
     button.onclick = () => {
       run(view);
       view.focus();
@@ -287,6 +335,7 @@ function createStashSearchPanel(view: EditorView): Panel {
   );
   const closeButton = row1.lastElementChild as HTMLButtonElement;
   closeButton.className = SEARCH_CLOSE;
+  closeButton.ariaLabel = "Close find and replace";
 
   const row2 = document.createElement("div");
   row2.className = "flex flex-wrap items-center gap-1.5";
@@ -300,6 +349,8 @@ function createStashSearchPanel(view: EditorView): Panel {
 
   const dom = document.createElement("div");
   dom.className = "flex flex-col gap-2 px-3 py-2.5";
+  dom.setAttribute("role", "search");
+  dom.setAttribute("aria-label", "Find and replace");
   dom.onkeydown = (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -359,6 +410,11 @@ function editorExtensions(language: "md" | "html", collab: boolean) {
     languageExtension(language),
     editorTheme,
     EditorView.lineWrapping,
+    EditorView.contentAttributes.of({
+      "aria-label": language === "html" ? "HTML source editor" : "Markdown source editor",
+      "aria-multiline": "true",
+      role: "textbox",
+    }),
     keymap.of(editorKeymap),
     ...(collab ? [] : [history()]),
   ];
@@ -389,20 +445,32 @@ function wordBoundaryUndo(undoManager: UndoManager) {
   });
 }
 
-export function DocEditor({
-  initialContent,
-  language,
-  readOnly,
-  onChange,
-  maxContentBytes,
-  onLimit,
-  ytext,
-  awareness,
-}: DocEditorProps) {
+export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function DocEditor(
+  {
+    initialContent,
+    language,
+    readOnly,
+    onChange,
+    maxContentBytes,
+    onLimit,
+    ytext,
+    awareness,
+    commentRanges = [],
+    activeCommentId = null,
+    focusRequest = null,
+    onSelectionChange,
+    onCommentRangeClick,
+  },
+  ref,
+) {
   const parentRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onLimitRef = useRef(onLimit);
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  const onCommentRangeClickRef = useRef(onCommentRangeClick);
+  const commentRangesRef = useRef(commentRanges);
+  const activeCommentIdRef = useRef(activeCommentId);
   const initialContentRef = useRef(initialContent);
 
   useEffect(() => {
@@ -414,8 +482,46 @@ export function DocEditor({
   }, [onLimit]);
 
   useEffect(() => {
+    onSelectionChangeRef.current = onSelectionChange;
+  }, [onSelectionChange]);
+
+  useEffect(() => {
+    onCommentRangeClickRef.current = onCommentRangeClick;
+  }, [onCommentRangeClick]);
+
+  useEffect(() => {
+    commentRangesRef.current = commentRanges;
+    viewRef.current?.dispatch({});
+  }, [commentRanges]);
+
+  useEffect(() => {
+    activeCommentIdRef.current = activeCommentId;
+    viewRef.current?.dispatch({});
+  }, [activeCommentId]);
+
+  useEffect(() => {
     initialContentRef.current = initialContent;
   }, [initialContent]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      focusRange(from, to) {
+        const view = viewRef.current;
+        if (!view) {
+          return;
+        }
+        const start = Math.max(0, Math.min(from, view.state.doc.length));
+        const end = Math.max(start, Math.min(to, view.state.doc.length));
+        view.dispatch({
+          selection: { anchor: start, head: end },
+          effects: EditorView.scrollIntoView(start, { y: "center" }),
+        });
+        view.focus();
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     if (!parentRef.current) {
@@ -434,6 +540,40 @@ export function DocEditor({
         wordBoundaryUndo(undoManager),
       );
     }
+    const commentExtensions = [
+      commentTheme,
+      EditorView.decorations.of((view) => {
+        const ranges = commentRangesRef.current
+          .filter((range) => range.from < range.to && range.to <= view.state.doc.length)
+          .sort((a, b) => a.from - b.from || a.to - b.to)
+          .map((range) => {
+            const active = activeCommentIdRef.current === range.id;
+            const classes = [
+              "cm-commentRange",
+              range.status === "resolved" ? "cm-commentRangeResolved" : "",
+              active ? "cm-commentRangeActive" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return Decoration.mark({
+              class: classes,
+              attributes: { "data-comment-id": range.id },
+            }).range(range.from, range.to);
+          });
+        return Decoration.set(ranges, true);
+      }),
+      EditorView.domEventHandlers({
+        mousedown(event) {
+          const target = event.target as HTMLElement | null;
+          const marker = target?.closest<HTMLElement>("[data-comment-id]");
+          const commentId = marker?.dataset.commentId;
+          if (commentId) {
+            onCommentRangeClickRef.current?.(commentId);
+          }
+          return false;
+        },
+      }),
+    ];
     const view = new EditorView({
       doc: collab ? (ytext?.toString() ?? "") : initialContentRef.current,
       parent: parentRef.current,
@@ -452,15 +592,30 @@ export function DocEditor({
               return [];
             })
           : [],
+        ...commentExtensions,
         ...collabExtensions,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChangeRef.current(update.state.doc.toString());
           }
+          if (update.selectionSet || update.docChanged) {
+            const selection = update.state.selection.main;
+            onSelectionChangeRef.current?.({
+              from: selection.from,
+              to: selection.to,
+              text: update.state.sliceDoc(selection.from, selection.to),
+            });
+          }
         }),
       ],
     });
     viewRef.current = view;
+    const selection = view.state.selection.main;
+    onSelectionChangeRef.current?.({
+      from: selection.from,
+      to: selection.to,
+      text: view.state.sliceDoc(selection.from, selection.to),
+    });
     return () => {
       viewRef.current = null;
       view.destroy();
@@ -479,5 +634,21 @@ export function DocEditor({
     }
   }, [initialContent, ytext, awareness]);
 
+  useEffect(() => {
+    if (focusRequest) {
+      const view = viewRef.current;
+      if (!view) {
+        return;
+      }
+      const start = Math.max(0, Math.min(focusRequest.from, view.state.doc.length));
+      const end = Math.max(start, Math.min(focusRequest.to, view.state.doc.length));
+      view.dispatch({
+        selection: { anchor: start, head: end },
+        effects: EditorView.scrollIntoView(start, { y: "center" }),
+      });
+      view.focus();
+    }
+  }, [focusRequest]);
+
   return <div ref={parentRef} className="h-full overflow-hidden" />;
-}
+});

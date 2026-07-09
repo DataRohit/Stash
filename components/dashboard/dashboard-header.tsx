@@ -4,6 +4,7 @@ import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
 import { Plus } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { NotificationBell } from "@/components/dashboard/notification-bell";
 import { PlanBadge } from "@/components/dashboard/plan-badge";
 import { ThemeToggle } from "@/components/landing/theme-toggle";
 import { buttonVariants } from "@/components/ui/button";
@@ -81,6 +82,7 @@ export function DashboardHeader({ isPro, planPeriod, periodEnd, canceled }: Dash
               periodEnd={periodEnd}
               canceled={canceled}
             />
+            <NotificationBell />
             <span className="hidden h-5 w-px shrink-0 bg-hairline sm:block" aria-hidden="true" />
             <Link
               href="/onboarding"

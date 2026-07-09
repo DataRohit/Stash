@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery } from "convex/react";
 import { Check, Loader2, UserPlus, X } from "lucide-react";
+import Image from "next/image";
 import { useState } from "react";
 import { RoleBadge } from "@/components/dashboard/role-badge";
 import { Button } from "@/components/ui/button";
@@ -95,9 +96,12 @@ export function ProjectAccessManager({
           return (
             <li key={person.id} className="flex items-center gap-3 py-3">
               {person.imageUrl ? (
-                <img
+                <Image
                   src={person.imageUrl}
                   alt=""
+                  width={36}
+                  height={36}
+                  unoptimized
                   className="size-9 shrink-0 rounded-md border border-hairline object-cover"
                 />
               ) : (
