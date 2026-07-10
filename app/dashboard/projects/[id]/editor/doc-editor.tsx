@@ -1,5 +1,6 @@
 "use client";
 
+import type { CompletionContext } from "@codemirror/autocomplete";
 import {
   autocompletion,
   closeBrackets,
@@ -55,6 +56,7 @@ import {
   editorTheme,
   languageExtension,
 } from "@/app/dashboard/projects/[id]/editor/lib/editor-theme";
+import { pathOf, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 
 type DocEditorProps = {
   initialContent: string;
@@ -70,6 +72,8 @@ type DocEditorProps = {
   focusRequest?: CommentFocusRequest | null;
   onSelectionChange?: (selection: EditorSelectionState) => void;
   onCommentRangeClick?: (commentId: string) => void;
+  fileNode?: TreeNode;
+  nodes?: TreeNode[];
 };
 
 export type DocEditorHandle = {
@@ -373,7 +377,54 @@ function createStashSearchPanel(view: EditorView): Panel {
   };
 }
 
-function editorExtensions(language: "md" | "html", collab: boolean) {
+function relativePath(from: TreeNode, to: TreeNode, nodes: TreeNode[]): string {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const fromParts = pathOf(from, byId).split("/").filter(Boolean).slice(0, -1);
+  const toParts = pathOf(to, byId).split("/").filter(Boolean);
+  while (fromParts[0] && fromParts[0] === toParts[0]) {
+    fromParts.shift();
+    toParts.shift();
+  }
+  return [...fromParts.map(() => ".."), ...toParts].join("/") || to.name;
+}
+
+function fileCompletions(language: "md" | "html", fileNode?: TreeNode, nodes: TreeNode[] = []) {
+  return (context: CompletionContext) => {
+    if (!fileNode) {
+      return null;
+    }
+    const before = context.state.sliceDoc(0, context.pos);
+    const match =
+      language === "md" ? /\]\(([^)\s]*)$/.exec(before) : /(?:href|src)="([^"]*)$/.exec(before);
+    if (!match) {
+      return null;
+    }
+    const from = context.pos - (match[1]?.length ?? 0);
+    const options = nodes
+      .filter((node) => node.kind !== "folder" && node.id !== fileNode.id)
+      .sort((a, b) => {
+        const sameParent =
+          Number(b.parentId === fileNode.parentId) - Number(a.parentId === fileNode.parentId);
+        return sameParent || a.name.localeCompare(b.name);
+      })
+      .map((node) => ({
+        label: relativePath(fileNode, node, nodes),
+        detail:
+          node.parentId === fileNode.parentId
+            ? "Same folder"
+            : pathOf(node, new Map(nodes.map((item) => [item.id, item]))),
+        type: node.kind === "asset" ? "image" : "file",
+      }));
+    return { from, options, validFor: /[^)"\s]*/ };
+  };
+}
+
+function editorExtensions(
+  language: "md" | "html",
+  collab: boolean,
+  fileNode?: TreeNode,
+  nodes?: TreeNode[],
+) {
   const editorKeymap = [
     closeBracketsKeymap,
     defaultKeymap,
@@ -401,7 +452,7 @@ function editorExtensions(language: "md" | "html", collab: boolean) {
     syntaxHighlighting(editorHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
-    autocompletion(),
+    autocompletion({ override: [fileCompletions(language, fileNode, nodes)] }),
     rectangularSelection(),
     crosshairCursor(),
     search({ top: true, createPanel: createStashSearchPanel }),
@@ -460,6 +511,8 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
     focusRequest = null,
     onSelectionChange,
     onCommentRangeClick,
+    fileNode,
+    nodes,
   },
   ref,
 ) {
@@ -578,7 +631,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
       doc: collab ? (ytext?.toString() ?? "") : initialContentRef.current,
       parent: parentRef.current,
       extensions: [
-        ...editorExtensions(language, collab),
+        ...editorExtensions(language, collab, fileNode, nodes),
         EditorState.readOnly.of(readOnly),
         maxContentBytes
           ? EditorState.transactionFilter.of((transaction) => {
@@ -621,7 +674,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
       view.destroy();
       undoManager?.destroy();
     };
-  }, [language, maxContentBytes, readOnly, ytext, awareness]);
+  }, [language, maxContentBytes, readOnly, ytext, awareness, fileNode, nodes]);
 
   useEffect(() => {
     const view = viewRef.current;

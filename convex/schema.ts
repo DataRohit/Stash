@@ -101,6 +101,7 @@ const schema = defineSchema({
     authorUserId: v.optional(v.string()),
     authorName: v.optional(v.string()),
     authorEmail: v.optional(v.string()),
+    previewText: v.optional(v.string()),
     createdAt: v.optional(v.number()),
     expiresAt: v.optional(v.number()),
     sizeBytes: v.optional(v.number()),

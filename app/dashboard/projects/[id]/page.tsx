@@ -21,6 +21,7 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
   const { id } = await params;
   const project = await fetchProject(id);
+
   if (!project || project.clerkOrgId !== orgId) {
     notFound();
   }

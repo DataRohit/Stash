@@ -1,4 +1,6 @@
+import * as Y from "yjs";
 import {
+  escapeHtml,
   injectMermaid,
   renderInner,
   renderMermaid,
@@ -17,6 +19,8 @@ export type BundleNode = {
   mimeType: string | null;
   assetUrl: string | null;
 };
+
+type RichNode = Y.XmlFragment | Y.XmlElement | Y.XmlText;
 
 const EMPTY_LINKS: Record<string, string> = {};
 
@@ -113,12 +117,117 @@ async function buildExportHtml(
   fileNode: TreeNode,
   content: string,
   nodes: TreeNode[],
+  richContentState: ArrayBuffer | null,
 ): Promise<string> {
+  if (fileNode.fileType === "doc") {
+    return standaloneHtml(richDocumentInner(richContentState, content), true, stem(fileNode.name));
+  }
   const { inner, isMd, blocks } = renderInner(fileNode, content, nodes, EMPTY_LINKS);
-  const svgs = await renderMermaid(blocks);
+  const svgs = await renderMermaid(blocks, "default");
   const withMermaid = injectMermaid(inner, svgs);
   const inlined = await inlineAssets(withMermaid, nodes);
   return standaloneHtml(inlined, isMd, stem(fileNode.name));
+}
+
+function attributes(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function textHtml(node: Y.XmlText): string {
+  let output = "";
+  for (const op of node.toDelta() as Array<{ insert?: unknown; attributes?: unknown }>) {
+    if (typeof op.insert !== "string") {
+      continue;
+    }
+    const attrs = attributes(op.attributes);
+    let text = escapeHtml(op.insert);
+    if (attrs.code) {
+      text = `<code>${text}</code>`;
+    }
+    if (attrs.bold || attrs.strong) {
+      text = `<strong>${text}</strong>`;
+    }
+    if (attrs.italic || attrs.em) {
+      text = `<em>${text}</em>`;
+    }
+    if (attrs.strike) {
+      text = `<s>${text}</s>`;
+    }
+    output += text;
+  }
+  return output;
+}
+
+function plainText(node: RichNode): string {
+  if (node instanceof Y.XmlText) {
+    return (node.toDelta() as Array<{ insert?: unknown }>)
+      .map((op) => (typeof op.insert === "string" ? op.insert : ""))
+      .join("");
+  }
+  return node
+    .toArray()
+    .map((child) => plainText(child as RichNode))
+    .join("");
+}
+
+function childrenHtml(node: Y.XmlElement | Y.XmlFragment): string {
+  return node
+    .toArray()
+    .map((child) => richNodeHtml(child as RichNode))
+    .join("");
+}
+
+function richNodeHtml(node: RichNode): string {
+  if (node instanceof Y.XmlText) {
+    return textHtml(node);
+  }
+  if (!(node instanceof Y.XmlElement)) {
+    return childrenHtml(node);
+  }
+  const inner = childrenHtml(node);
+  if (node.nodeName === "paragraph") {
+    return `<p>${inner || "<br>"}</p>`;
+  }
+  if (node.nodeName === "heading") {
+    const level = Number(node.getAttribute("level"));
+    const tag = Number.isFinite(level) ? Math.min(6, Math.max(1, level)) : 1;
+    return `<h${tag}>${inner}</h${tag}>`;
+  }
+  if (node.nodeName === "bulletList" || node.nodeName === "bullet_list") {
+    return `<ul>${inner}</ul>`;
+  }
+  if (node.nodeName === "orderedList" || node.nodeName === "ordered_list") {
+    return `<ol>${inner}</ol>`;
+  }
+  if (node.nodeName === "listItem" || node.nodeName === "list_item") {
+    return `<li>${inner}</li>`;
+  }
+  if (node.nodeName === "blockquote") {
+    return `<blockquote>${inner}</blockquote>`;
+  }
+  if (node.nodeName === "codeBlock" || node.nodeName === "code_block") {
+    return `<pre class="code"><code>${escapeHtml(plainText(node))}</code></pre>`;
+  }
+  if (node.nodeName === "horizontalRule" || node.nodeName === "horizontal_rule") {
+    return "<hr>";
+  }
+  if (node.nodeName === "hardBreak" || node.nodeName === "hard_break") {
+    return "<br>";
+  }
+  return inner;
+}
+
+function richDocumentInner(contentState: ArrayBuffer | null, fallback: string): string {
+  if (!contentState) {
+    return `<p>${escapeHtml(fallback).replace(/\n/g, "<br>")}</p>`;
+  }
+  const ydoc = new Y.Doc();
+  try {
+    Y.applyUpdate(ydoc, new Uint8Array(contentState));
+    return childrenHtml(ydoc.getXmlFragment("prosemirror")) || "<p><br></p>";
+  } finally {
+    ydoc.destroy();
+  }
 }
 
 export function exportMarkdown(fileNode: TreeNode, content: string): void {
@@ -129,8 +238,9 @@ export async function exportHtml(
   fileNode: TreeNode,
   content: string,
   nodes: TreeNode[],
+  richContentState: ArrayBuffer | null = null,
 ): Promise<void> {
-  const html = await buildExportHtml(fileNode, content, nodes);
+  const html = await buildExportHtml(fileNode, content, nodes, richContentState);
   download(`${stem(fileNode.name)}.html`, html, "text/html;charset=utf-8");
 }
 
@@ -198,8 +308,9 @@ export async function exportPdf(
   fileNode: TreeNode,
   content: string,
   nodes: TreeNode[],
+  richContentState: ArrayBuffer | null = null,
 ): Promise<void> {
-  const html = await buildExportHtml(fileNode, content, nodes);
+  const html = await buildExportHtml(fileNode, content, nodes, richContentState);
   await printHtml(html);
 }
 

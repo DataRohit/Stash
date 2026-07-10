@@ -4,9 +4,12 @@ import { useQuery } from "convex/react";
 import { FileText, Globe2, Loader2, LockKeyhole } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
+import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
+import { RichDocPreview } from "@/app/dashboard/projects/[id]/editor/rich-doc-preview";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 
 type SharedDocumentViewProps = {
@@ -41,6 +44,26 @@ export function SharedDocumentView({ token }: SharedDocumentViewProps) {
     }
     return Object.fromEntries(shared.fileLinks.map((row) => [row.documentId, row.href]));
   }, [shared]);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.source !== frameRef.current?.contentWindow) {
+        return;
+      }
+      if (event.data?.type === "stash-missing-ref") {
+        const toast = missingRefToast(event.data.ref);
+        notify.error(toast.title, { description: toast.description });
+      }
+      if (event.data?.type === "stash-open-doc") {
+        notify.info("File not shared", {
+          description: "The linked file exists in this project but is not part of this share link.",
+        });
+      }
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, []);
 
   if (shared === undefined) {
     return (
@@ -116,12 +139,17 @@ export function SharedDocumentView({ token }: SharedDocumentViewProps) {
         </span>
       </header>
       <section className="editor-surface min-h-0 flex-1 overflow-hidden rounded-lg">
-        <DocPreview
-          fileNode={fileNode}
-          content={content}
-          nodes={nodes}
-          fileLinkById={fileLinkById}
-        />
+        {fileNode.fileType === "doc" ? (
+          <RichDocPreview contentState={shared.contentState ?? null} fallbackContent={content} />
+        ) : (
+          <DocPreview
+            fileNode={fileNode}
+            content={content}
+            nodes={nodes}
+            iframeRef={frameRef}
+            fileLinkById={fileLinkById}
+          />
+        )}
       </section>
     </main>
   );

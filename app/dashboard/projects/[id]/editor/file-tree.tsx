@@ -35,7 +35,7 @@ type FileTreeProps = {
   onCreateDocument: (parentId: string | null, name: string) => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onRemove: (node: TreeNode) => Promise<void>;
-  onUpload: (parentId: string | null, file: File) => Promise<void>;
+  onUpload: (parentId: string | null, files: File[]) => Promise<void>;
 };
 
 type DraftKind = "folder" | "file" | "doc";
@@ -404,6 +404,19 @@ export function FileTree({
                     type="button"
                     onClick={() => activate(node)}
                     onKeyDown={(event) => onNodeKey(event, node)}
+                    onDragOver={
+                      canEdit && node.kind === "folder"
+                        ? (event) => event.preventDefault()
+                        : undefined
+                    }
+                    onDrop={
+                      canEdit && node.kind === "folder"
+                        ? (event) => {
+                            event.preventDefault();
+                            void onUpload(node.id, [...event.dataTransfer.files]);
+                          }
+                        : undefined
+                    }
                     data-tree-node-id={node.id}
                     role="treeitem"
                     aria-level={depth + 1}
@@ -521,7 +534,7 @@ export function FileTree({
               type="button"
               onClick={() => uploadRef.current?.click()}
               className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-              aria-label="Upload asset"
+              aria-label="Upload files"
             >
               <Upload className="size-4" aria-hidden="true" />
             </button>
@@ -534,7 +547,20 @@ export function FileTree({
             {canEdit ? "No files yet — create one above." : "No files yet."}
           </p>
         ) : (
-          <div ref={treeRef} role="tree" aria-label="Project files">
+          <div
+            ref={treeRef}
+            role="tree"
+            aria-label="Project files"
+            onDragOver={canEdit ? (event) => event.preventDefault() : undefined}
+            onDrop={
+              canEdit
+                ? (event) => {
+                    event.preventDefault();
+                    void onUpload(activeParent, [...event.dataTransfer.files]);
+                  }
+                : undefined
+            }
+          >
             {renderNodes(null, 0)}
           </div>
         )}
@@ -542,13 +568,14 @@ export function FileTree({
       <input
         ref={uploadRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,.md,.markdown,.html,.htm,.txt,text/markdown,text/plain,text/html"
+        multiple
         className="hidden"
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          const files = event.target.files ? [...event.target.files] : [];
           event.target.value = "";
-          if (file) {
-            void onUpload(activeParent, file);
+          if (files.length > 0) {
+            void onUpload(activeParent, files);
           }
         }}
       />

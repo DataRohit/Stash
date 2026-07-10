@@ -273,7 +273,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
       </Link>
 
       <section className="glass w-full rounded-lg p-6 sm:p-8">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
             {mode === "view" ? (
               <Image
@@ -294,19 +294,19 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
           </div>
 
           {!deleteOpen ? (
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
               {mode === "view" ? (
                 <>
                   <Link
                     href={`/dashboard/projects/${project.id}/editor`}
-                    className={cn(buttonVariants({ variant: "primary" }), "w-40")}
+                    className={cn(buttonVariants({ variant: "primary" }), "w-full sm:w-40")}
                   >
                     <SquarePen className="size-4" aria-hidden="true" />
                     Open editor
                   </Link>
                   <Button
                     variant="secondary"
-                    className="w-40"
+                    className="w-full sm:w-40"
                     onClick={handleExportZip}
                     disabled={exportingZip}
                   >
@@ -319,13 +319,13 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                   </Button>
                   {isAdmin ? (
                     <>
-                      <Button variant="secondary" className="w-40" onClick={beginEdit}>
+                      <Button variant="secondary" className="w-full sm:w-40" onClick={beginEdit}>
                         <Pencil className="size-4" aria-hidden="true" />
                         Edit details
                       </Button>
                       <Button
                         variant="destructive"
-                        className="w-40"
+                        className="w-full sm:w-40"
                         onClick={() => setDeleteOpen(true)}
                       >
                         <Trash2 className="size-4" aria-hidden="true" />
@@ -339,7 +339,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                   <Button
                     type="button"
                     variant="secondary"
-                    className="w-40"
+                    className="w-full sm:w-40"
                     onClick={() => setMode("view")}
                     disabled={saving}
                   >
@@ -348,7 +348,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                   <Button
                     type="submit"
                     form="project-edit-form"
-                    className="w-40"
+                    className="w-full sm:w-40"
                     disabled={saving || draftTitle.trim().length < 2}
                   >
                     <Check className="size-4" aria-hidden="true" />

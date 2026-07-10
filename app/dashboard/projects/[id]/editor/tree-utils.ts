@@ -43,7 +43,17 @@ export function resolveRef(fromNode: TreeNode, ref: string, nodes: TreeNode[]): 
   }
   const absolute = `/${segments.join("/")}`;
   const target = nodes.find((node) => pathOf(node, byId) === absolute);
-  return target ?? null;
+  if (target) {
+    return target;
+  }
+  const basename = segments.at(-1);
+  if (basename) {
+    const matches = nodes.filter((node) => node.kind !== "folder" && node.name === basename);
+    if (matches.length === 1) {
+      return matches[0] ?? null;
+    }
+  }
+  return null;
 }
 
 export function sortNodes(nodes: TreeNode[]): TreeNode[] {

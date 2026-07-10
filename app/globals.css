@@ -547,6 +547,22 @@ html.theme-transition::view-transition-new(root) {
   outline: none;
 }
 
+.stash-rich-comment {
+  border-bottom: 1px solid color-mix(in oklab, var(--accent) 70%, transparent);
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  cursor: pointer;
+}
+
+.stash-rich-comment-resolved {
+  border-bottom-color: color-mix(in oklab, var(--muted-foreground) 45%, transparent);
+  background: color-mix(in oklab, var(--muted-foreground) 10%, transparent);
+}
+
+.stash-rich-comment-active {
+  border-bottom-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 22%, transparent);
+}
+
 .tiptap-doc-content p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
   float: left;

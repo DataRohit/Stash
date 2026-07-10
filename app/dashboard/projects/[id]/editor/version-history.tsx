@@ -36,7 +36,7 @@ type VersionHistoryModalProps = {
   fileNode: TreeNode;
   nodes: TreeNode[];
   currentContent: string;
-  language: "md" | "html";
+  language: "md" | "html" | "doc";
   canCheckpoint: boolean;
   canManage: boolean;
   onClose: () => void;
@@ -231,6 +231,7 @@ export function VersionHistoryModal({
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const isRichText = language === "doc";
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -474,7 +475,7 @@ export function VersionHistoryModal({
                     onClick={() => setTab("compare")}
                   />
                 </div>
-                {tab === "file" ? (
+                {tab === "file" && !isRichText ? (
                   <div className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                     {(
                       [
@@ -521,7 +522,20 @@ export function VersionHistoryModal({
               <div className="relative min-h-0 flex-1">
                 {tab === "file" ? (
                   preview ? (
-                    fileMode === "preview" ? (
+                    isRichText ? (
+                      <div className="flex size-full flex-col">
+                        <p className="shrink-0 border-hairline border-b px-3 py-2 text-muted-foreground text-xs">
+                          Text approximation of this rich document.
+                        </p>
+                        <DocEditor
+                          key={`text:${selected}`}
+                          initialContent={preview.content}
+                          language="md"
+                          readOnly
+                          onChange={noop}
+                        />
+                      </div>
+                    ) : fileMode === "preview" ? (
                       <DocPreview fileNode={fileNode} content={preview.content} nodes={nodes} />
                     ) : (
                       <DocEditor
@@ -539,11 +553,20 @@ export function VersionHistoryModal({
 
                 {tab === "diff" ? (
                   preview ? (
-                    <DiffView
-                      original={preview.content}
-                      modified={currentContent}
-                      language={language}
-                    />
+                    <div className="flex size-full flex-col">
+                      {isRichText ? (
+                        <p className="shrink-0 border-hairline border-b px-3 py-2 text-muted-foreground text-xs">
+                          Text approximation of this rich document.
+                        </p>
+                      ) : null}
+                      <div className="min-h-0 flex-1">
+                        <DiffView
+                          original={preview.content}
+                          modified={currentContent}
+                          language={language}
+                        />
+                      </div>
+                    </div>
                   ) : (
                     <LoadingPane label="Loading diff..." />
                   )
@@ -551,11 +574,20 @@ export function VersionHistoryModal({
 
                 {tab === "compare" ? (
                   basePreview && comparePreview ? (
-                    <DiffView
-                      original={basePreview.content}
-                      modified={comparePreview.content}
-                      language={language}
-                    />
+                    <div className="flex size-full flex-col">
+                      {isRichText ? (
+                        <p className="shrink-0 border-hairline border-b px-3 py-2 text-muted-foreground text-xs">
+                          Text approximation of this rich document.
+                        </p>
+                      ) : null}
+                      <div className="min-h-0 flex-1">
+                        <DiffView
+                          original={basePreview.content}
+                          modified={comparePreview.content}
+                          language={language}
+                        />
+                      </div>
+                    </div>
                   ) : (
                     <LoadingPane label="Loading diff..." />
                   )

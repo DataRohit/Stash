@@ -167,11 +167,20 @@ export async function createProjectDoc(
 }
 
 export async function fetchProject(projectId: string) {
-  const client = await authedClient();
-  if (!client) {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  if (!url) {
     return null;
   }
-  return await client.query(api.projects.get, { projectId: projectId as Id<"projects"> });
+  const { getToken } = await auth();
+  const token = await getToken({ template: "convex" });
+  const client = new ConvexHttpClient(url);
+  if (token) {
+    client.setAuth(token);
+  }
+  const result = await client.query(api.projects.get, {
+    projectId: projectId as Id<"projects">,
+  });
+  return result;
 }
 
 export async function setOrgPlanLimits(

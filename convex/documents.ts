@@ -44,6 +44,12 @@ export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+
 function cleanName(raw: string, fallback?: string): string {
   const name = raw.replaceAll("/", "").replaceAll("\\", "").trim().slice(0, MAX_NAME_LENGTH).trim();
   const stem = name.split(".")[0]?.toLowerCase() ?? "";
@@ -71,6 +77,20 @@ function fileTypeFromName(name: string): "md" | "html" | null {
     return "html";
   }
   return null;
+}
+
+function importName(raw: string): string {
+  const name = cleanName(raw, "import.md");
+  if (/\.markdown$/i.test(name)) {
+    return `${name.slice(0, -9)}.md`;
+  }
+  if (/\.htm$/i.test(name)) {
+    return `${name.slice(0, -4)}.html`;
+  }
+  if (/\.txt$/i.test(name)) {
+    return `${name.slice(0, -4)}.md`;
+  }
+  return name;
 }
 
 async function callerFor(ctx: QueryCtx, clerkOrgId: string) {
@@ -712,6 +732,92 @@ export const createDocument = mutation({
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+export const importDocuments = mutation({
+  args: {
+    projectId: v.id("projects"),
+    parentId: v.union(v.id("documents"), v.null()),
+    files: v.array(v.object({ name: v.string(), content: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    if (args.files.length === 0 || args.files.length > 100) {
+      throw new Error("invalid-import");
+    }
+    const access = await requireProjectAccess(ctx, args.projectId);
+    await assertParent(ctx, args.projectId, args.parentId);
+    if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) {
+      throw new Error("too-deep");
+    }
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    if (docs.filter((doc) => !doc.deletingAt).length + args.files.length > MAX_NODES_PER_PROJECT) {
+      throw new Error("too-many-nodes");
+    }
+    const siblings = new Set(
+      (await childrenOf(ctx, args.projectId, args.parentId))
+        .filter((doc) => !doc.deletingAt)
+        .map((doc) => doc.name.toLowerCase()),
+    );
+    const prepared = args.files.map((file) => {
+      const name = importName(file.name);
+      const fileType = fileTypeFromName(name);
+      const size = byteLength(file.content);
+      if (!fileType) {
+        throw new Error("invalid-type");
+      }
+      if (size > MAX_FILE_BYTES) {
+        throw new Error("file-too-large");
+      }
+      let candidate = name;
+      const dot = name.lastIndexOf(".");
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const extension = dot > 0 ? name.slice(dot) : "";
+      for (let index = 2; siblings.has(candidate.toLowerCase()); index += 1) {
+        candidate = `${stem}-${index}${extension}`;
+        if (index >= 10_000) {
+          throw new Error("too-many-nodes");
+        }
+      }
+      siblings.add(candidate.toLowerCase());
+      return { name: candidate, fileType, content: file.content, size };
+    });
+    const addedBytes = prepared.reduce((sum, file) => sum + file.size, 0);
+    const usedBytes = await cachedProjectBytes(ctx, access.project);
+    if (usedBytes + addedBytes > (await maxProjectBytes(ctx, access.project))) {
+      throw new Error("project-full");
+    }
+    const now = Date.now();
+    const ids = [];
+    for (const file of prepared) {
+      const ydoc = new Y.Doc();
+      ydoc.getText("codemirror").insert(0, file.content);
+      const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+      ydoc.destroy();
+      const id = await ctx.db.insert("documents", {
+        projectId: args.projectId,
+        clerkOrgId: access.project.clerkOrgId,
+        parentId: args.parentId,
+        kind: "file",
+        name: file.name,
+        fileType: file.fileType,
+        content: file.content,
+        contentSeq: 1,
+        contentState: state,
+        storageId: null,
+        mimeType: null,
+        size: file.size,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await ctx.db.insert("yjsUpdates", { documentId: id, seq: 1, update: state, createdAt: now });
+      ids.push(id);
+    }
+    await addProjectBytes(ctx, access.project, addedBytes);
+    return ids;
   },
 });
 

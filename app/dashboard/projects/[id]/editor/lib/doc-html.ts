@@ -93,7 +93,7 @@ function missingAssetSrc(ref: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-function iframeCsp(nonce: string): string {
+function iframeCspMd(nonce: string): string {
   return [
     "default-src 'none'",
     "base-uri 'none'",
@@ -109,10 +109,32 @@ function iframeCsp(nonce: string): string {
   ].join("; ");
 }
 
+function iframeCspHtml(): string {
+  return [
+    "default-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "img-src https: data: blob:",
+    "media-src https: data: blob:",
+    "font-src https: data:",
+    "connect-src https:",
+    "style-src 'unsafe-inline' https:",
+    "script-src 'unsafe-inline' https:",
+  ].join("; ");
+}
+
 function previewScript(): string {
   return `
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
+    return;
+  }
+  const missing = event.target.closest("a[data-missing-ref]");
+  if (missing) {
+    event.preventDefault();
+    parent.postMessage({ type: "stash-missing-ref", ref: missing.getAttribute("data-missing-ref") }, "*");
     return;
   }
   const link = event.target.closest("a[data-doc-id]");
@@ -122,6 +144,17 @@ document.addEventListener("click", (event) => {
   }
 });
 `;
+}
+
+export function missingRefToast(ref: unknown): { title: string; description: string } {
+  const raw = typeof ref === "string" ? ref.trim() : "";
+  const label = raw.length > 80 ? `${raw.slice(0, 77)}...` : raw;
+  return {
+    title: "Link target not found",
+    description: label
+      ? `"${label}" does not match any file or asset in this project. Check the path and file name.`
+      : "This link does not match any file or asset in this project.",
+  };
 }
 
 function previewNonce(): string {
@@ -161,6 +194,7 @@ function rewriteRefs(
   fromNode: TreeNode,
   nodes: TreeNode[],
   fileLinkById: Record<string, string>,
+  markMissing: boolean,
 ): string {
   const doc = new DOMParser().parseFromString(rawHtml, "text/html");
   for (const img of doc.querySelectorAll("img[src], source[src]")) {
@@ -181,6 +215,7 @@ function rewriteRefs(
       const fileLink = fileLinkById[target.id];
       if (fileLink) {
         anchor.setAttribute("href", fileLink);
+        anchor.setAttribute("target", "_top");
       } else {
         anchor.setAttribute("href", "#");
         anchor.setAttribute("data-doc-id", target.id);
@@ -191,11 +226,20 @@ function rewriteRefs(
       anchor.setAttribute("rel", "noopener noreferrer");
     } else if (href && !isExternalRef(href)) {
       anchor.setAttribute("href", "#");
-      anchor.setAttribute("class", `${anchor.getAttribute("class") ?? ""} missing-ref`.trim());
       anchor.setAttribute("title", `Missing file or asset: ${href}`);
+      anchor.setAttribute("data-missing-ref", href);
+      if (markMissing) {
+        anchor.setAttribute("class", `${anchor.getAttribute("class") ?? ""} missing-ref`.trim());
+      }
+    } else if (/^https?:/i.test(href)) {
+      anchor.setAttribute("target", "_blank");
+      anchor.setAttribute("rel", "noopener noreferrer");
     }
   }
-  return doc.body.innerHTML;
+  const headAssets = Array.from(doc.head.querySelectorAll("style, link, script"))
+    .map((element) => element.outerHTML)
+    .join("");
+  return headAssets + doc.body.innerHTML;
 }
 
 export type RenderedInner = { inner: string; isMd: boolean; blocks: MermaidBlock[] };
@@ -215,18 +259,16 @@ export function renderInner(
         return `<div class="mermaid-diagram" data-mmd="${id}"><pre class="mermaid">${escapeHtml(source)}</pre></div>`;
       }).parse(content) as string)
     : content;
-  return { inner: rewriteRefs(parsed, fileNode, nodes, fileLinkById), isMd, blocks };
+  return { inner: rewriteRefs(parsed, fileNode, nodes, fileLinkById, isMd), isMd, blocks };
 }
 
-let mermaidReady = false;
-
-export async function renderMermaid(blocks: MermaidBlock[]): Promise<Map<string, string>> {
+export async function renderMermaid(
+  blocks: MermaidBlock[],
+  theme: "dark" | "default" = "dark",
+): Promise<Map<string, string>> {
   const mod = await import("mermaid");
   const mermaid = mod.default;
-  if (!mermaidReady) {
-    mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
-    mermaidReady = true;
-  }
+  mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
   const results = new Map<string, string>();
   for (const block of blocks) {
     try {
@@ -252,11 +294,13 @@ export function injectMermaid(inner: string, svgs: Map<string, string>): string 
 }
 
 export function previewSrcDoc(inner: string, isMd: boolean): string {
-  const css = isMd ? PREVIEW_MD_CSS : PREVIEW_HTML_CSS;
-  const body = isMd ? `<div class="doc">${inner}</div>` : inner;
-  const nonce = previewNonce();
+  const meta = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`;
   const script = previewScript();
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${iframeCsp(nonce)}"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${css}</style></head><body>${body}<script nonce="${nonce}">${script}</script></body></html>`;
+  if (isMd) {
+    const nonce = previewNonce();
+    return `<!doctype html><html><head>${meta}<meta http-equiv="Content-Security-Policy" content="${iframeCspMd(nonce)}"><style>${PREVIEW_MD_CSS}</style></head><body><div class="doc">${inner}</div><script nonce="${nonce}">${script}</script></body></html>`;
+  }
+  return `<!doctype html><html><head>${meta}<meta http-equiv="Content-Security-Policy" content="${iframeCspHtml()}"><style>${PREVIEW_HTML_CSS}</style></head><body>${inner}<script>${script}</script></body></html>`;
 }
 
 export function standaloneHtml(inner: string, isMd: boolean, title: string): string {

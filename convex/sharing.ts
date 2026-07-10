@@ -373,6 +373,7 @@ export const getSharedDocument = query({
       documentName: doc.name,
       fileType: doc.fileType,
       content: doc.content,
+      contentState: doc.contentState ?? null,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,

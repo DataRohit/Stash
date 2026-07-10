@@ -63,7 +63,7 @@ export function DocPreview({
       ref={iframeRef}
       title="Document preview"
       srcDoc={srcDoc}
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-popups allow-top-navigation-by-user-activation"
       className="size-full border-0 bg-white"
     />
   );

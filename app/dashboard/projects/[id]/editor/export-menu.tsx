@@ -21,11 +21,18 @@ type ExportMenuProps = {
   fileNode: TreeNode;
   content: string;
   nodes: TreeNode[];
+  richContentState?: ArrayBuffer | null;
 };
 
 type Action = "md" | "html" | "pdf" | "zip";
 
-export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuProps) {
+export function ExportMenu({
+  projectId,
+  fileNode,
+  content,
+  nodes,
+  richContentState = null,
+}: ExportMenuProps) {
   const convex = useConvex();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Action | null>(null);
@@ -119,7 +126,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuPr
             hint=".html"
             loading={busy === "html"}
             disabled={Boolean(busy)}
-            onClick={() => run("html", () => exportHtml(fileNode, content, nodes))}
+            onClick={() =>
+              run("html", () => exportHtml(fileNode, content, nodes, richContentState))
+            }
           />
           <ExportItem
             icon={<Printer className="size-4 text-warning" aria-hidden="true" />}
@@ -127,7 +136,7 @@ export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuPr
             hint="print"
             loading={busy === "pdf"}
             disabled={Boolean(busy)}
-            onClick={() => run("pdf", () => exportPdf(fileNode, content, nodes))}
+            onClick={() => run("pdf", () => exportPdf(fileNode, content, nodes, richContentState))}
           />
           <div className="my-1 h-px bg-hairline" />
           <p className="px-2 py-1.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">

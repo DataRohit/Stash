@@ -6,24 +6,23 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Biome](https://img.shields.io/badge/Biome-2-60A5FA?logo=biome&logoColor=white)](https://biomejs.dev)
 
-**A collaborative workspace for Markdown and HTML documents.**
+**A collaborative workspace for Markdown, HTML, and rich-text documents.**
 
-Stash lets you host your documents — documentation, planning docs, notes, or anything written in Markdown or HTML — and organize them into projects with nested folders. Invite collaborators, share read-only links, keep a full version history, and edit the same file together in real time.
+Stash organizes documentation, planning notes, and web content into projects with nested folders. Work in Markdown, HTML, or rich text; collaborate on the same file in real time; review version history; and share read-only links when the document is ready.
 
 ## Features
 
-- **Markdown & HTML documents** — host documentation, plans, notes, or any Markdown/HTML content.
-- **Projects, folders & nesting** — group documents into projects, with nested folders and files inside each.
-- **Organizations** — every workspace lives in an organization; your plan sets how many you can create, and each has a custom name, description, tags, and icon.
-- **File limits** — per-plan quotas on the number and size of files.
-- **Shareable links** — publish read-only links to a document or a whole project.
-- **Version history** — track every change to a document and roll back when needed.
-- **Invites & collaboration** — invite collaborators and manage their access per project.
-- **Real-time collaborative editing** — multiple people work on the same file simultaneously, live.
+- **Document workspace** — create Markdown (`.md`), HTML (`.html`), and rich-text documents in nested project folders; upload image and SVG assets alongside them.
+- **Live collaboration** — Yjs-backed collaborative editing keeps Markdown, HTML, and rich-text files synchronized, with remote cursors, presence, incremental updates, and clear sync or quota states.
+- **Safe previews** — preview Markdown, Mermaid diagrams, and HTML in a sandboxed iframe. Mermaid SVG is rendered locally, and linked assets or documents resolve from the project tree.
+- **Search and discussion** — search project files, leave anchored comment threads in every document format, reply, resolve or reopen, and notify mentioned collaborators.
+- **Version history** — create checkpoints, compare revisions with inline diffs, preview an older version, and restore Markdown, HTML, or rich-text revisions as an administrator.
+- **Export and sharing** — export a Markdown file, standalone HTML, print/PDF, or a whole-project ZIP. Admins can create private, organization-only, or public read-only links for every document format.
+- **Organizations and access** — Clerk organizations, invitations, project-level grants, plan limits, and server-side authorization keep workspaces isolated.
 
 ## Project status
 
-Early development. The product features above are the roadmap. Shipped so far: the marketing landing page, Clerk authentication (sign-in/up, protected dashboard), a Clerk-powered pricing page, and the organization layer — a mandatory onboarding flow, plan-based organization limits, per-organization customization (name, description, tags, and an uploadable icon that reuses Clerk's org logo and defaults to a generated DiceBear image), real-time member invitations (invite, accept/reject, and remove, with per-plan seat limits), a plan-status badge, projects (admin-created, per-plan limit, per-member access control), and a per-project document editor (file tree, `.md`/`.html` editing with a live Markdown/Mermaid/HTML preview, asset uploads, and a per-plan size limit). Real-time collaborative editing is next. Expect rapid change.
+Stash is in active development, but the collaborative document workspace is implemented: authentication, organization onboarding, membership management, project access, the real-time editor, rich-text files, comments, version history, sharing, search, exports, and plan-limit enforcement are all present. Expect product and integration details to keep evolving.
 
 ## Tech stack
 
@@ -33,6 +32,7 @@ Early development. The product features above are the roadmap. Shipped so far: t
 | Language | TypeScript 5 (strict) |
 | Backend | [Convex](https://convex.dev) (reactive database) |
 | Auth & billing | [Clerk](https://clerk.com) (sessions, organizations, roles, plans) |
+| Collaboration | [Yjs](https://yjs.dev) + CodeMirror 6 + Tiptap |
 | Styling | Tailwind CSS v4 + [next-themes](https://github.com/pacocoursey/next-themes) |
 | UI extras | [Sonner](https://sonner.emilkowal.ski) toasts, [DiceBear](https://dicebear.com) generated org icons |
 | Package manager | pnpm |
@@ -71,12 +71,22 @@ pnpm dev:local
 
 `pnpm dev:local` provisions a local Convex backend if needed, writes the Convex-managed values to `.env.local`, then runs the Convex dev server and the Next.js dev server together. Open [http://localhost:3000](http://localhost:3000) to view the app. To initialize only the local database without starting the web server, use `pnpm db:setup`. To run only the web server, use `pnpm dev:web`.
 
+## Sample documents
+
+Two matching product-tour files are provided for exercising previews, Mermaid rendering, custom HTML styles and scripts, cross-file links, sharing, and exports:
+
+- [Markdown demo](./examples/demo.md)
+- [HTML demo](./examples/demo.html)
+
+Upload either file to a project or paste its contents into a new file in the editor.
+
 ## Backend (Convex)
 
 The backend is [Convex](https://convex.dev), a reactive database with type-safe functions.
 
 - **Local development** runs an open-source Convex backend on your machine — no account needed. `pnpm db:setup` runs the Convex local initialization once and writes `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_SITE_URL` to `.env.local`. `pnpm dev:local` starts local Convex and Next.js together; `pnpm dev:db` starts only Convex.
-- **Schema** lives in `convex/schema.ts` (`organizations`, `members`, `projects` + `projectAccess`, and `documents` — the file/folder/asset tree inside each project). Backend functions go in `convex/`. Organization icons use Clerk's org logo, but **project icons, uploaded doc assets, and files are stored in Convex file storage / documents** (with DiceBear defaults for icons).
+- **Schema** lives in `convex/schema.ts`. It models organizations, members, projects and access grants, the document tree, Yjs updates and snapshots, presence, comments and notifications, and document shares. Backend functions live in `convex/`; generated types in `convex/_generated/` are committed.
+- **Data lifecycle** — project and document removal is marked first, then drained in bounded batches. Scheduled jobs compact collaboration state, prune version history, clear stale presence, and clean up obsolete notifications and share events.
 - **Clerk is wired to Convex** via `convex/auth.config.ts` (using `CLERK_JWT_ISSUER_DOMAIN`), so Convex functions can read the signed-in identity from the Clerk session token.
 - **Generated code** in `convex/_generated/` is produced by the Convex CLI and committed so the project type-checks in CI. It is excluded from formatting, linting, spell-checking, and the no-comments policy.
 - **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm db:dashboard`.
@@ -92,10 +102,10 @@ Authentication and billing run on [Clerk](https://clerk.com); set the Clerk keys
 - **Organizations are mandatory** — every user must create or select an organization before reaching the dashboard. Orgs are created through a server action (not Clerk's client widgets) so the plan cap is always enforced.
 - **Plan-based limits** — the active plan and its limits are read straight from the Clerk billing API (`lib/subscription.ts`, `lib/plan-limits.ts`) rather than the session token, so a fresh upgrade takes effect immediately. Free allows one organization; Pro allows more.
 - **Per-org customization** — an organization's name and icon are stored in Clerk while its description and tags live in Convex (`convex/organizations.ts`). The icon reuses Clerk's org logo: a [DiceBear](https://dicebear.com) image is uploaded as the default on creation, admins can replace it with their own upload, and Clerk hosts and serves it so the app and Clerk's own widgets show the same icon. Admins can also delete the organization (a two-step confirmation that switches to another org and blocks deleting the last one).
-- **Real-time members & invitations** — admins invite existing users by email (with a role), cancel pending invites, and remove members, capped per plan by a `N_organization_members` billing feature (`lib/plan-limits.ts`). Clerk stays authoritative (it emails invitations and owns membership); a Convex `members` table (`convex/members.ts`) is a denormalized read-model the dashboard subscribes to with `useQuery` so the list updates live. Because the local Convex deployment can't receive Clerk webhooks, a server-side reconcile (`reconcileMembers`) runs on each dashboard load to keep Convex in sync with Clerk — this also removes rows for invites/members changed via Clerk's own UI. An invited user sees the invitation arrive in real time and can accept or reject it in place.
+- **Real-time members & invitations** — admins invite existing users by email (with a role), cancel pending invites, and remove members, capped per plan by a `N_organization_members` billing feature (`lib/plan-limits.ts`). Clerk remains authoritative; Convex holds a denormalized read model for live dashboard updates. In a hosted deployment, configure Clerk webhooks for `/api/webhooks/clerk` and set `CLERK_WEBHOOK_SIGNING_SECRET` plus a strong `CONVEX_PURGE_SECRET`. Local development falls back to a throttled dashboard reconciliation.
 - **Plan status** — the dashboard navbar shows a badge for the current plan (Free or Pro) with the renewal or cancellation date, read from the Clerk billing API (`lib/subscription.ts`).
-- **Projects** — under `/dashboard/projects`, admins create projects (icon, title, description, tags) capped per plan by the `N_projects_per_organization` billing feature (`lib/plan-limits.ts`, already on both plans). Projects are pure Convex data (`convex/projects.ts`) rendered live with `useQuery`. A new project is **locked to all members** until an admin grants access to specific members; members then see and open only the projects they were added to (read-only), while only admins edit, delete, or manage access. Convex enforces this with the `org_id`/`org_role`/`sub` JWT claims. Removing a member or deleting an org cascades to their project access and the org's projects.
-- **Project document editor** — each project opens a workspace at `/dashboard/projects/[id]/editor`: a nested file tree (folders + `.md`/`.html` files + uploaded image/SVG assets), a CodeMirror editor with debounced autosave, and a live **preview** rendered in a sandboxed iframe (Tailwind + Mermaid via CDN) that supports Markdown, raw HTML, arbitrary CSS, image/SVG previews, and cross-file links resolved through a path-based virtual filesystem. Files and assets live in Convex (`convex/documents.ts`); total size is capped by the plan's `N_mb_max_project_size` feature (Free 8 MB / Pro 64 MB). Admins have full CRUD; members with access get a read-only view.
+- **Projects** — under `/dashboard/projects`, admins create projects (icon, title, description, and tags) capped by the `N_projects_per_organization` billing feature. Admins manage metadata, access grants, sharing, and file-tree changes; people granted project access can open the workspace. Convex enforces `org_id`, `org_role`, and user identity checks at its public API boundary, and deletion revokes related access and data.
+- **Project document editor** — each project opens `/dashboard/projects/[id]/editor`. It includes a nested file tree; Markdown, HTML, and rich-text documents; local Mermaid rendering in a sandboxed preview; live Yjs collaboration and presence; file search; threaded comments; version history with diff and restore; document sharing; and individual or ZIP exports. Files are limited to 512 KB, while project capacity is limited by the active plan (Free defaults to 8 MB and Pro defaults to 64 MB).
 
 To fully activate members/invitations, two one-time steps are needed in the Clerk dashboard (the code ships with safe fallbacks until then): add a `N_organization_members` feature to the Free and Pro plans (e.g. `3_organization_members` / `25_organization_members`), and add `org_id`/`org_role` claims (`{"org_id": "{{org.id}}", "org_role": "{{org.role}}"}`) to the `convex` JWT template so Convex can scope reads to the caller's organization.
 
@@ -151,6 +161,8 @@ app/                 App Router routes (landing, auth, onboarding, dashboard), l
 components/          UI primitives, providers, and landing-page sections
 lib/                 Server/client helpers (Clerk billing, plan limits, Convex access, org avatars)
 convex/              Convex backend: schema and functions (_generated is committed)
+docs/                Product roadmap and design documents
+examples/            Matching Markdown and HTML files for manual workspace testing
 tools/               Repo automation (no-comments checker, dashboard URL printer)
 .github/             CI workflow, Dependabot, issue/PR templates, CODEOWNERS
 .husky/              Git hooks (pre-commit, commit-msg)

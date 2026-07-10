@@ -14,7 +14,7 @@ import {
 type DiffViewProps = {
   original: string;
   modified: string;
-  language: "md" | "html";
+  language: "md" | "html" | "doc";
 };
 
 const diffTheme = EditorView.theme({
@@ -63,7 +63,7 @@ export function DiffView({ original, modified, language }: DiffViewProps) {
         extensions: [
           lineNumbers(),
           syntaxHighlighting(editorHighlightStyle, { fallback: true }),
-          languageExtension(language),
+          languageExtension(language === "doc" ? "md" : language),
           editorTheme,
           diffTheme,
           EditorView.lineWrapping,

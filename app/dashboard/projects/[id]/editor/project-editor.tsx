@@ -43,11 +43,16 @@ import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { ExportMenu } from "@/app/dashboard/projects/[id]/editor/export-menu";
 import { FileTree } from "@/app/dashboard/projects/[id]/editor/file-tree";
+import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import {
   type CollabViewer,
   useCollabDoc,
 } from "@/app/dashboard/projects/[id]/editor/lib/use-collab-doc";
+import type {
+  RichCommentRange,
+  RichDocSelection,
+} from "@/app/dashboard/projects/[id]/editor/rich-doc-editor";
 import { SearchPanel } from "@/app/dashboard/projects/[id]/editor/search-panel";
 import {
   type ShareMode,
@@ -288,6 +293,7 @@ export function ProjectEditor({
   const removeDoc = useMutation(api.documents.remove);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const createAsset = useMutation(api.documents.createAsset);
+  const importDocuments = useMutation(api.documents.importDocuments);
   const createCommentThread = useMutation(api.comments.createThread);
   const replyToComment = useMutation(api.comments.reply);
   const setCommentResolved = useMutation(api.comments.setResolved);
@@ -302,7 +308,9 @@ export function ProjectEditor({
   const [searchQuery, setSearchQuery] = useState("");
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
-  const [editorSelection, setEditorSelection] = useState<EditorSelectionState | null>(null);
+  const [editorSelection, setEditorSelection] = useState<
+    EditorSelectionState | RichDocSelection | null
+  >(null);
   const [focusRequest, setFocusRequest] = useState<CommentFocusRequest | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [origin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
@@ -389,7 +397,7 @@ export function ProjectEditor({
   );
   const resolvedCommentRanges = useMemo(() => {
     const ranges = new Map<string, ResolvedCommentRange>();
-    if (!collab?.ydoc || !collab.ytext) {
+    if (isDoc || !collab?.ydoc || !collab.ytext) {
       return ranges;
     }
     for (const thread of commentThreads) {
@@ -417,10 +425,22 @@ export function ProjectEditor({
       }
     }
     return ranges;
-  }, [collab, commentThreads]);
+  }, [collab, commentThreads, isDoc]);
   const commentRanges = useMemo<CommentRange[]>(
     () => [...resolvedCommentRanges.values()],
     [resolvedCommentRanges],
+  );
+  const richCommentRanges = useMemo<RichCommentRange[]>(
+    () =>
+      isDoc
+        ? commentThreads.map((thread) => ({
+            id: thread.id,
+            startRel: thread.startRel,
+            endRel: thread.endRel,
+            status: thread.status,
+          }))
+        : [],
+    [commentThreads, isDoc],
   );
   const unresolvedCommentCount = commentThreads.filter((thread) => thread.status === "open").length;
   const commentSelection = viewMode === "preview" ? null : editorSelection;
@@ -519,7 +539,16 @@ export function ProjectEditor({
         const target = nodes.find((node) => node.id === event.data.id);
         if (target?.kind === "file") {
           setSelectedId(target.id);
+        } else {
+          const toast = missingRefToast(null);
+          notify.error(toast.title, {
+            description: "The linked file was moved or deleted from this project.",
+          });
         }
+      }
+      if (event.data?.type === "stash-missing-ref") {
+        const toast = missingRefToast(event.data.ref);
+        notify.error(toast.title, { description: toast.description });
       }
     };
     window.addEventListener("message", handler);
@@ -547,44 +576,57 @@ export function ProjectEditor({
     }
   };
 
-  const handleUpload = async (parentId: string | null, file: File) => {
-    if (!file.type.startsWith("image/")) {
+  const handleUpload = async (parentId: string | null, files: File[]) => {
+    const imports = files.filter((file) => /\.(?:md|markdown|html?|txt)$/i.test(file.name));
+    const assets = files.filter((file) => file.type.startsWith("image/"));
+    if (imports.length + assets.length !== files.length) {
       notify.error("Unsupported file", {
-        description: "Only image and SVG files can be uploaded.",
+        description: "Upload images, Markdown, HTML, or plain-text files.",
       });
-      return;
     }
-    if (file.size > MAX_ASSET_BYTES) {
-      notify.error("File too large", { description: "Each asset can be up to 5 MB." });
-      return;
-    }
-    await guard(async () => {
-      const uploadUrl = await generateUploadUrl({ projectId: pid });
-      const response = await fetch(uploadUrl, {
-        method: "POST",
-        headers: { "Content-Type": file.type },
-        body: file,
+    if (imports.length > 0) {
+      await guard(async () => {
+        await importDocuments({
+          projectId: pid,
+          parentId: parentId as Id<"documents"> | null,
+          files: await Promise.all(
+            imports.map(async (file) => ({ name: file.name, content: await file.text() })),
+          ),
+        });
       });
-      if (!response.ok) {
-        throw new Error("upload failed");
+    }
+    for (const file of assets) {
+      if (file.size > MAX_ASSET_BYTES) {
+        notify.error("File too large", { description: "Each asset can be up to 5 MB." });
+        continue;
       }
-      const { storageId } = (await response.json()) as { storageId: Id<"_storage"> };
-      await createAsset({
-        projectId: pid,
-        parentId: parentId as Id<"documents"> | null,
-        name: file.name,
-        storageId,
+      await guard(async () => {
+        const uploadUrl = await generateUploadUrl({ projectId: pid });
+        const response = await fetch(uploadUrl, {
+          method: "POST",
+          headers: { "Content-Type": file.type },
+          body: file,
+        });
+        if (!response.ok) {
+          throw new Error("upload failed");
+        }
+        const { storageId } = (await response.json()) as { storageId: Id<"_storage"> };
+        await createAsset({
+          projectId: pid,
+          parentId: parentId as Id<"documents"> | null,
+          name: file.name,
+          storageId,
+        });
       });
-    });
+    }
   };
 
   const createThreadFromSelection = async (body: string, mentionUserIds: string[]) => {
     if (
       !selectedFileId ||
-      !collab?.ytext ||
-      !collab.ready ||
+      !collab?.ready ||
       !editorSelection ||
-      viewMode === "preview" ||
+      (!isDoc && (!collab.ytext || viewMode === "preview")) ||
       editorSelection.from >= editorSelection.to
     ) {
       notify.error("Select text first", {
@@ -596,12 +638,27 @@ export function ProjectEditor({
       return;
     }
     try {
-      const startRel = Y.createRelativePositionFromTypeIndex(collab.ytext, editorSelection.from);
-      const endRel = Y.createRelativePositionFromTypeIndex(collab.ytext, editorSelection.to);
+      const anchors = isDoc
+        ? {
+            startRel: (editorSelection as RichDocSelection).startRel,
+            endRel: (editorSelection as RichDocSelection).endRel,
+          }
+        : {
+            startRel: toArrayBuffer(
+              Y.encodeRelativePosition(
+                Y.createRelativePositionFromTypeIndex(collab.ytext as Y.Text, editorSelection.from),
+              ),
+            ),
+            endRel: toArrayBuffer(
+              Y.encodeRelativePosition(
+                Y.createRelativePositionFromTypeIndex(collab.ytext as Y.Text, editorSelection.to),
+              ),
+            ),
+          };
       const commentId = await createCommentThread({
         documentId: selectedFileId as Id<"documents">,
-        startRel: toArrayBuffer(Y.encodeRelativePosition(startRel)),
-        endRel: toArrayBuffer(Y.encodeRelativePosition(endRel)),
+        startRel: anchors.startRel,
+        endRel: anchors.endRel,
         quote: editorSelection.text,
         body,
         mentionUserIds,
@@ -664,6 +721,9 @@ export function ProjectEditor({
 
   const focusThread = (commentId: string) => {
     setActiveCommentId(commentId);
+    if (isDoc) {
+      return;
+    }
     const range = resolvedCommentRanges.get(commentId);
     if (range) {
       setFocusRequest({ id: commentId, from: range.from, to: range.to, nonce: Date.now() });
@@ -843,7 +903,7 @@ export function ProjectEditor({
               {formatMb(usedBytes)}/{formatMb(maxBytes)} MB
             </span>
           </div>
-          {selectedFileId && !isDoc ? (
+          {selectedFileId ? (
             <div className="flex items-center gap-1">
               {isAdmin ? (
                 <div className="relative">
@@ -893,60 +953,67 @@ export function ProjectEditor({
                   </span>
                 ) : null}
               </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setHistoryState((value) => ({
-                    documentId: selectedFileId,
-                    open: value.documentId === selectedFileId ? !value.open : true,
-                  }))
-                }
-                aria-label="Version history"
-                aria-pressed={historyOpen}
-                className={cn(
-                  "flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
-                  historyOpen
-                    ? "bg-foreground/[0.08] text-foreground"
-                    : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
-                )}
-              >
-                <History className="size-4" aria-hidden="true" />
-              </button>
               {selectedNode?.kind === "file" && doc ? (
                 <ExportMenu
                   projectId={pid}
                   fileNode={selectedNode}
                   content={canEdit ? buffer : doc.content}
                   nodes={nodes}
+                  richContentState={
+                    isDoc && collab ? toArrayBuffer(Y.encodeStateAsUpdate(collab.ydoc)) : null
+                  }
                 />
               ) : null}
-              <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
-                <legend className="sr-only">View mode</legend>
-                {(
-                  [
-                    ["editor", Code2, "Editor"],
-                    ["split", Columns2, "Split"],
-                    ["preview", Eye, "Preview"],
-                  ] as const
-                ).map(([mode, Icon, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setViewMode(mode)}
-                    aria-label={label}
-                    aria-pressed={viewMode === mode}
-                    className={cn(
-                      "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
-                      viewMode === mode
-                        ? "bg-foreground/[0.08] text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="size-4" aria-hidden="true" />
-                  </button>
-                ))}
-              </fieldset>
+              {!isDoc ? (
+                <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
+                  <legend className="sr-only">View mode</legend>
+                  {(
+                    [
+                      ["editor", Code2, "Editor"],
+                      ["split", Columns2, "Split"],
+                      ["preview", Eye, "Preview"],
+                    ] as const
+                  ).map(([mode, Icon, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setViewMode(mode)}
+                      aria-label={label}
+                      aria-pressed={viewMode === mode}
+                      className={cn(
+                        "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
+                        viewMode === mode
+                          ? "bg-foreground/[0.08] text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <Icon className="size-4" aria-hidden="true" />
+                    </button>
+                  ))}
+                </fieldset>
+              ) : null}
             </div>
+          ) : null}
+          {selectedFileId ? (
+            <button
+              type="button"
+              onClick={() =>
+                setHistoryState((value) => ({
+                  documentId: selectedFileId,
+                  open: value.documentId === selectedFileId ? !value.open : true,
+                }))
+              }
+              aria-label="Version history"
+              aria-pressed={historyOpen}
+              className={cn(
+                "flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                historyOpen
+                  ? "bg-foreground/[0.08] text-foreground"
+                  : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+              )}
+            >
+              <History className="size-4" aria-hidden="true" />
+            </button>
           ) : null}
         </div>
       </div>
@@ -1026,6 +1093,13 @@ export function ProjectEditor({
                     userColor={collab.color}
                     userColorLight={collab.colorLight}
                     sessionId={collab.sessionId}
+                    commentRanges={richCommentRanges}
+                    activeCommentId={activeCommentId}
+                    onSelectionChange={setEditorSelection}
+                    onCommentRangeClick={(commentId) => {
+                      setCommentsOpen(true);
+                      focusThread(commentId);
+                    }}
                   />
                 ) : (
                   <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-muted-foreground text-sm">
@@ -1065,6 +1139,8 @@ export function ProjectEditor({
                           setCommentsOpen(true);
                           focusThread(commentId);
                         }}
+                        fileNode={selectedNode}
+                        nodes={nodes}
                       />
                     </div>
                   ) : null}
@@ -1102,7 +1178,7 @@ export function ProjectEditor({
             </div>
           )}
         </div>
-        {commentsOpen && selectedFileId && !isDoc ? (
+        {commentsOpen && selectedFileId ? (
           <CommentsRail
             threads={commentThreads}
             candidates={mentionCandidates}
@@ -1123,8 +1199,8 @@ export function ProjectEditor({
           documentId={selectedFileId}
           fileNode={selectedNode}
           nodes={nodes}
-          currentContent={canEdit ? buffer : doc.content}
-          language={doc.fileType === "html" ? "html" : "md"}
+          currentContent={isDoc ? doc.content : canEdit ? buffer : doc.content}
+          language={doc.fileType === "html" ? "html" : doc.fileType === "doc" ? "doc" : "md"}
           canCheckpoint={canEdit && !collab?.syncing}
           canManage={isAdmin}
           onClose={() => setHistoryState({ documentId: selectedFileId, open: false })}

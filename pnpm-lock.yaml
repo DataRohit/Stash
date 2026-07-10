@@ -59,6 +59,9 @@ importers:
       '@tiptap/starter-kit':
         specifier: ^3.27.3
         version: 3.27.3
+      '@tiptap/y-tiptap':
+        specifier: 3.0.6
+        version: 3.0.6(prosemirror-model@1.25.10)(prosemirror-state@1.4.4)(prosemirror-view@1.42.0)(y-protocols@1.0.7(yjs@13.6.31))(yjs@13.6.31)
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1

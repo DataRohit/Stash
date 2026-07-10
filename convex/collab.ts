@@ -158,6 +158,40 @@ function contentFromState(state: ArrayBuffer, fileType: Doc<"documents">["fileTy
   return content;
 }
 
+function cloneXmlNode(node: Y.XmlElement | Y.XmlText): Y.XmlElement | Y.XmlText {
+  if (node instanceof Y.XmlText) {
+    const copy = new Y.XmlText();
+    copy.applyDelta(node.toDelta());
+    return copy;
+  }
+  const copy = new Y.XmlElement(node.nodeName ?? "div");
+  for (const [name, value] of Object.entries(node.getAttributes())) {
+    if (value !== undefined) {
+      copy.setAttribute(name, value);
+    }
+  }
+  copy.insert(
+    0,
+    node.toArray().map((child) => cloneXmlNode(child as Y.XmlElement | Y.XmlText)),
+  );
+  return copy;
+}
+
+function restoreRichDocument(ydoc: Y.Doc, snapshot: ArrayBuffer): void {
+  const source = new Y.Doc();
+  Y.applyUpdate(source, new Uint8Array(snapshot));
+  const targetFragment = ydoc.getXmlFragment("prosemirror");
+  const sourceFragment = source.getXmlFragment("prosemirror");
+  ydoc.transact(() => {
+    targetFragment.delete(0, targetFragment.length);
+    targetFragment.insert(
+      0,
+      sourceFragment.toArray().map((child) => cloneXmlNode(child as Y.XmlElement | Y.XmlText)),
+    );
+  });
+  source.destroy();
+}
+
 function displayName(access: { userId: string }, name?: string | null, email?: string | null) {
   return name ?? email ?? access.userId;
 }
@@ -229,9 +263,11 @@ async function persistHistoryCheckpoint(
   authorEmail?: string,
   label?: string,
 ) {
+  const previewText = contentFromState(state, doc.fileType);
+  const snapshotBytes = state.byteLength + byteLength(previewText);
   const used = await cachedProjectBytes(ctx, project);
   const max = await maxProjectBytes(ctx, project);
-  if (state.byteLength > Math.max(0, max - used)) {
+  if (snapshotBytes > Math.max(0, max - used)) {
     throw new Error("project-full");
   }
   await ctx.db.insert("yjsSnapshots", {
@@ -243,9 +279,10 @@ async function persistHistoryCheckpoint(
     authorUserId,
     authorName,
     authorEmail,
+    previewText,
     createdAt: Date.now(),
     expiresAt: Date.now() + HISTORY_RETENTION_MS,
-    sizeBytes: state.byteLength,
+    sizeBytes: snapshotBytes,
     updatedAt: Date.now(),
   });
   await pruneDocumentHistory(ctx, doc, project);
@@ -552,7 +589,7 @@ export const getHistoryPreview = query({
       return null;
     }
     return {
-      content: contentFromState(snapshot.snapshot, doc.fileType),
+      content: snapshot.previewText ?? contentFromState(snapshot.snapshot, doc.fileType),
       label: snapshot.label ?? `Snapshot ${snapshot.throughSeq}`,
       authorName: snapshot.authorName ?? "Unknown",
       authorEmail: await snapshotAuthorEmail(ctx, doc, snapshot),
@@ -572,11 +609,8 @@ export const restoreHistory = mutation({
     if (doc?.kind !== "file") {
       throw new Error("not-found");
     }
-    if (doc.fileType === "doc") {
-      throw new Error("unsupported-filetype");
-    }
     const access = await requireProjectAdmin(ctx, doc.projectId);
-    const targetContent = contentFromState(snapshot.snapshot, doc.fileType);
+    const targetContent = snapshot.previewText ?? contentFromState(snapshot.snapshot, doc.fileType);
     const newSize = byteLength(targetContent);
     if (newSize > MAX_FILE_BYTES) {
       throw new Error("file-too-large");
@@ -602,9 +636,13 @@ export const restoreHistory = mutation({
     const ydoc = new Y.Doc();
     Y.applyUpdate(ydoc, new Uint8Array(currentState));
     const vector = Y.encodeStateVector(ydoc);
-    const ytext = ydoc.getText("codemirror");
-    ytext.delete(0, ytext.length);
-    ytext.insert(0, targetContent);
+    if (doc.fileType === "doc") {
+      restoreRichDocument(ydoc, snapshot.snapshot);
+    } else {
+      const ytext = ydoc.getText("codemirror");
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, targetContent);
+    }
     const update = toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector));
     const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
     ydoc.destroy();
