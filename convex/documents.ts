@@ -13,6 +13,7 @@ const MAX_NODES_PER_PROJECT = 2000;
 const MAX_DEPTH = 16;
 const PURGE_COLLAB_BATCH = 200;
 const PURGE_DOCUMENT_BATCH = 20;
+const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const WINDOWS_RESERVED_NAMES = new Set([
   "con",
   "prn",
@@ -42,6 +43,10 @@ type Access = { project: Doc<"projects">; userId: string; isAdmin: boolean };
 
 export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+function isInactive(doc: Doc<"documents">): boolean {
+  return Boolean(doc.deletingAt || doc.trashedAt);
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -166,7 +171,7 @@ async function assertParent(
     return;
   }
   const parent = await ctx.db.get(parentId);
-  if (!parent || parent.deletingAt || parent.projectId !== projectId || parent.kind !== "folder") {
+  if (!parent || isInactive(parent) || parent.projectId !== projectId || parent.kind !== "folder") {
     throw new Error("invalid-parent");
   }
 }
@@ -176,7 +181,7 @@ async function assertCapacity(ctx: QueryCtx, projectId: Id<"projects">): Promise
     .query("documents")
     .withIndex("by_project", (q) => q.eq("projectId", projectId))
     .collect();
-  if (docs.filter((doc) => !doc.deletingAt).length >= MAX_NODES_PER_PROJECT) {
+  if (visibleDocuments(docs).length >= MAX_NODES_PER_PROJECT) {
     throw new Error("too-many-nodes");
   }
 }
@@ -228,7 +233,7 @@ async function nameTaken(
   const siblings = await childrenOf(ctx, projectId, parentId);
   const key = name.trim().toLowerCase();
   return siblings.some(
-    (doc) => !doc.deletingAt && doc._id !== exclude && doc.name.toLowerCase() === key,
+    (doc) => !isInactive(doc) && doc._id !== exclude && doc.name.toLowerCase() === key,
   );
 }
 
@@ -253,7 +258,7 @@ async function uniqueName(
 ): Promise<string> {
   const siblings = await childrenOf(ctx, projectId, parentId);
   const taken = new Set(
-    siblings.filter((doc) => !doc.deletingAt).map((doc) => doc.name.toLowerCase()),
+    siblings.filter((doc) => !isInactive(doc)).map((doc) => doc.name.toLowerCase()),
   );
   if (!taken.has(baseName.toLowerCase())) {
     return baseName;
@@ -349,7 +354,7 @@ function visibleDocuments(docs: Doc<"documents">[]): Doc<"documents">[] {
     const seen = new Set<Id<"documents">>();
     while (current && !seen.has(current._id)) {
       seen.add(current._id);
-      if (current.deletingAt) {
+      if (isInactive(current)) {
         hidden.add(doc._id);
         break;
       }
@@ -754,12 +759,12 @@ export const importDocuments = mutation({
       .query("documents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
-    if (docs.filter((doc) => !doc.deletingAt).length + args.files.length > MAX_NODES_PER_PROJECT) {
+    if (visibleDocuments(docs).length + args.files.length > MAX_NODES_PER_PROJECT) {
       throw new Error("too-many-nodes");
     }
     const siblings = new Set(
       (await childrenOf(ctx, args.projectId, args.parentId))
-        .filter((doc) => !doc.deletingAt)
+        .filter((doc) => !isInactive(doc))
         .map((doc) => doc.name.toLowerCase()),
     );
     const prepared = args.files.map((file) => {
@@ -825,7 +830,7 @@ export const rename = mutation({
   args: { documentId: v.id("documents"), name: v.string() },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (!doc || doc.deletingAt) {
+    if (!doc || isInactive(doc)) {
       throw new Error("not-found");
     }
     await requireProjectAccess(ctx, doc.projectId);
@@ -852,7 +857,7 @@ export const move = mutation({
   args: { documentId: v.id("documents"), parentId: v.union(v.id("documents"), v.null()) },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (!doc || doc.deletingAt) {
+    if (!doc || isInactive(doc)) {
       throw new Error("not-found");
     }
     await requireProjectAccess(ctx, doc.projectId);
@@ -884,7 +889,7 @@ async function copyName(
 ): Promise<string> {
   const siblings = await childrenOf(ctx, projectId, parentId);
   const taken = new Set(
-    siblings.filter((doc) => !doc.deletingAt).map((doc) => doc.name.toLowerCase()),
+    siblings.filter((doc) => !isInactive(doc)).map((doc) => doc.name.toLowerCase()),
   );
   const dot = name.lastIndexOf(".");
   const stem = dot > 0 ? name.slice(0, dot) : name;
@@ -906,7 +911,7 @@ export const duplicate = mutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (doc?.kind !== "file" || doc.deletingAt) {
+    if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
     const access = await requireProjectAccess(ctx, doc.projectId);
@@ -953,7 +958,7 @@ export const setContent = mutation({
   args: { documentId: v.id("documents"), content: v.string() },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (doc?.kind !== "file" || doc.deletingAt) {
+    if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
     const access = await requireProjectAccess(ctx, doc.projectId);
@@ -975,15 +980,115 @@ export const remove = mutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (!doc || doc.deletingAt) {
+    if (!doc || isInactive(doc)) {
       return;
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    await requireProjectAccess(ctx, doc.projectId);
+    await ctx.db.patch(doc._id, { trashedAt: Date.now(), updatedAt: Date.now() });
+  },
+});
+
+export const listTrash = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const access = await accessForProject(ctx, args.projectId);
+    if (!access) {
+      return [];
+    }
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const byId = new Map(docs.map((doc) => [doc._id, doc]));
+    const roots = docs.filter((doc) => {
+      if (!doc.trashedAt || doc.deletingAt) {
+        return false;
+      }
+      let current = doc.parentId ? byId.get(doc.parentId) : undefined;
+      const seen = new Set<Id<"documents">>();
+      while (current && !seen.has(current._id)) {
+        seen.add(current._id);
+        if (isInactive(current)) {
+          return false;
+        }
+        current = current.parentId ? byId.get(current.parentId) : undefined;
+      }
+      return true;
+    });
+    return roots
+      .sort((a, b) => (b.trashedAt ?? 0) - (a.trashedAt ?? 0))
+      .map((doc) => ({
+        id: doc._id,
+        kind: doc.kind,
+        name: doc.name,
+        fileType: doc.fileType,
+        size: doc.size,
+        trashedAt: doc.trashedAt ?? 0,
+      }));
+  },
+});
+
+export const restoreDocument = mutation({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (!doc?.trashedAt || doc.deletingAt) {
+      throw new Error("not-found");
+    }
+    await requireProjectAccess(ctx, doc.projectId);
+    let parentId = doc.parentId;
+    if (parentId) {
+      const parent = await ctx.db.get(parentId);
+      if (!parent || isInactive(parent) || parent.kind !== "folder") {
+        parentId = null;
+      }
+    }
+    const name = (await nameTaken(ctx, doc.projectId, parentId, doc.name, doc._id))
+      ? await uniqueName(ctx, doc.projectId, parentId, doc.name)
+      : doc.name;
+    await ctx.db.patch(doc._id, {
+      trashedAt: undefined,
+      parentId,
+      name,
+      updatedAt: Date.now(),
+    });
+    return doc._id;
+  },
+});
+
+export const deleteForever = mutation({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (!doc?.trashedAt || doc.deletingAt) {
+      throw new Error("not-found");
+    }
+    const access = await requireProjectAdmin(ctx, doc.projectId);
     await ctx.db.patch(doc._id, { deletingAt: Date.now(), updatedAt: Date.now() });
     await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, {
       projectId: access.project._id,
       rootId: doc._id,
     });
+  },
+});
+
+export const purgeExpiredTrash = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - TRASH_RETENTION_MS;
+    const rows = await ctx.db
+      .query("documents")
+      .withIndex("by_trashed", (q) => q.gt("trashedAt", 0))
+      .take(200);
+    for (const doc of rows) {
+      if ((doc.trashedAt ?? 0) < cutoff && !doc.deletingAt) {
+        await ctx.db.patch(doc._id, { deletingAt: Date.now(), updatedAt: Date.now() });
+        await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, {
+          projectId: doc.projectId,
+          rootId: doc._id,
+        });
+      }
+    }
   },
 });
 
@@ -1271,7 +1376,7 @@ export const search = query({
       .collect();
     const visibleIds = new Set(visibleDocuments(docs).map((doc) => doc._id));
     return hits
-      .filter((doc) => visibleIds.has(doc._id) && !doc.deletingAt)
+      .filter((doc) => visibleIds.has(doc._id) && !isInactive(doc))
       .map((doc) => ({
         id: doc._id,
         parentId: doc.parentId,

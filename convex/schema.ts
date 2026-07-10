@@ -64,12 +64,14 @@ const schema = defineSchema({
     mimeType: v.union(v.string(), v.null()),
     size: v.number(),
     deletingAt: v.optional(v.number()),
+    trashedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_project", ["projectId"])
     .index("by_parent", ["projectId", "parentId"])
     .index("by_deleting", ["deletingAt"])
+    .index("by_trashed", ["trashedAt"])
     .searchIndex("search_content", {
       searchField: "content",
       filterFields: ["projectId", "kind"],

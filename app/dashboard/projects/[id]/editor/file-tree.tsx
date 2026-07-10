@@ -42,6 +42,7 @@ type FileTreeProps = {
   onUpload: (parentId: string | null, files: File[]) => Promise<void>;
   onMove: (id: string, parentId: string | null) => Promise<void>;
   onDuplicate: (node: TreeNode) => Promise<void>;
+  onOpenTrash: () => void;
 };
 
 type DraftKind = "folder" | "file" | "doc";
@@ -159,6 +160,7 @@ export function FileTree({
   onUpload,
   onMove,
   onDuplicate,
+  onOpenTrash,
 }: FileTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -628,6 +630,14 @@ export function FileTree({
               aria-label="Upload files"
             >
               <Upload className="size-4" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={onOpenTrash}
+              className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+              aria-label="Open trash"
+            >
+              <Trash2 className="size-4" aria-hidden="true" />
             </button>
           </div>
         ) : null}

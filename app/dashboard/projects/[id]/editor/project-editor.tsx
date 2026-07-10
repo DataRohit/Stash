@@ -59,6 +59,7 @@ import {
   SharePopover,
   type ShareState,
 } from "@/app/dashboard/projects/[id]/editor/share-popover";
+import { TrashPanel } from "@/app/dashboard/projects/[id]/editor/trash-panel";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { VersionHistoryModal } from "@/app/dashboard/projects/[id]/editor/version-history";
 import { notify } from "@/components/ui/toast";
@@ -307,6 +308,7 @@ export function ProjectEditor({
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
@@ -814,6 +816,7 @@ export function ProjectEditor({
             selectNode(id);
           })
         }
+        onOpenTrash={() => setTrashOpen(true)}
       />
     </SearchPanel>
   );
@@ -1226,6 +1229,9 @@ export function ProjectEditor({
             setViewMode("split");
           }}
         />
+      ) : null}
+      {trashOpen ? (
+        <TrashPanel projectId={pid} isAdmin={isAdmin} onClose={() => setTrashOpen(false)} />
       ) : null}
     </div>
   );
