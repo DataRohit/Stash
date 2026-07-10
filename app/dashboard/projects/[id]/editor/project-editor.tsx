@@ -9,6 +9,7 @@ import {
   Columns2,
   Eye,
   History,
+  List,
   Loader2,
   MessageSquare,
   PanelLeft,
@@ -46,9 +47,15 @@ import { FileTree } from "@/app/dashboard/projects/[id]/editor/file-tree";
 import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import {
+  extractDocOutline,
+  extractTextOutline,
+  type OutlineItem,
+} from "@/app/dashboard/projects/[id]/editor/lib/outline";
+import {
   type CollabViewer,
   useCollabDoc,
 } from "@/app/dashboard/projects/[id]/editor/lib/use-collab-doc";
+import { OutlinePanel } from "@/app/dashboard/projects/[id]/editor/outline-panel";
 import type {
   RichCommentRange,
   RichDocSelection,
@@ -309,6 +316,8 @@ export function ProjectEditor({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  const [docOutline, setDocOutline] = useState<OutlineItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
@@ -448,6 +457,31 @@ export function ProjectEditor({
   );
   const unresolvedCommentCount = commentThreads.filter((thread) => thread.status === "open").length;
   const commentSelection = viewMode === "preview" ? null : editorSelection;
+  const outlineItems = useMemo<OutlineItem[]>(() => {
+    if (!outlineOpen || !selectedFileId || selectedNode?.kind !== "file") {
+      return [];
+    }
+    if (isDoc) {
+      return docOutline;
+    }
+    const source = canEdit ? buffer : (doc?.content ?? "");
+    return extractTextOutline(source, selectedNode.fileType === "html");
+  }, [outlineOpen, selectedFileId, selectedNode, isDoc, docOutline, buffer, canEdit, doc]);
+
+  const scrollToOutline = (item: OutlineItem) => {
+    if (isDoc) {
+      const headings = document.querySelectorAll<HTMLElement>(
+        ".tiptap-doc-content :is(h1,h2,h3,h4,h5,h6)",
+      );
+      headings[item.index]?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    editorRef.current?.focusRange(item.offset, item.offset);
+    previewFrameRef.current?.contentWindow?.postMessage(
+      { type: "stash-scroll-heading", index: item.index },
+      "*",
+    );
+  };
 
   useEffect(() => {
     if (orgChanged) {
@@ -533,6 +567,18 @@ export function ProjectEditor({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (!outlineOpen || !isDoc || !collab?.ydoc) {
+      return;
+    }
+    const ydoc = collab.ydoc;
+    const fragment = ydoc.getXmlFragment("prosemirror");
+    const update = () => setDocOutline(extractDocOutline(fragment));
+    update();
+    ydoc.on("update", update);
+    return () => ydoc.off("update", update);
+  }, [outlineOpen, isDoc, collab?.ydoc]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -622,6 +668,41 @@ export function ProjectEditor({
           storageId,
         });
       });
+    }
+  };
+
+  const insertImageAsset = async (file: File): Promise<string | null> => {
+    if (selectedNode?.kind !== "file") {
+      return null;
+    }
+    if (file.size > MAX_ASSET_BYTES) {
+      notify.error("File too large", { description: "Each image can be up to 5 MB." });
+      return null;
+    }
+    const subtype = file.type.split("/")[1] ?? "png";
+    const name = file.name.length > 0 ? file.name : `image-${Date.now()}.${subtype}`;
+    try {
+      const uploadUrl = await generateUploadUrl({ projectId: pid });
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!response.ok) {
+        throw new Error("upload failed");
+      }
+      const { storageId } = (await response.json()) as { storageId: Id<"_storage"> };
+      const asset = await createAsset({
+        projectId: pid,
+        parentId: selectedNode.parentId as Id<"documents"> | null,
+        name,
+        storageId,
+      });
+      notify.success("Image inserted");
+      return asset.name;
+    } catch (error) {
+      notify.error("Image upload failed", { description: mapDocError(error) });
+      return null;
     }
   };
 
@@ -972,6 +1053,20 @@ export function ProjectEditor({
                   </span>
                 ) : null}
               </button>
+              <button
+                type="button"
+                onClick={() => setOutlineOpen((value) => !value)}
+                aria-label="Document outline"
+                aria-pressed={outlineOpen}
+                className={cn(
+                  "hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors sm:flex",
+                  outlineOpen
+                    ? "bg-foreground/[0.08] text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                )}
+              >
+                <List className="size-4" aria-hidden="true" />
+              </button>
               {selectedNode?.kind === "file" && doc ? (
                 <ExportMenu
                   projectId={pid}
@@ -1158,6 +1253,7 @@ export function ProjectEditor({
                           setCommentsOpen(true);
                           focusThread(commentId);
                         }}
+                        onInsertImage={canEdit ? insertImageAsset : undefined}
                         fileNode={selectedNode}
                         nodes={nodes}
                       />
@@ -1197,6 +1293,13 @@ export function ProjectEditor({
             </div>
           )}
         </div>
+        {outlineOpen && selectedFileId && selectedNode?.kind === "file" ? (
+          <OutlinePanel
+            items={outlineItems}
+            onSelect={scrollToOutline}
+            onClose={() => setOutlineOpen(false)}
+          />
+        ) : null}
         {commentsOpen && selectedFileId ? (
           <CommentsRail
             threads={commentThreads}

@@ -127,6 +127,15 @@ function iframeCspHtml(): string {
 
 function previewScript(): string {
   return `
+window.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "stash-scroll-heading") {
+    const headings = document.querySelectorAll("h1,h2,h3,h4,h5,h6");
+    const target = headings[event.data.index];
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
+});
 document.addEventListener("click", (event) => {
   if (!(event.target instanceof Element)) {
     return;

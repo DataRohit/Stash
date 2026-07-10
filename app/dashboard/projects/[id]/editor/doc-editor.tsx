@@ -72,6 +72,7 @@ type DocEditorProps = {
   focusRequest?: CommentFocusRequest | null;
   onSelectionChange?: (selection: EditorSelectionState) => void;
   onCommentRangeClick?: (commentId: string) => void;
+  onInsertImage?: (file: File) => Promise<string | null>;
   fileNode?: TreeNode;
   nodes?: TreeNode[];
 };
@@ -475,6 +476,26 @@ function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
+function imageFilesFrom(data: DataTransfer | null): File[] {
+  if (!data) {
+    return [];
+  }
+  return [...data.files].filter((file) => file.type.startsWith("image/"));
+}
+
+function imageAlt(name: string): string {
+  const base = name.replace(/\.[^.]+$/, "").trim();
+  return base.length > 0 ? base : "image";
+}
+
+function imageSnippet(language: "md" | "html", path: string, alt: string): string {
+  if (language === "html") {
+    return `<img src="${path}" alt="${alt}">`;
+  }
+  const dest = /[\s()]/.test(path) ? `<${path}>` : path;
+  return `![${alt}](${dest})`;
+}
+
 const UNDO_BOUNDARY = /[\s.,;:!?)\]}>"']/;
 
 function wordBoundaryUndo(undoManager: UndoManager) {
@@ -511,6 +532,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
     focusRequest = null,
     onSelectionChange,
     onCommentRangeClick,
+    onInsertImage,
     fileNode,
     nodes,
   },
@@ -522,6 +544,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
   const onLimitRef = useRef(onLimit);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onCommentRangeClickRef = useRef(onCommentRangeClick);
+  const onInsertImageRef = useRef(onInsertImage);
   const commentRangesRef = useRef(commentRanges);
   const activeCommentIdRef = useRef(activeCommentId);
   const initialContentRef = useRef(initialContent);
@@ -541,6 +564,10 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
   useEffect(() => {
     onCommentRangeClickRef.current = onCommentRangeClick;
   }, [onCommentRangeClick]);
+
+  useEffect(() => {
+    onInsertImageRef.current = onInsertImage;
+  }, [onInsertImage]);
 
   useEffect(() => {
     commentRangesRef.current = commentRanges;
@@ -627,6 +654,52 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
         },
       }),
     ];
+    const insertImagesAt = async (_target: EditorView, files: File[], startPos: number) => {
+      let pos = startPos;
+      for (const file of files) {
+        const path = await onInsertImageRef.current?.(file);
+        const active = viewRef.current;
+        if (!path || !active) {
+          continue;
+        }
+        const at = Math.min(pos, active.state.doc.length);
+        const snippet = imageSnippet(language, path, imageAlt(file.name));
+        active.dispatch({
+          changes: { from: at, insert: snippet },
+          selection: { anchor: at + snippet.length },
+        });
+        pos = at + snippet.length;
+      }
+    };
+    const imageInsertHandlers = EditorView.domEventHandlers({
+      paste(event, target) {
+        if (readOnly || !onInsertImageRef.current) {
+          return false;
+        }
+        const files = imageFilesFrom(event.clipboardData);
+        if (files.length === 0) {
+          return false;
+        }
+        event.preventDefault();
+        void insertImagesAt(target, files, target.state.selection.main.head);
+        return true;
+      },
+      drop(event, target) {
+        if (readOnly || !onInsertImageRef.current) {
+          return false;
+        }
+        const files = imageFilesFrom(event.dataTransfer);
+        if (files.length === 0) {
+          return false;
+        }
+        event.preventDefault();
+        const pos =
+          target.posAtCoords({ x: event.clientX, y: event.clientY }) ??
+          target.state.selection.main.head;
+        void insertImagesAt(target, files, pos);
+        return true;
+      },
+    });
     const view = new EditorView({
       doc: collab ? (ytext?.toString() ?? "") : initialContentRef.current,
       parent: parentRef.current,
@@ -646,6 +719,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
             })
           : [],
         ...commentExtensions,
+        imageInsertHandlers,
         ...collabExtensions,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {

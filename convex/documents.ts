@@ -1157,7 +1157,7 @@ export const createAsset = mutation({
       updatedAt: now,
     });
     await addProjectBytes(ctx, access.project, meta.size);
-    return id;
+    return { id, name };
   },
 });
 
