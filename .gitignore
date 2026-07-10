@@ -31,5 +31,7 @@ yarn-error.log*
 
 .claude/
 
+/docs/
+
 *.tsbuildinfo
 next-env.d.ts
