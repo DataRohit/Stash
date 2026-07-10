@@ -15,6 +15,12 @@ export function mapDocError(error: unknown): string {
   if (message.includes("invalid-parent")) {
     return "That folder no longer exists. Refresh and try again.";
   }
+  if (message.includes("invalid-target")) {
+    return "You can’t move a folder into itself.";
+  }
+  if (message.includes("not-found")) {
+    return "That item no longer exists. Refresh and try again.";
+  }
   if (message.includes("invalid-name")) {
     return "That name isn’t allowed.";
   }

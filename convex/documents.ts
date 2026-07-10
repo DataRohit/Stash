@@ -876,6 +876,79 @@ export const move = mutation({
   },
 });
 
+async function copyName(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+  parentId: Id<"documents"> | null,
+  name: string,
+): Promise<string> {
+  const siblings = await childrenOf(ctx, projectId, parentId);
+  const taken = new Set(
+    siblings.filter((doc) => !doc.deletingAt).map((doc) => doc.name.toLowerCase()),
+  );
+  const dot = name.lastIndexOf(".");
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const extension = dot > 0 ? name.slice(dot) : "";
+  const first = `${stem} (copy)${extension}`;
+  if (!taken.has(first.toLowerCase())) {
+    return first;
+  }
+  for (let index = 2; index < 10_000; index += 1) {
+    const candidate = `${stem} (copy ${index})${extension}`;
+    if (!taken.has(candidate.toLowerCase())) {
+      return candidate;
+    }
+  }
+  throw new Error("too-many-nodes");
+}
+
+export const duplicate = mutation({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file" || doc.deletingAt) {
+      throw new Error("not-found");
+    }
+    const access = await requireProjectAccess(ctx, doc.projectId);
+    await assertCapacity(ctx, doc.projectId);
+    const total = await cachedProjectBytes(ctx, access.project);
+    const max = await maxProjectBytes(ctx, access.project);
+    if (total + doc.size > max) {
+      throw new Error("project-full");
+    }
+    let state: ArrayBuffer | null = doc.contentState ?? null;
+    if (!state && doc.fileType !== "doc" && doc.content.length > 0) {
+      const seedDoc = new Y.Doc();
+      seedDoc.getText("codemirror").insert(0, doc.content);
+      state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
+      seedDoc.destroy();
+    }
+    const name = await copyName(ctx, doc.projectId, doc.parentId, doc.name);
+    const now = Date.now();
+    const id = await ctx.db.insert("documents", {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      parentId: doc.parentId,
+      kind: "file",
+      name,
+      fileType: doc.fileType,
+      content: doc.content,
+      contentSeq: state ? 1 : undefined,
+      contentState: state ?? undefined,
+      storageId: null,
+      mimeType: null,
+      size: doc.size,
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (state) {
+      await ctx.db.insert("yjsUpdates", { documentId: id, seq: 1, update: state, createdAt: now });
+    }
+    await addProjectBytes(ctx, access.project, doc.size);
+    return id;
+  },
+});
+
 export const setContent = mutation({
   args: { documentId: v.id("documents"), content: v.string() },
   handler: async (ctx, args) => {

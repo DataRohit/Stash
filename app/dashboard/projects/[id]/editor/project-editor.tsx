@@ -291,6 +291,8 @@ export function ProjectEditor({
   const createDocument = useMutation(api.documents.createDocument);
   const renameDoc = useMutation(api.documents.rename);
   const removeDoc = useMutation(api.documents.remove);
+  const moveDoc = useMutation(api.documents.move);
+  const duplicateDoc = useMutation(api.documents.duplicate);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const createAsset = useMutation(api.documents.createAsset);
   const importDocuments = useMutation(api.documents.importDocuments);
@@ -798,6 +800,20 @@ export function ProjectEditor({
           })
         }
         onUpload={handleUpload}
+        onMove={(id, parentId) =>
+          guard(() =>
+            moveDoc({
+              documentId: id as Id<"documents">,
+              parentId: parentId as Id<"documents"> | null,
+            }),
+          )
+        }
+        onDuplicate={(node) =>
+          guard(async () => {
+            const id = await duplicateDoc({ documentId: node.id as Id<"documents"> });
+            selectNode(id);
+          })
+        }
       />
     </SearchPanel>
   );

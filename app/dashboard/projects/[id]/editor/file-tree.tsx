@@ -3,11 +3,13 @@
 import {
   ChevronDown,
   ChevronRight,
+  Copy,
   FileCode,
   FilePlus,
   FileText,
   FileType,
   Folder,
+  FolderInput,
   FolderPlus,
   Image as ImageIcon,
   Pencil,
@@ -15,6 +17,7 @@ import {
   Upload,
 } from "lucide-react";
 import {
+  type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -22,6 +25,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { MoveDialog } from "@/app/dashboard/projects/[id]/editor/move-dialog";
 import { sortNodes, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { cn } from "@/lib/utils";
 
@@ -36,11 +40,15 @@ type FileTreeProps = {
   onRename: (id: string, name: string) => Promise<void>;
   onRemove: (node: TreeNode) => Promise<void>;
   onUpload: (parentId: string | null, files: File[]) => Promise<void>;
+  onMove: (id: string, parentId: string | null) => Promise<void>;
+  onDuplicate: (node: TreeNode) => Promise<void>;
 };
 
 type DraftKind = "folder" | "file" | "doc";
 type Draft = { kind: DraftKind; parentId: string | null };
 
+const NODE_MIME = "application/x-stash-node";
+const ROOT_TARGET = "__root__";
 const INDENT = 12;
 const PAD_BASE = 8;
 const BARE_INPUT =
@@ -149,6 +157,8 @@ export function FileTree({
   onRename,
   onRemove,
   onUpload,
+  onMove,
+  onDuplicate,
 }: FileTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -156,6 +166,9 @@ export function FileTree({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameName, setRenameName] = useState("");
   const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+  const [dragNodeId, setDragNodeId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [movingNode, setMovingNode] = useState<TreeNode | null>(null);
   const treeRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef<HTMLInputElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
@@ -276,6 +289,65 @@ export function FileTree({
     }
   };
 
+  const canDropInto = (targetId: string | null) => {
+    if (!dragNodeId) {
+      return true;
+    }
+    if (targetId === dragNodeId) {
+      return false;
+    }
+    const dragNode = nodeById.get(dragNodeId);
+    if (dragNode && dragNode.parentId === targetId) {
+      return false;
+    }
+    let current = targetId ? nodeById.get(targetId) : undefined;
+    while (current) {
+      if (current.id === dragNodeId) {
+        return false;
+      }
+      current = current.parentId ? nodeById.get(current.parentId) : undefined;
+    }
+    return true;
+  };
+
+  const onNodeDragStart = (event: DragEvent<HTMLButtonElement>, node: TreeNode) => {
+    event.dataTransfer.setData(NODE_MIME, node.id);
+    event.dataTransfer.effectAllowed = "move";
+    setDragNodeId(node.id);
+  };
+
+  const endDrag = () => {
+    setDragNodeId(null);
+    setDropTargetId(null);
+  };
+
+  const onZoneDragOver = (event: DragEvent, targetId: string | null) => {
+    const internal = event.dataTransfer.types.includes(NODE_MIME);
+    if (internal && !canDropInto(targetId)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (internal) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    setDropTargetId(targetId ?? ROOT_TARGET);
+  };
+
+  const onZoneDrop = (event: DragEvent, targetId: string | null) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDropTargetId(null);
+    const draggedId = event.dataTransfer.getData(NODE_MIME);
+    if (draggedId) {
+      if (canDropInto(targetId)) {
+        void onMove(draggedId, targetId);
+      }
+      return;
+    }
+    void onUpload(targetId, [...event.dataTransfer.files]);
+  };
+
   const startDraftIn = (kind: DraftKind, parentId: string | null) => {
     if (parentId) {
       setExpanded((prev) => new Set(prev).add(parentId));
@@ -365,11 +437,14 @@ export function FileTree({
                 className={cn(
                   "group relative flex h-7 items-center transition-colors",
                   !isRenaming && "cursor-pointer",
-                  isSelected
-                    ? "bg-accent/[0.09] text-foreground"
-                    : isActiveFolder
-                      ? "text-foreground hover:bg-foreground/[0.04]"
-                      : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
+                  dropTargetId === node.id && node.kind === "folder"
+                    ? "bg-accent/12 ring-1 ring-accent/50 ring-inset"
+                    : isSelected
+                      ? "bg-accent/[0.09] text-foreground"
+                      : isActiveFolder
+                        ? "text-foreground hover:bg-foreground/[0.04]"
+                        : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
+                  dragNodeId === node.id && "opacity-40",
                 )}
               >
                 {isSelected ? (
@@ -404,17 +479,22 @@ export function FileTree({
                     type="button"
                     onClick={() => activate(node)}
                     onKeyDown={(event) => onNodeKey(event, node)}
+                    draggable={canEdit}
+                    onDragStart={canEdit ? (event) => onNodeDragStart(event, node) : undefined}
+                    onDragEnd={canEdit ? endDrag : undefined}
                     onDragOver={
                       canEdit && node.kind === "folder"
-                        ? (event) => event.preventDefault()
+                        ? (event) => onZoneDragOver(event, node.id)
+                        : undefined
+                    }
+                    onDragLeave={
+                      canEdit && node.kind === "folder"
+                        ? () => setDropTargetId((prev) => (prev === node.id ? null : prev))
                         : undefined
                     }
                     onDrop={
                       canEdit && node.kind === "folder"
-                        ? (event) => {
-                            event.preventDefault();
-                            void onUpload(node.id, [...event.dataTransfer.files]);
-                          }
+                        ? (event) => onZoneDrop(event, node.id)
                         : undefined
                     }
                     data-tree-node-id={node.id}
@@ -423,7 +503,10 @@ export function FileTree({
                     aria-selected={isSelected}
                     aria-expanded={node.kind === "folder" ? isOpen : undefined}
                     tabIndex={isSelected || (!selectedId && visibleIds[0] === node.id) ? 0 : -1}
-                    className="flex h-full w-full min-w-0 cursor-pointer items-center gap-1.5 bg-transparent pr-24 text-left"
+                    className={cn(
+                      "flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent pr-32 text-left",
+                      canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+                    )}
                     style={{ paddingLeft: rowPadding(depth) }}
                   >
                     {node.kind === "folder" ? (
@@ -475,6 +558,14 @@ export function FileTree({
                         </ActionButton>
                       </>
                     ) : null}
+                    {node.kind !== "folder" ? (
+                      <ActionButton label="Duplicate" onClick={() => void onDuplicate(node)}>
+                        <Copy className="size-3.5" aria-hidden="true" />
+                      </ActionButton>
+                    ) : null}
+                    <ActionButton label="Move to folder" onClick={() => setMovingNode(node)}>
+                      <FolderInput className="size-3.5" aria-hidden="true" />
+                    </ActionButton>
                     <ActionButton
                       label="Rename"
                       onClick={() => {
@@ -551,15 +642,17 @@ export function FileTree({
             ref={treeRef}
             role="tree"
             aria-label="Project files"
-            onDragOver={canEdit ? (event) => event.preventDefault() : undefined}
-            onDrop={
+            onDragOver={canEdit ? (event) => onZoneDragOver(event, null) : undefined}
+            onDragLeave={
               canEdit
-                ? (event) => {
-                    event.preventDefault();
-                    void onUpload(activeParent, [...event.dataTransfer.files]);
-                  }
+                ? () => setDropTargetId((prev) => (prev === ROOT_TARGET ? null : prev))
                 : undefined
             }
+            onDrop={canEdit ? (event) => onZoneDrop(event, null) : undefined}
+            className={cn(
+              "min-h-full",
+              dropTargetId === ROOT_TARGET && "rounded-xs ring-1 ring-accent/40 ring-inset",
+            )}
           >
             {renderNodes(null, 0)}
           </div>
@@ -579,6 +672,14 @@ export function FileTree({
           }
         }}
       />
+      {movingNode ? (
+        <MoveDialog
+          node={movingNode}
+          nodes={nodes}
+          onMove={(parentId) => onMove(movingNode.id, parentId)}
+          onClose={() => setMovingNode(null)}
+        />
+      ) : null}
     </div>
   );
 }
