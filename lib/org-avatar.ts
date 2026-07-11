@@ -1,15 +1,9 @@
-const DICEBEAR_PNG_ENDPOINT = "https://api.dicebear.com/9.x/shapes/png";
+import { shapes } from "@dicebear/collection";
+import { createAvatar } from "@dicebear/core";
+
+const AVATAR_SIZE = 256;
+const AVATAR_RADIUS = 12;
 
 export function orgAvatarUrl(seed: string): string {
-  const params = new URLSearchParams({ seed, size: "256", radius: "12" });
-  return `${DICEBEAR_PNG_ENDPOINT}?${params.toString()}`;
-}
-
-export async function fetchOrgAvatarFile(seed: string): Promise<File> {
-  const response = await fetch(orgAvatarUrl(seed));
-  if (!response.ok) {
-    throw new Error("Failed to generate organization avatar");
-  }
-  const blob = await response.blob();
-  return new File([blob], "organization-icon.png", { type: "image/png" });
+  return createAvatar(shapes, { seed, size: AVATAR_SIZE, radius: AVATAR_RADIUS }).toDataUri();
 }

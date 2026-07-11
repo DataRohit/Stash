@@ -1,7 +1,7 @@
 "use server";
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { fetchOrgAvatarFile } from "@/lib/org-avatar";
+import { fetchOrgAvatarFile } from "@/lib/org-avatar-server";
 import { getUserPlanLimits } from "@/lib/plan-limits";
 
 export type CreateOrganizationResult =

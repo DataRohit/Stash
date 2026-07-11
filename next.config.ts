@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   experimental: {
     viewTransition: true,
   },
+  serverExternalPackages: ["@resvg/resvg-js"],
   poweredByHeader: false,
   reactStrictMode: true,
 };

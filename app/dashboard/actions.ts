@@ -3,7 +3,7 @@
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { saveOrgDetails } from "@/lib/convex-server";
 import { MAX_IMAGE_BYTES, MAX_TAGS, MIN_ORG_NAME_LENGTH, sanitizeTags } from "@/lib/org";
-import { fetchOrgAvatarFile } from "@/lib/org-avatar";
+import { fetchOrgAvatarFile } from "@/lib/org-avatar-server";
 
 export type UpdateOrganizationInput = {
   name: string;
