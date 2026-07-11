@@ -78,7 +78,11 @@ export const get = query({
     if (!doc) {
       return null;
     }
-    return { description: doc.description, tags: doc.tags };
+    return {
+      description: doc.description,
+      tags: doc.tags,
+      publicSharingEnabled: doc.publicSharingEnabled !== false,
+    };
   },
 });
 
@@ -134,6 +138,21 @@ export const setPlanLimits = mutation({
       maxProjects: clampInt(args.maxProjects, 0, HARD_MAX_PROJECTS),
       maxCollaborators: clampInt(args.maxCollaborators, 0, HARD_MAX_COLLABORATORS),
       maxSizeBytes: clampInt(args.maxSizeBytes, MIN_PROJECT_BYTES, HARD_MAX_PROJECT_BYTES),
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const setPublicSharing = mutation({
+  args: { clerkOrgId: v.string(), enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    await requireOrgAdmin(ctx, args.clerkOrgId);
+    const row = await ensureRow(ctx, args.clerkOrgId);
+    if (!row) {
+      return;
+    }
+    await ctx.db.patch(row._id, {
+      publicSharingEnabled: args.enabled,
       updatedAt: Date.now(),
     });
   },

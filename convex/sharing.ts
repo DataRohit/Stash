@@ -313,13 +313,13 @@ export const getSharedDocument = query({
     if (!project || project.deletedAt || doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       return null;
     }
-    if (share.mode === "public" && !(await publicSharingEnabled(ctx, share.clerkOrgId))) {
-      return null;
-    }
-    if (share.mode === "org") {
+    const publicAllowed =
+      share.mode !== "public" || (await publicSharingEnabled(ctx, share.clerkOrgId));
+    const effectiveMode: ShareMode = share.mode === "public" && !publicAllowed ? "org" : share.mode;
+    if (effectiveMode === "org") {
       const access = await orgAccessState(ctx, share.clerkOrgId);
       if (access !== "allowed") {
-        return { status: access, mode: share.mode };
+        return { status: access, mode: effectiveMode };
       }
     }
     const [docs, shares] = await Promise.all([
@@ -350,7 +350,7 @@ export const getSharedDocument = query({
         includeAncestors(target, visibleById, includeIds);
       } else if (target.kind === "file") {
         const targetShare = sharedByDocument.get(target._id);
-        if (targetShare && modeRank(targetShare.mode) >= modeRank(share.mode)) {
+        if (targetShare && modeRank(targetShare.mode) >= modeRank(effectiveMode)) {
           includeAncestors(target, visibleById, includeIds);
         }
       }
@@ -377,13 +377,13 @@ export const getSharedDocument = query({
         (row) =>
           row.mode !== "private" &&
           row.token &&
-          modeRank(row.mode) >= modeRank(share.mode) &&
+          modeRank(row.mode) >= modeRank(effectiveMode) &&
           includeIds.has(row.documentId),
       )
       .map((row) => ({ documentId: row.documentId, href: `/share/${row.token}` }));
     return {
       status: "ok" as const,
-      mode: share.mode,
+      mode: effectiveMode,
       projectTitle: project.title,
       documentId: doc._id,
       documentName: doc.name,

@@ -6,9 +6,10 @@ import type { Id } from "@/convex/_generated/dataModel";
 export type OrgDetails = {
   description: string;
   tags: string[];
+  publicSharingEnabled: boolean;
 };
 
-const EMPTY_DETAILS: OrgDetails = { description: "", tags: [] };
+const EMPTY_DETAILS: OrgDetails = { description: "", tags: [], publicSharingEnabled: true };
 
 async function authedClient(): Promise<ConvexHttpClient | null> {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -66,6 +67,14 @@ export async function saveOrgDetails(
     throw new Error("Convex is not configured");
   }
   await client.mutation(api.organizations.upsertDetails, { clerkOrgId, description, tags });
+}
+
+export async function setOrgPublicSharing(clerkOrgId: string, enabled: boolean): Promise<void> {
+  const client = await authedClient();
+  if (!client) {
+    throw new Error("Convex is not configured");
+  }
+  await client.mutation(api.organizations.setPublicSharing, { clerkOrgId, enabled });
 }
 
 type ReconcileMember = {

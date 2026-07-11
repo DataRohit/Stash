@@ -4,6 +4,7 @@ import { useClerk } from "@clerk/nextjs";
 import {
   Calendar,
   Check,
+  Globe,
   ImagePlus,
   Mail,
   Pencil,
@@ -26,6 +27,7 @@ import {
 import {
   deleteOrganization,
   resetOrganizationLogo,
+  setOrganizationPublicSharing,
   updateOrganization,
   updateOrganizationLogo,
 } from "@/app/dashboard/actions";
@@ -33,6 +35,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { notify } from "@/components/ui/toast";
 import { MAX_DESCRIPTION_LENGTH, MAX_IMAGE_BYTES, MAX_TAG_LENGTH, MAX_TAGS } from "@/lib/org";
+import { cn } from "@/lib/utils";
 
 const LOGO_ERRORS: Record<string, string> = {
   unauthenticated: "Your session expired. Sign in again.",
@@ -54,6 +57,7 @@ type OrgCardProps = {
   defaultIconUrl: string;
   isAdmin: boolean;
   canDelete: boolean;
+  publicSharingEnabled: boolean;
 };
 
 const UPDATE_ERRORS: Record<string, string> = {
@@ -96,9 +100,30 @@ export function OrgCard(props: OrgCardProps) {
     defaultIconUrl,
     isAdmin,
     canDelete,
+    publicSharingEnabled,
   } = props;
   const router = useRouter();
   const { setActive } = useClerk();
+
+  const [publicSharing, setPublicSharing] = useState(publicSharingEnabled);
+  const [togglingShare, startShareToggle] = useTransition();
+
+  const togglePublicSharing = () => {
+    const next = !publicSharing;
+    setPublicSharing(next);
+    startShareToggle(async () => {
+      const result = await setOrganizationPublicSharing(next);
+      if ("error" in result) {
+        setPublicSharing(!next);
+        notify.error("Couldn’t update sharing", {
+          description: UPDATE_ERRORS[result.error] ?? "Please try again.",
+        });
+        return;
+      }
+      notify.success(next ? "Public link sharing enabled" : "Public link sharing disabled");
+      router.refresh();
+    });
+  };
 
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [draftName, setDraftName] = useState(name);
@@ -355,6 +380,47 @@ export function OrgCard(props: OrgCardProps) {
               )}
             </div>
           </div>
+
+          {isAdmin ? (
+            <div className="flex flex-col gap-3 border-hairline border-t pt-6">
+              <span className={labelClass}>Sharing</span>
+              <div className="flex items-start justify-between gap-4 rounded-md border border-hairline bg-surface/45 p-4">
+                <div className="flex items-start gap-3">
+                  <Globe
+                    className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <div className="flex flex-col gap-1">
+                    <p className="font-medium text-sm">Public link sharing</p>
+                    <p className="max-w-prose text-muted-foreground text-xs leading-relaxed">
+                      When on, members can create links that anyone with the URL can open. Turning
+                      it off hides the public option and makes existing public links require org
+                      sign-in.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={publicSharing}
+                  aria-label="Public link sharing"
+                  onClick={togglePublicSharing}
+                  disabled={togglingShare}
+                  className={cn(
+                    "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border border-hairline transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                    publicSharing ? "bg-accent" : "bg-foreground/15",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block size-4 rounded-full bg-background shadow-sm transition-transform",
+                      publicSharing ? "translate-x-6" : "translate-x-1",
+                    )}
+                  />
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           {isAdmin && deleteOpen ? (
             <div className="flex max-w-md flex-col gap-3 rounded-md border border-destructive/30 bg-destructive/[0.04] p-4">

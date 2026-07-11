@@ -77,6 +77,7 @@ export default async function DashboardPage() {
           defaultIconUrl={orgAvatarUrl(orgId)}
           isAdmin={orgRole === "org:admin"}
           canDelete={canDelete}
+          publicSharingEnabled={details.publicSharingEnabled}
         />
         <OrgMembers
           clerkOrgId={orgId}

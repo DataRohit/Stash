@@ -1,7 +1,7 @@
 "use server";
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
-import { saveOrgDetails } from "@/lib/convex-server";
+import { saveOrgDetails, setOrgPublicSharing } from "@/lib/convex-server";
 import { MAX_IMAGE_BYTES, MAX_TAGS, MIN_ORG_NAME_LENGTH, sanitizeTags } from "@/lib/org";
 import { fetchOrgAvatarFile } from "@/lib/org-avatar-server";
 
@@ -50,6 +50,24 @@ export async function updateOrganization(
   try {
     await client.organizations.updateOrganization(orgId, { name });
     await saveOrgDetails(orgId, input.description, tags);
+    return { ok: true };
+  } catch {
+    return { error: "failed" };
+  }
+}
+
+export async function setOrganizationPublicSharing(
+  enabled: boolean,
+): Promise<UpdateOrganizationResult> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId || !orgId) {
+    return { error: "unauthenticated" };
+  }
+  if (orgRole !== "org:admin") {
+    return { error: "forbidden" };
+  }
+  try {
+    await setOrgPublicSharing(orgId, enabled);
     return { ok: true };
   } catch {
     return { error: "failed" };
