@@ -313,6 +313,7 @@ export function ProjectEditor({
   const replyToComment = useMutation(api.comments.reply);
   const setCommentResolved = useMutation(api.comments.setResolved);
   const setShareMode = useMutation(api.sharing.setMode);
+  const rotateShare = useMutation(api.sharing.rotateShareToken);
   const saveTemplate = useMutation(api.templates.saveFromDocument);
   const recordOpened = useMutation(api.navigation.recordOpened);
 
@@ -822,15 +823,28 @@ export function ProjectEditor({
     }
   };
 
-  const updateShareMode = async (mode: ShareMode) => {
+  const updateShareMode = async (mode: ShareMode, expiresAt?: number | null) => {
     if (!selectedFileId) {
       return;
     }
     try {
-      await setShareMode({ documentId: selectedFileId as Id<"documents">, mode });
+      await setShareMode({ documentId: selectedFileId as Id<"documents">, mode, expiresAt });
       notify.success(mode === "private" ? "Share link revoked" : "Share settings updated");
     } catch (error) {
       notify.error("Share update failed", { description: mapDocError(error) });
+      throw error;
+    }
+  };
+
+  const rotateShareLink = async () => {
+    if (!selectedFileId) {
+      return;
+    }
+    try {
+      await rotateShare({ documentId: selectedFileId as Id<"documents"> });
+      notify.success("Share link rotated");
+    } catch (error) {
+      notify.error("Rotate failed", { description: mapDocError(error) });
       throw error;
     }
   };
@@ -1081,6 +1095,7 @@ export function ProjectEditor({
                       state={shareState}
                       origin={origin}
                       onSetMode={updateShareMode}
+                      onRotate={rotateShareLink}
                       onCopy={copyShareLink}
                     />
                   ) : null}

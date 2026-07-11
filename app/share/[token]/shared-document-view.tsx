@@ -109,6 +109,15 @@ export function SharedDocumentView({ token }: SharedDocumentViewProps) {
     );
   }
 
+  if (shared.status === "expired") {
+    return (
+      <EmptyState
+        title="Link expired"
+        body="This share link has expired. Ask the document owner for an updated link."
+      />
+    );
+  }
+
   const nodes = shared.nodes as TreeNode[];
   const fileNode = nodes.find((node) => node.id === shared.documentId);
   if (!fileNode) {

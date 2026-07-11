@@ -276,6 +276,7 @@ const schema = defineSchema({
     clerkOrgId: v.string(),
     mode: v.union(v.literal("private"), v.literal("org"), v.literal("public")),
     token: v.union(v.string(), v.null()),
+    expiresAt: v.optional(v.number()),
     createdByUserId: v.string(),
     createdByName: v.string(),
     updatedByUserId: v.string(),

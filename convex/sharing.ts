@@ -10,6 +10,7 @@ type ShareMode = "private" | "org" | "public";
 
 const SHARE_EVENT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 const PRUNE_BATCH = 200;
+const MAX_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
 
 type Actor = {
   userId: string;
@@ -216,6 +217,7 @@ export const getState = query({
     return {
       mode: share?.mode ?? ("private" as ShareMode),
       token: share?.token ?? null,
+      expiresAt: share?.expiresAt ?? null,
       updatedByName: share?.updatedByName ?? null,
       updatedAt: share?.updatedAt ?? null,
       canPublish: await publicSharingEnabled(ctx, doc.clerkOrgId),
@@ -234,6 +236,7 @@ export const setMode = mutation({
   args: {
     documentId: v.id("documents"),
     mode: v.union(v.literal("private"), v.literal("org"), v.literal("public")),
+    expiresAt: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
     const { doc, access } = await fileForAdmin(ctx, args.documentId);
@@ -248,10 +251,22 @@ export const setMode = mutation({
     const previousMode = existing?.mode ?? ("private" as ShareMode);
     const now = Date.now();
     const token = args.mode === "private" ? null : (existing?.token ?? (await uniqueToken(ctx)));
+    let expiresAt: number | undefined;
+    if (args.mode === "private" || args.expiresAt === null) {
+      expiresAt = undefined;
+    } else if (typeof args.expiresAt === "number") {
+      if (args.expiresAt <= now || args.expiresAt > now + MAX_EXPIRY_MS) {
+        throw new Error("invalid-expiry");
+      }
+      expiresAt = args.expiresAt;
+    } else {
+      expiresAt = existing?.expiresAt;
+    }
     if (existing) {
       await ctx.db.patch(existing._id, {
         mode: args.mode,
         token,
+        expiresAt,
         updatedByUserId: actor.userId,
         updatedByName: actor.name,
         updatedAt: now,
@@ -263,6 +278,7 @@ export const setMode = mutation({
         clerkOrgId: doc.clerkOrgId,
         mode: args.mode,
         token,
+        expiresAt,
         createdByUserId: actor.userId,
         createdByName: actor.name,
         updatedByUserId: actor.userId,
@@ -298,6 +314,52 @@ export const setMode = mutation({
   },
 });
 
+export const rotateShareToken = mutation({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const { doc, access } = await fileForAdmin(ctx, args.documentId);
+    const actor = await actorFor(ctx);
+    const existing = await ctx.db
+      .query("documentShares")
+      .withIndex("by_document", (q) => q.eq("documentId", doc._id))
+      .unique();
+    if (!existing || existing.mode === "private" || !existing.token) {
+      throw new Error("no-active-share");
+    }
+    const now = Date.now();
+    const token = await uniqueToken(ctx);
+    await ctx.db.patch(existing._id, {
+      token,
+      updatedByUserId: actor.userId,
+      updatedByName: actor.name,
+      updatedAt: now,
+    });
+    await ctx.db.insert("documentShareEvents", {
+      documentId: doc._id,
+      projectId: doc.projectId,
+      clerkOrgId: doc.clerkOrgId,
+      actorUserId: actor.userId,
+      actorName: actor.name,
+      previousMode: existing.mode,
+      nextMode: existing.mode,
+      createdAt: now,
+    });
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: doc.clerkOrgId,
+      kind: "share_changed",
+      actorUserId: actor.userId,
+      actorName: actor.name,
+      documentId: doc._id,
+      targetName: doc.name,
+      previousValue: existing.mode,
+      nextValue: existing.mode,
+    });
+    await ctx.db.patch(access.project._id, { updatedAt: now });
+    return { token };
+  },
+});
+
 export const getSharedDocument = query({
   args: { token: v.string() },
   handler: async (ctx, args) => {
@@ -312,6 +374,9 @@ export const getSharedDocument = query({
     const doc = await ctx.db.get(share.documentId);
     if (!project || project.deletedAt || doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       return null;
+    }
+    if (share.expiresAt && share.expiresAt < Date.now()) {
+      return { status: "expired" as const, mode: share.mode };
     }
     const publicAllowed =
       share.mode !== "public" || (await publicSharingEnabled(ctx, share.clerkOrgId));
