@@ -1,5 +1,6 @@
 "use client";
 
+import { useOrganization } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
 import { Loader2, Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -13,6 +14,7 @@ import {
 import { api } from "@/convex/_generated/api";
 
 export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
+  const { organization } = useOrganization();
   const router = useRouter();
   const params = useSearchParams();
   const [query, setQuery] = useState(() => params.get("q") ?? "");
@@ -40,7 +42,7 @@ export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
             — Workspace search
           </span>
           <h1 className="mt-1 font-serif text-3xl tracking-display">Search</h1>
-          <div className="mt-5 flex h-12 items-center gap-3 rounded-md border border-hairline bg-surface/50 px-4">
+          <div className="mt-5 flex h-12 items-center gap-3 rounded-md border border-hairline bg-surface/50 px-4 transition-shadow focus-within:ring-2 focus-within:ring-ring">
             <Search className="size-5 text-muted-foreground" />
             <input
               value={query}
@@ -61,7 +63,8 @@ export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
               aria-label="Search workspace"
               aria-activedescendant={rows[active] ? `global-result-${active}` : undefined}
               placeholder="Search projects, files, paths, and contents…"
-              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
+              className="min-w-0 flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60 focus-visible:outline-none"
+              style={{ outline: "none" }}
             />
           </div>
         </div>
@@ -80,13 +83,17 @@ export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
             </p>
           ) : (
             <>
-              <div className="border-hairline border-b px-5 py-2 font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
-                {rows.length} {rows.length === 1 ? "result" : "results"}
+              <div className="flex items-center justify-between gap-4 border-hairline border-b bg-surface/30 px-5 py-3">
+                <span className="font-medium text-sm">Search results</span>
+                <span className="rounded-full border border-hairline bg-surface/60 px-2.5 py-1 text-muted-foreground text-xs">
+                  {rows.length} {rows.length === 1 ? "match" : "matches"}
+                </span>
               </div>
               <SearchResults
                 results={rows}
                 active={active}
                 onActive={setActive}
+                orgName={organization?.name}
                 emptyText={`No matches for “${debounced}”.`}
               />
             </>

@@ -153,6 +153,7 @@ export function QuickOpen() {
             active={active}
             onActive={setActive}
             onChoose={choose}
+            orgName={organization?.name}
             emptyText={
               query ? `No matches for “${query.trim()}”.` : "Open a project to get started."
             }

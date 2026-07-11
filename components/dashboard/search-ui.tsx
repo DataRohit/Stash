@@ -2,7 +2,7 @@
 
 import { FileCode, FileText, Folder, Image as ImageIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { type KeyboardEvent, useEffect, useMemo, useRef } from "react";
+import { type KeyboardEvent, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 export type GlobalResult = {
@@ -14,7 +14,7 @@ export type GlobalResult = {
   name: string;
   path: string;
   fileType: "md" | "html" | "doc" | null;
-  snippet: { before: string; match: string; after: string } | null;
+  snippet: { before: string; match: string; after: string; lineNumber: number } | null;
 };
 
 export function resultHref(result: GlobalResult): string {
@@ -40,77 +40,77 @@ export function SearchResults({
   active,
   onActive,
   onChoose,
+  orgName,
   emptyText = "No matches found.",
 }: {
   results: GlobalResult[];
   active: number;
   onActive: (index: number) => void;
   onChoose?: (result: GlobalResult) => void;
+  orgName?: string;
   emptyText?: string;
 }) {
   const router = useRouter();
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
-  useEffect(() => refs.current[active]?.scrollIntoView({ block: "nearest" }), [active]);
-  const groups = useMemo(() => {
-    const map = new Map<string, GlobalResult[]>();
-    for (const result of results)
-      map.set(result.projectTitle, [...(map.get(result.projectTitle) ?? []), result]);
-    return [...map.entries()];
-  }, [results]);
+  useEffect(() => {
+    refs.current[active]?.scrollIntoView({ block: "nearest" });
+  }, [active]);
   if (!results.length)
     return <p className="px-4 py-8 text-center text-muted-foreground text-sm">{emptyText}</p>;
-  let index = -1;
   return (
-    <div role="listbox" aria-label="Search results" className="flex flex-col gap-4 p-2">
-      {groups.map(([project, items]) => (
-        <section key={project}>
-          <h2 className="px-2 py-1 font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
-            {project}
-          </h2>
-          <div className="flex flex-col gap-1">
-            {items.map((result) => {
-              index += 1;
-              const current = index;
-              return (
-                <button
-                  ref={(node) => {
-                    refs.current[current] = node;
-                  }}
-                  id={`global-result-${current}`}
-                  role="option"
-                  aria-selected={active === current}
-                  type="button"
-                  key={result.id}
-                  onMouseEnter={() => onActive(current)}
-                  onClick={() => (onChoose ? onChoose(result) : router.push(resultHref(result)))}
-                  className={cn(
-                    "flex min-h-12 w-full cursor-pointer items-start gap-3 rounded-md px-3 py-2 text-left transition-colors hover:bg-foreground/[0.05]",
-                    active === current && "bg-accent/[0.1]",
-                  )}
-                >
-                  <span className="mt-0.5 shrink-0">
-                    <ResultIcon result={result} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium text-sm">{result.name}</span>
-                    <span className="block truncate text-muted-foreground text-xs">
-                      {result.path}
-                    </span>
-                    {result.snippet ? (
-                      <span className="mt-1 line-clamp-2 block text-muted-foreground text-xs leading-relaxed">
-                        {result.snippet.before}
-                        <mark className="rounded-xs bg-accent/25 text-foreground">
-                          {result.snippet.match}
-                        </mark>
-                        {result.snippet.after}
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </section>
+    <div
+      role="listbox"
+      aria-label="Search results"
+      className="divide-y divide-hairline bg-surface/45"
+    >
+      {results.map((result, current) => (
+        <button
+          ref={(node) => {
+            refs.current[current] = node;
+          }}
+          id={`global-result-${current}`}
+          role="option"
+          aria-selected={active === current}
+          type="button"
+          key={result.id}
+          onMouseEnter={() => onActive(current)}
+          onClick={() => (onChoose ? onChoose(result) : router.push(resultHref(result)))}
+          className={cn(
+            "grid w-full cursor-pointer grid-cols-[1.5rem_minmax(0,1fr)] gap-3 px-5 py-3 text-left transition-colors hover:bg-surface/70",
+            active === current && "bg-accent/[0.07]",
+          )}
+        >
+          <span className="mt-0.5 flex size-6 items-center justify-center">
+            <ResultIcon result={result} />
+          </span>
+          <span className="min-w-0">
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className="shrink-0 font-semibold text-sm">{result.name}</span>
+              <span className="truncate text-muted-foreground text-xs">{result.path}</span>
+            </span>
+            <span className="mt-0.5 flex min-w-0 items-center gap-2 text-muted-foreground text-xs">
+              <span className="truncate">{orgName ?? "Organization"}</span>
+              <span aria-hidden="true" className="text-muted-foreground/40">
+                ·
+              </span>
+              <span className="truncate">{result.projectTitle}</span>
+            </span>
+            {result.snippet ? (
+              <span className="mt-2 grid min-w-0 grid-cols-[3rem_minmax(0,1fr)] overflow-hidden rounded-md bg-background/40 text-xs leading-5">
+                <span className="border-hairline border-r px-2 py-1.5 text-right text-muted-foreground/65">
+                  {result.snippet.lineNumber}
+                </span>
+                <span className="line-clamp-2 px-3 py-1.5 text-muted-foreground">
+                  {result.snippet.before}
+                  <mark className="rounded-xs bg-accent/25 px-0.5 font-medium text-foreground">
+                    {result.snippet.match}
+                  </mark>
+                  {result.snippet.after}
+                </span>
+              </span>
+            ) : null}
+          </span>
+        </button>
       ))}
     </div>
   );

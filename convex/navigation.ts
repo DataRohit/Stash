@@ -19,7 +19,7 @@ type SearchResult = {
   name: string;
   path: string;
   fileType: "md" | "html" | "doc" | null;
-  snippet: { before: string; match: string; after: string } | null;
+  snippet: { before: string; match: string; after: string; lineNumber: number } | null;
   rank: number;
 };
 
@@ -71,14 +71,30 @@ function pathsFor(docs: Doc<"documents">[]) {
 
 function snippet(content: string, term: string) {
   const lower = content.toLowerCase();
-  const at = lower.indexOf(term.toLowerCase());
+  const exact = term.toLowerCase();
+  let matchedTerm = exact;
+  let at = lower.indexOf(exact);
   if (at < 0) {
-    return { before: content.slice(0, 100), match: "", after: "" };
+    const terms = exact.match(/[\p{L}\p{N}_]+/gu) ?? [];
+    const matches = terms
+      .map((candidate) => ({ candidate, at: lower.indexOf(candidate) }))
+      .filter((match) => match.at >= 0)
+      .sort((a, b) => a.at - b.at || b.candidate.length - a.candidate.length);
+    if (matches[0]) {
+      at = matches[0].at;
+      matchedTerm = matches[0].candidate;
+    }
   }
+  if (at < 0) {
+    return { before: content.slice(0, 100), match: "", after: "", lineNumber: 1 };
+  }
+  const beforeAt = Math.max(0, at - 70);
+  const afterAt = at + matchedTerm.length;
   return {
-    before: content.slice(Math.max(0, at - 70), at),
-    match: content.slice(at, at + term.length),
-    after: content.slice(at + term.length, at + term.length + 100),
+    before: `${beforeAt > 0 ? "…" : ""}${content.slice(beforeAt, at)}`,
+    match: content.slice(at, afterAt),
+    after: `${content.slice(afterAt, afterAt + 100)}${afterAt + 100 < content.length ? "…" : ""}`,
+    lineNumber: content.slice(0, at).split("\n").length,
   };
 }
 
@@ -152,8 +168,11 @@ export const search = query({
         .withSearchIndex("search_content", (q) =>
           q.search("content", term).eq("projectId", project._id).eq("kind", "file"),
         )
-        .take(CONTENT_LIMIT);
-      for (const [index, doc] of hits.entries()) {
+        .take(PAGE_LIMIT);
+      const exactHits = hits
+        .filter((doc) => doc.content.toLowerCase().includes(needle))
+        .slice(0, CONTENT_LIMIT);
+      for (const [index, doc] of exactHits.entries()) {
         if (inactive(doc)) {
           continue;
         }
