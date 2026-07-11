@@ -2,7 +2,7 @@
   "name": "stash",
   "version": "0.1.0",
   "private": true,
-  "description": "Host, organize, and collaboratively edit Markdown and HTML documents in nested projects with Convex-backed real-time collaboration, version history, and shareable links.",
+  "description": "Host, organize, and collaboratively edit Markdown, HTML, and rich-text documents in nested projects with Convex-backed real-time collaboration, comments, version history, trash and restore, full-text search, and shareable read-only links.",
   "keywords": [
     "authentication",
     "backend",

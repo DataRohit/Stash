@@ -18,7 +18,7 @@ Stash organizes documentation, planning notes, and web content into projects wit
 - **Safe previews** — preview Markdown, Mermaid diagrams, and HTML in a sandboxed iframe. Mermaid SVG is rendered locally, and linked assets or documents resolve from the project tree.
 - **Search and discussion** — search project files, leave anchored comment threads in every document format, reply, resolve or reopen, and notify mentioned collaborators.
 - **Version history** — create checkpoints, compare revisions with inline diffs, preview an older version, and restore Markdown, HTML, or rich-text revisions as an administrator.
-- **Export and sharing** — export a Markdown file, standalone HTML, print/PDF, or a whole-project ZIP. Admins can create private, organization-only, or public read-only links for every document format.
+- **Export and sharing** — export any document as standalone HTML or print/PDF, download Markdown files as `.md`, or export a whole project as a ZIP. Admins can create private, organization-only, or public read-only links for every document format.
 - **Organizations and access** — Clerk organizations, invitations, project-level grants, plan limits, and server-side authorization keep workspaces isolated.
 
 ## Project status
