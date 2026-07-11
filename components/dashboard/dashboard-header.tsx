@@ -1,11 +1,12 @@
 "use client";
 
 import { OrganizationSwitcher, UserButton } from "@clerk/nextjs";
-import { Plus } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
 import { PlanBadge } from "@/components/dashboard/plan-badge";
+import { OPEN_QUICK_SEARCH } from "@/components/dashboard/quick-open";
 import { ThemeToggle } from "@/components/landing/theme-toggle";
 import { buttonVariants } from "@/components/ui/button";
 import { site } from "@/lib/site";
@@ -21,6 +22,7 @@ type DashboardHeaderProps = {
 const NAV_ITEMS = [
   { label: "Overview", href: "/dashboard" },
   { label: "Projects", href: "/dashboard/projects" },
+  { label: "Search", href: "/dashboard/search" },
 ];
 
 function isActive(pathname: string, href: string): boolean {
@@ -76,6 +78,15 @@ export function DashboardHeader({ isPro, planPeriod, periodEnd, canceled }: Dash
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new Event(OPEN_QUICK_SEARCH))}
+              aria-label="Search workspace, Control or Command K"
+              className="flex h-8 cursor-pointer items-center gap-2 rounded-sm px-2 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+            >
+              <Search className="size-4" aria-hidden="true" />
+              <span className="hidden font-mono text-[10px] lg:inline">⌘K</span>
+            </button>
             <PlanBadge
               isPro={isPro}
               planPeriod={planPeriod}

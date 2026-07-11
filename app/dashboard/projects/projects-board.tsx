@@ -5,6 +5,7 @@ import { FolderPlus, Loader2, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type FormEvent, type KeyboardEvent, useState, useTransition } from "react";
 import { ProjectCard } from "@/app/dashboard/projects/project-card";
+import { RecentDocuments } from "@/app/dashboard/projects/recent-documents";
 import { createProject } from "@/app/dashboard/projects-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -217,6 +218,7 @@ export function ProjectsBoard({
       ) : null}
 
       <div className="mt-6 border-hairline border-t pt-6">
+        <RecentDocuments clerkOrgId={clerkOrgId} />
         {projects === undefined ? (
           <div className="flex items-center gap-2 text-muted-foreground text-sm">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
@@ -245,6 +247,9 @@ export function ProjectsBoard({
                 isAdmin={isAdmin}
                 orgName={orgName}
                 orgIconUrl={orgIconUrl}
+                cloneState={project.cloneState}
+                cloneCopied={project.cloneCopied}
+                cloneTotal={project.cloneTotal}
               />
             ))}
           </div>

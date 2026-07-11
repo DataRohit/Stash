@@ -120,18 +120,54 @@ async function notifyMentions(
   body: string,
   mentionUserIds: string[],
 ): Promise<void> {
+  await notifyRecipients(
+    ctx,
+    project,
+    documentId,
+    commentId,
+    messageId,
+    actor,
+    quote,
+    body,
+    mentionUserIds,
+    "mention",
+  );
+}
+
+async function notifyRecipients(
+  ctx: MutationCtx,
+  project: Doc<"projects">,
+  documentId: Id<"documents">,
+  commentId: Id<"comments">,
+  messageId: Id<"commentMessages"> | undefined,
+  actor: Actor,
+  quote: string,
+  body: string,
+  recipientIds: string[],
+  kind: "mention" | "reply" | "resolved" | "reopened",
+): Promise<void> {
   const now = Date.now();
-  for (const recipientUserId of mentionUserIds) {
+  const accessible = await accessibleMemberIds(ctx, project);
+  for (const recipientUserId of new Set(recipientIds)) {
     if (recipientUserId === actor.userId) {
       continue;
     }
+    if (!accessible.has(recipientUserId)) continue;
+    const preference = await ctx.db
+      .query("notificationPreferences")
+      .withIndex("by_project_user", (q) =>
+        q.eq("projectId", project._id).eq("userId", recipientUserId),
+      )
+      .unique();
+    if (preference?.muted) continue;
     await ctx.db.insert("notifications", {
+      kind,
       recipientUserId,
       clerkOrgId: project.clerkOrgId,
       projectId: project._id,
       documentId,
       commentId,
-      messageId,
+      ...(messageId ? { messageId } : {}),
       actorUserId: actor.userId,
       actorName: actor.name,
       quote,
@@ -155,7 +191,7 @@ async function visibleNotificationTarget(ctx: QueryCtx, row: Doc<"notifications"
   const project = await ctx.db.get(row.projectId);
   const doc = await ctx.db.get(row.documentId);
   const thread = await ctx.db.get(row.commentId);
-  const message = await ctx.db.get(row.messageId);
+  const message = row.messageId ? await ctx.db.get(row.messageId) : null;
   if (
     !project ||
     project.deletedAt ||
@@ -164,8 +200,7 @@ async function visibleNotificationTarget(ctx: QueryCtx, row: Doc<"notifications"
     !thread ||
     thread.documentId !== row.documentId ||
     thread.projectId !== row.projectId ||
-    !message ||
-    message.commentId !== row.commentId ||
+    (row.messageId && (!message || message.commentId !== row.commentId)) ||
     !(await accessForProject(ctx, row.projectId))
   ) {
     return null;
@@ -344,6 +379,10 @@ export const reply = mutation({
     const actor = await actorFor(ctx, access.userId);
     const body = trimBody(args.body);
     const mentionUserIds = await validatedMentionIds(ctx, access.project, args.mentionUserIds);
+    const priorMessages = await ctx.db
+      .query("commentMessages")
+      .withIndex("by_comment", (q) => q.eq("commentId", thread._id))
+      .collect();
     const now = Date.now();
     const messageId = await ctx.db.insert("commentMessages", {
       commentId: thread._id,
@@ -370,6 +409,23 @@ export const reply = mutation({
       body,
       mentionUserIds,
     );
+    const mentioned = new Set(mentionUserIds);
+    const participants = [
+      thread.authorUserId,
+      ...priorMessages.map((message) => message.authorUserId),
+    ].filter((userId) => !mentioned.has(userId));
+    await notifyRecipients(
+      ctx,
+      access.project,
+      thread.documentId,
+      thread._id,
+      messageId,
+      actor,
+      thread.quote,
+      body,
+      participants,
+      "reply",
+    );
     return messageId;
   },
 });
@@ -387,6 +443,11 @@ export const setResolved = mutation({
     }
     const access = await requireProjectAccess(ctx, thread.projectId);
     const actor = await actorFor(ctx, access.userId);
+    if ((thread.status === "resolved") === args.resolved) return;
+    const messages = await ctx.db
+      .query("commentMessages")
+      .withIndex("by_comment", (q) => q.eq("commentId", thread._id))
+      .collect();
     await ctx.db.patch(thread._id, {
       status: args.resolved ? "resolved" : "open",
       resolvedByUserId: args.resolved ? actor.userId : null,
@@ -394,6 +455,18 @@ export const setResolved = mutation({
       resolvedAt: args.resolved ? Date.now() : null,
       updatedAt: Date.now(),
     });
+    await notifyRecipients(
+      ctx,
+      access.project,
+      thread.documentId,
+      thread._id,
+      undefined,
+      actor,
+      thread.quote,
+      args.resolved ? "Thread resolved" : "Thread reopened",
+      [thread.authorUserId, ...messages.map((message) => message.authorUserId)],
+      args.resolved ? "resolved" : "reopened",
+    );
   },
 });
 
@@ -452,6 +525,7 @@ export const listMine = query({
         projectId: row.projectId,
         documentId: row.documentId,
         commentId: row.commentId,
+        kind: row.kind ?? "mention",
         actorName: row.actorName,
         quote: row.quote,
         bodySnippet: row.bodySnippet,

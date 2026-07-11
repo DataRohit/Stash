@@ -42,13 +42,33 @@ const schema = defineSchema({
     maxSizeBytes: v.optional(v.number()),
     maxCollaborators: v.optional(v.number()),
     totalBytes: v.optional(v.number()),
+    cloneState: v.optional(v.union(v.literal("copying"), v.literal("ready"), v.literal("failed"))),
+    cloneCopied: v.optional(v.number()),
+    cloneTotal: v.optional(v.number()),
+    cloneError: v.optional(v.string()),
     deletedAt: v.optional(v.number()),
     createdBy: v.string(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_clerk_org", ["clerkOrgId"])
-    .index("by_deleted", ["deletedAt"]),
+    .index("by_deleted", ["deletedAt"])
+    .index("by_clone_state", ["cloneState"]),
+
+  orgTemplates: defineTable({
+    clerkOrgId: v.string(),
+    name: v.string(),
+    normalizedName: v.string(),
+    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("doc")),
+    content: v.string(),
+    contentState: v.optional(v.bytes()),
+    createdByUserId: v.string(),
+    createdByName: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["clerkOrgId"])
+    .index("by_org_name", ["clerkOrgId", "normalizedName"]),
 
   documents: defineTable({
     projectId: v.id("projects"),
@@ -86,6 +106,18 @@ const schema = defineSchema({
     .index("by_project", ["projectId"])
     .index("by_org_user", ["clerkOrgId", "userId"])
     .index("by_project_user", ["projectId", "userId"]),
+
+  recentDocuments: defineTable({
+    clerkOrgId: v.string(),
+    userId: v.string(),
+    projectId: v.id("projects"),
+    documentId: v.id("documents"),
+    lastOpenedAt: v.number(),
+  })
+    .index("by_user_org_time", ["userId", "clerkOrgId", "lastOpenedAt"])
+    .index("by_user_document", ["userId", "documentId"])
+    .index("by_document", ["documentId"])
+    .index("by_project", ["projectId"]),
 
   yjsUpdates: defineTable({
     documentId: v.id("documents"),
@@ -165,12 +197,20 @@ const schema = defineSchema({
     .index("by_document", ["documentId"]),
 
   notifications: defineTable({
+    kind: v.optional(
+      v.union(
+        v.literal("mention"),
+        v.literal("reply"),
+        v.literal("resolved"),
+        v.literal("reopened"),
+      ),
+    ),
     recipientUserId: v.string(),
     clerkOrgId: v.string(),
     projectId: v.id("projects"),
     documentId: v.id("documents"),
     commentId: v.id("comments"),
-    messageId: v.id("commentMessages"),
+    messageId: v.optional(v.id("commentMessages")),
     actorUserId: v.string(),
     actorName: v.string(),
     quote: v.string(),
@@ -184,6 +224,49 @@ const schema = defineSchema({
     .index("by_recipient_org_read", ["recipientUserId", "clerkOrgId", "readAt"])
     .index("by_comment", ["commentId"])
     .index("by_document", ["documentId"])
+    .index("by_created", ["createdAt"]),
+
+  notificationPreferences: defineTable({
+    clerkOrgId: v.string(),
+    projectId: v.id("projects"),
+    userId: v.string(),
+    muted: v.boolean(),
+    updatedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_project_user", ["projectId", "userId"]),
+
+  projectEvents: defineTable({
+    clerkOrgId: v.string(),
+    projectId: v.id("projects"),
+    kind: v.union(
+      v.literal("node_created"),
+      v.literal("documents_imported"),
+      v.literal("document_duplicated"),
+      v.literal("node_renamed"),
+      v.literal("node_moved"),
+      v.literal("node_trashed"),
+      v.literal("node_restored"),
+      v.literal("node_deleted"),
+      v.literal("checkpoint_created"),
+      v.literal("checkpoint_deleted"),
+      v.literal("checkpoint_restored"),
+      v.literal("share_changed"),
+      v.literal("access_granted"),
+      v.literal("access_revoked"),
+    ),
+    actorUserId: v.string(),
+    actorName: v.string(),
+    documentId: v.optional(v.id("documents")),
+    memberUserId: v.optional(v.string()),
+    checkpointId: v.optional(v.id("yjsSnapshots")),
+    targetName: v.string(),
+    detail: v.optional(v.string()),
+    previousValue: v.optional(v.string()),
+    nextValue: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_project", ["projectId", "createdAt"])
     .index("by_created", ["createdAt"]),
 
   documentShares: defineTable({

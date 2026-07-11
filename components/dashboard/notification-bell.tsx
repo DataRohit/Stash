@@ -102,9 +102,7 @@ export function NotificationBell() {
               Loading
             </div>
           ) : notifications.length === 0 ? (
-            <p className="px-4 py-8 text-center text-muted-foreground text-xs">
-              No mention notifications.
-            </p>
+            <p className="px-4 py-8 text-center text-muted-foreground text-xs">No notifications.</p>
           ) : (
             <ul className="thin-scrollbar max-h-96 overflow-auto">
               {notifications.map((notification) => (
@@ -116,7 +114,14 @@ export function NotificationBell() {
                   >
                     <span className="flex items-center justify-between gap-2">
                       <span className="min-w-0 truncate text-xs">
-                        {notification.actorName} mentioned you
+                        {notification.actorName}{" "}
+                        {notification.kind === "reply"
+                          ? "replied to a thread"
+                          : notification.kind === "resolved"
+                            ? "resolved a thread"
+                            : notification.kind === "reopened"
+                              ? "reopened a thread"
+                              : "mentioned you"}
                       </span>
                       <span className="shrink-0 text-[10px] text-muted-foreground">
                         {formatTime(notification.createdAt)}

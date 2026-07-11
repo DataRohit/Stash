@@ -43,6 +43,7 @@ type FileTreeProps = {
   onMove: (id: string, parentId: string | null) => Promise<void>;
   onDuplicate: (node: TreeNode) => Promise<void>;
   onOpenTrash: () => void;
+  onOpenDocumentDialog: (parentId: string | null) => void;
 };
 
 type DraftKind = "folder" | "file" | "doc";
@@ -161,6 +162,7 @@ export function FileTree({
   onMove,
   onDuplicate,
   onOpenTrash,
+  onOpenDocumentDialog,
 }: FileTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -553,16 +555,10 @@ export function FileTree({
                     {node.kind === "folder" ? (
                       <>
                         <ActionButton
-                          label="New file in folder"
-                          onClick={() => startDraftIn("file", node.id)}
+                          label="New document in folder"
+                          onClick={() => onOpenDocumentDialog(node.id)}
                         >
                           <FilePlus className="size-3.5" aria-hidden="true" />
-                        </ActionButton>
-                        <ActionButton
-                          label="New document in folder"
-                          onClick={() => startDraftIn("doc", node.id)}
-                        >
-                          <FileType className="size-3.5" aria-hidden="true" />
                         </ActionButton>
                         <ActionButton
                           label="New folder in folder"
@@ -613,19 +609,11 @@ export function FileTree({
           <div className="flex items-center gap-0.5">
             <button
               type="button"
-              onClick={() => startDraft("file")}
-              className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
-              aria-label="New file"
-            >
-              <FilePlus className="size-4" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={() => startDraft("doc")}
+              onClick={() => onOpenDocumentDialog(activeParent)}
               className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
               aria-label="New document"
             >
-              <FileType className="size-4" aria-hidden="true" />
+              <FilePlus className="size-4" aria-hidden="true" />
             </button>
             <button
               type="button"

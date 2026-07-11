@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { recordProjectEvent } from "./activity";
 import {
   accessForProject,
   addProjectBytes,
@@ -271,7 +272,7 @@ async function persistHistoryCheckpoint(
   if (snapshotBytes > Math.max(0, max - used)) {
     throw new Error("project-full");
   }
-  await ctx.db.insert("yjsSnapshots", {
+  const snapshotId = await ctx.db.insert("yjsSnapshots", {
     documentId: doc._id,
     snapshot: state,
     throughSeq: seq,
@@ -287,6 +288,7 @@ async function persistHistoryCheckpoint(
     updatedAt: Date.now(),
   });
   await pruneDocumentHistory(ctx, doc, project);
+  return snapshotId;
 }
 
 async function tryAutoCheckpoint(
@@ -530,7 +532,7 @@ export const createHistoryCheckpoint = mutation({
     }
     const state = await materializedState(ctx, doc);
     const identity = await ctx.auth.getUserIdentity();
-    await persistHistoryCheckpoint(
+    const snapshotId = await persistHistoryCheckpoint(
       ctx,
       doc,
       access.project,
@@ -540,6 +542,15 @@ export const createHistoryCheckpoint = mutation({
       displayName(access, identity?.name, identity?.email),
       identity?.email,
     );
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "checkpoint_created",
+      documentId: doc._id,
+      checkpointId: snapshotId,
+      targetName: doc.name,
+      detail: `Checkpoint ${seq}`,
+    });
     return { seq, created: true };
   },
 });
@@ -572,7 +583,16 @@ export const deleteHistoryCheckpoint = mutation({
     if (doc?.kind !== "file") {
       throw new Error("not-found");
     }
-    await requireProjectAdmin(ctx, doc.projectId);
+    const access = await requireProjectAdmin(ctx, doc.projectId);
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "checkpoint_deleted",
+      documentId: doc._id,
+      checkpointId: snapshot._id,
+      targetName: doc.name,
+      detail: snapshot.label ?? `Checkpoint ${snapshot.throughSeq}`,
+    });
     await ctx.db.delete(args.snapshotId);
     return { deleted: true };
   },
@@ -663,6 +683,15 @@ export const restoreHistory = mutation({
     });
     await addProjectBytes(ctx, access.project, newSize - doc.size);
     await pruneDocumentHistory(ctx, doc, access.project);
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "checkpoint_restored",
+      documentId: doc._id,
+      checkpointId: snapshot._id,
+      targetName: doc.name,
+      detail: snapshot.label ?? `Checkpoint ${snapshot.throughSeq}`,
+    });
     return { seq };
   },
 });

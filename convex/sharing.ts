@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { recordProjectEvent } from "./activity";
 import { accessForProject, isInactive, isInactiveTree, requireProjectAdmin } from "./documents";
 
 type ShareMode = "private" | "org" | "public";
@@ -280,6 +281,17 @@ export const setMode = mutation({
         previousMode,
         nextMode: args.mode,
         createdAt: now,
+      });
+      await recordProjectEvent(ctx, {
+        projectId: doc.projectId,
+        clerkOrgId: doc.clerkOrgId,
+        kind: "share_changed",
+        actorUserId: actor.userId,
+        actorName: actor.name,
+        documentId: doc._id,
+        targetName: doc.name,
+        previousValue: previousMode,
+        nextValue: args.mode,
       });
     }
     await ctx.db.patch(access.project._id, { updatedAt: now });

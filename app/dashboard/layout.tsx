@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { DashboardHeader } from "@/components/dashboard/dashboard-header";
+import { QuickOpen } from "@/components/dashboard/quick-open";
 import { GridBackground } from "@/components/landing/grid-background";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getUserSubscription } from "@/lib/subscription";
@@ -19,6 +20,7 @@ export default async function DashboardLayout({ children }: { children: ReactNod
         canceled={subscription.canceled}
       />
       <TooltipProvider />
+      <QuickOpen />
       {children}
     </div>
   );

@@ -2,7 +2,8 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { action, internalMutation, mutation, query } from "./_generated/server";
+import { recordProjectEvent } from "./activity";
 import { isInactive, purgeDocCollabBatch } from "./documents";
 import {
   clampInt,
@@ -18,6 +19,7 @@ const MAX_TITLE_LENGTH = 80;
 const MAX_DESCRIPTION_LENGTH = 280;
 const PURGE_GRANT_BATCH = 200;
 const PURGE_DOC_BATCH = 20;
+const STUCK_CLONE_MS = 15 * 60 * 1000;
 
 type Caller = { userId: string; isAdmin: boolean };
 
@@ -139,6 +141,24 @@ async function tombstoneProject(ctx: MutationCtx, projectId: Doc<"projects">["_i
 export const purgeBatch = internalMutation({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    const events = await ctx.db
+      .query("projectEvents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const event of events) await ctx.db.delete(event._id);
+    if (events.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const preferences = await ctx.db
+      .query("notificationPreferences")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const preference of preferences) await ctx.db.delete(preference._id);
+    if (preferences.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
     const grants = await ctx.db
       .query("projectAccess")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
@@ -218,7 +238,11 @@ export const listByOrg = query({
       const docs = await Promise.all(grants.map((grant) => ctx.db.get(grant.projectId)));
       projects = docs.filter((doc): doc is Doc<"projects"> => doc !== null);
     }
-    projects = projects.filter((project) => !project.deletedAt);
+    projects = projects.filter(
+      (project) =>
+        !project.deletedAt &&
+        (caller.isAdmin || !project.cloneState || project.cloneState === "ready"),
+    );
 
     projects.sort((a, b) => b.createdAt - a.createdAt);
 
@@ -253,6 +277,10 @@ export const listByOrg = query({
                 ...(await accessRowsFor(ctx, project._id)).map((row) => row.userId),
               ]).size
             : 0,
+          cloneState: project.cloneState ?? "ready",
+          cloneCopied: project.cloneCopied ?? 0,
+          cloneTotal: project.cloneTotal ?? 0,
+          cloneError: project.cloneError ?? null,
         };
       }),
     );
@@ -263,7 +291,7 @@ export const get = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
-    if (!project || project.deletedAt) {
+    if (!project || project.deletedAt || (project.cloneState && project.cloneState !== "ready")) {
       return null;
     }
     const caller = await callerFor(ctx, project.clerkOrgId);
@@ -370,6 +398,243 @@ export const create = mutation({
   },
 });
 
+export const prepareDuplicate = internalMutation({
+  args: { sourceProjectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const source = await ctx.db.get(args.sourceProjectId);
+    if (!source || source.deletedAt || (source.cloneState && source.cloneState !== "ready"))
+      throw new Error("not-found");
+    const userId = await requireAdmin(ctx, source.clerkOrgId);
+    const projects = (
+      await ctx.db
+        .query("projects")
+        .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", source.clerkOrgId))
+        .collect()
+    ).filter((item) => !item.deletedAt);
+    const limits = await orgLimits(ctx, source.clerkOrgId);
+    if (projects.length >= (limits.maxProjects ?? DEFAULT_MAX_PROJECTS))
+      throw new Error("too-many-projects");
+    const titles = new Set(projects.map((item) => item.title.toLowerCase()));
+    let title = `${source.title} (copy)`;
+    for (let index = 2; titles.has(title.toLowerCase()); index += 1)
+      title = `${source.title} (copy ${index})`;
+    const docs = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", source._id))
+      .collect();
+    const byId = new Map(docs.map((doc) => [doc._id, doc]));
+    const visible = docs.filter((doc) => {
+      let current: Doc<"documents"> | undefined = doc;
+      const seen = new Set<string>();
+      while (current && !seen.has(current._id)) {
+        seen.add(current._id);
+        if (isInactive(current)) return false;
+        current = current.parentId ? byId.get(current.parentId) : undefined;
+      }
+      return true;
+    });
+    const now = Date.now();
+    const projectId = await ctx.db.insert("projects", {
+      clerkOrgId: source.clerkOrgId,
+      title,
+      description: source.description,
+      tags: source.tags,
+      imageStorageId: null,
+      maxSizeBytes: source.maxSizeBytes,
+      maxCollaborators: source.maxCollaborators,
+      totalBytes: 0,
+      cloneState: "copying",
+      cloneCopied: 0,
+      cloneTotal: visible.length,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return {
+      projectId,
+      sourceImageStorageId: source.imageStorageId,
+      docs: visible.map((doc) => ({
+        id: doc._id,
+        parentId: doc.parentId,
+        kind: doc.kind,
+        name: doc.name,
+        fileType: doc.fileType,
+        content: doc.content,
+        contentState: doc.contentState,
+        storageId: doc.storageId,
+        mimeType: doc.mimeType,
+        size: doc.size,
+      })),
+    };
+  },
+});
+
+export const insertDuplicateNode = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    parentId: v.union(v.id("documents"), v.null()),
+    kind: v.union(v.literal("folder"), v.literal("file"), v.literal("asset")),
+    name: v.string(),
+    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("doc"), v.null()),
+    content: v.string(),
+    contentState: v.optional(v.bytes()),
+    storageId: v.union(v.id("_storage"), v.null()),
+    mimeType: v.union(v.string(), v.null()),
+    size: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (project?.cloneState !== "copying") throw new Error("clone-stopped");
+    const now = Date.now();
+    const id = await ctx.db.insert("documents", {
+      projectId: project._id,
+      clerkOrgId: project.clerkOrgId,
+      parentId: args.parentId,
+      kind: args.kind,
+      name: args.name,
+      fileType: args.fileType,
+      content: args.content,
+      contentSeq: args.kind === "file" && args.contentState ? 1 : undefined,
+      contentState: args.contentState,
+      storageId: args.storageId,
+      mimeType: args.mimeType,
+      size: args.size,
+      createdAt: now,
+      updatedAt: now,
+    });
+    if (args.kind === "file" && args.contentState)
+      await ctx.db.insert("yjsUpdates", {
+        documentId: id,
+        seq: 1,
+        update: args.contentState,
+        createdAt: now,
+      });
+    await ctx.db.patch(project._id, {
+      cloneCopied: (project.cloneCopied ?? 0) + 1,
+      totalBytes: (project.totalBytes ?? 0) + args.size,
+      updatedAt: now,
+    });
+    return id;
+  },
+});
+
+export const finishDuplicate = internalMutation({
+  args: { projectId: v.id("projects"), imageStorageId: v.union(v.id("_storage"), v.null()) },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (project?.cloneState !== "copying" || project.cloneCopied !== project.cloneTotal)
+      throw new Error("clone-incomplete");
+    await ctx.db.patch(project._id, {
+      imageStorageId: args.imageStorageId,
+      cloneState: "ready",
+      cloneError: undefined,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const failDuplicate = internalMutation({
+  args: { projectId: v.id("projects"), error: v.string() },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (project && project.cloneState === "copying") {
+      await ctx.db.patch(project._id, {
+        cloneState: "failed",
+        cloneError: args.error.slice(0, 40),
+        updatedAt: Date.now(),
+      });
+      await ctx.scheduler.runAfter(60_000, internal.projects.cleanupFailedDuplicate, {
+        projectId: project._id,
+      });
+    }
+  },
+});
+
+export const cleanupFailedDuplicate = internalMutation({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (project?.cloneState !== "failed" || project.deletedAt) return;
+    await ctx.db.patch(project._id, { deletedAt: Date.now() });
+    await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: project._id });
+  },
+});
+
+export const reapStuckClones = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - STUCK_CLONE_MS;
+    const copying = await ctx.db
+      .query("projects")
+      .withIndex("by_clone_state", (q) => q.eq("cloneState", "copying"))
+      .collect();
+    for (const project of copying) {
+      if (project.deletedAt || project.updatedAt >= cutoff) continue;
+      await ctx.db.patch(project._id, {
+        cloneState: "failed",
+        cloneError: "timed-out",
+        updatedAt: Date.now(),
+      });
+      await ctx.scheduler.runAfter(60_000, internal.projects.cleanupFailedDuplicate, {
+        projectId: project._id,
+      });
+    }
+  },
+});
+
+export const duplicateProject = action({
+  args: { sourceProjectId: v.id("projects") },
+  handler: async (ctx, args): Promise<string> => {
+    const prepared = await ctx.runMutation(internal.projects.prepareDuplicate, args);
+    const mapped = new Map<string, Doc<"documents">["_id"]>();
+    try {
+      const pending = [...prepared.docs];
+      while (pending.length > 0) {
+        const index = pending.findIndex((node) => !node.parentId || mapped.has(node.parentId));
+        if (index < 0) throw new Error("invalid-tree");
+        const node = pending.splice(index, 1)[0];
+        if (!node) throw new Error("invalid-tree");
+        let storageId = null;
+        if (node.storageId) {
+          const blob = await ctx.storage.get(node.storageId);
+          if (!blob) throw new Error("missing-asset");
+          storageId = await ctx.storage.store(blob);
+        }
+        const id = await ctx.runMutation(internal.projects.insertDuplicateNode, {
+          projectId: prepared.projectId,
+          parentId: node.parentId ? (mapped.get(node.parentId) ?? null) : null,
+          kind: node.kind,
+          name: node.name,
+          fileType: node.fileType,
+          content: node.content,
+          contentState: node.contentState,
+          storageId,
+          mimeType: node.mimeType,
+          size: node.size,
+        });
+        mapped.set(node.id, id);
+      }
+      let imageStorageId = null;
+      if (prepared.sourceImageStorageId) {
+        const blob = await ctx.storage.get(prepared.sourceImageStorageId);
+        if (blob) imageStorageId = await ctx.storage.store(blob);
+      }
+      await ctx.runMutation(internal.projects.finishDuplicate, {
+        projectId: prepared.projectId,
+        imageStorageId,
+      });
+      return prepared.projectId;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "clone-failed";
+      await ctx.runMutation(internal.projects.failDuplicate, {
+        projectId: prepared.projectId,
+        error: message,
+      });
+      throw error;
+    }
+  },
+});
+
 export const update = mutation({
   args: {
     projectId: v.id("projects"),
@@ -453,7 +718,7 @@ export const grantAccess = mutation({
     if (!project) {
       throw new Error("Not found");
     }
-    await requireAdmin(ctx, project.clerkOrgId);
+    const actorUserId = await requireAdmin(ctx, project.clerkOrgId);
     const existing = await ctx.db
       .query("projectAccess")
       .withIndex("by_project_user", (q) => q.eq("projectId", project._id).eq("userId", args.userId))
@@ -483,6 +748,16 @@ export const grantAccess = mutation({
       userId: args.userId,
       createdAt: Date.now(),
     });
+    const memberName =
+      [member.firstName, member.lastName].filter(Boolean).join(" ").trim() || member.email;
+    await recordProjectEvent(ctx, {
+      projectId: project._id,
+      clerkOrgId: project.clerkOrgId,
+      kind: "access_granted",
+      actorUserId,
+      memberUserId: args.userId,
+      targetName: memberName,
+    });
   },
 });
 
@@ -493,13 +768,25 @@ export const revokeAccess = mutation({
     if (!project) {
       return;
     }
-    await requireAdmin(ctx, project.clerkOrgId);
+    const actorUserId = await requireAdmin(ctx, project.clerkOrgId);
     const existing = await ctx.db
       .query("projectAccess")
       .withIndex("by_project_user", (q) => q.eq("projectId", project._id).eq("userId", args.userId))
       .unique();
     if (existing) {
+      const member = await acceptedMemberFor(ctx, project.clerkOrgId, args.userId);
       await ctx.db.delete(existing._id);
+      const memberName = member
+        ? [member.firstName, member.lastName].filter(Boolean).join(" ").trim() || member.email
+        : args.userId;
+      await recordProjectEvent(ctx, {
+        projectId: project._id,
+        clerkOrgId: project.clerkOrgId,
+        kind: "access_revoked",
+        actorUserId,
+        memberUserId: args.userId,
+        targetName: memberName,
+      });
     }
   },
 });

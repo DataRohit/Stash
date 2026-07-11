@@ -1,12 +1,13 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { useConvex, useMutation, useQuery } from "convex/react";
+import { useAction, useConvex, useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
   Calendar,
   Check,
   Clock,
+  Copy,
   HardDrive,
   ImagePlus,
   Loader2,
@@ -20,7 +21,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   type ChangeEvent,
   type FormEvent,
@@ -34,8 +35,10 @@ import {
   exportProjectZip,
 } from "@/app/dashboard/projects/[id]/editor/lib/export-doc";
 import { ProjectAccessManager } from "@/app/dashboard/projects/[id]/project-access-manager";
+import { ProjectActivity } from "@/app/dashboard/projects/[id]/project-activity";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -84,6 +87,7 @@ function AccessLostState({ reason }: { reason: "org" | "access" }) {
 
 export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { orgId, isLoaded: authLoaded } = useAuth();
   const orgChanged = authLoaded && orgId !== clerkOrgId;
   const pid = projectId as Id<"projects">;
@@ -97,6 +101,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const generateUploadUrl = useMutation(api.projects.generateUploadUrl);
   const setImage = useMutation(api.projects.setImage);
   const removeImage = useMutation(api.projects.removeImage);
+  const duplicateProject = useAction(api.projects.duplicateProject);
 
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [draftTitle, setDraftTitle] = useState("");
@@ -111,6 +116,8 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const [confirmTitle, setConfirmTitle] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [exportingZip, setExportingZip] = useState(false);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
 
   useEffect(() => {
     if (orgChanged) {
@@ -135,6 +142,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   }
   const isAdmin = project.isAdmin;
   const iconUrl = project.imageUrl ?? orgAvatarUrl(project.id);
+  const activityOpen = searchParams.get("tab") === "activity";
 
   const beginEdit = () => {
     setDraftTitle(project.title);
@@ -262,6 +270,28 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
     }
   };
 
+  const handleDuplicate = async () => {
+    setDuplicating(true);
+    try {
+      const id = await duplicateProject({ sourceProjectId: pid });
+      notify.success("Project duplicated");
+      router.push(`/dashboard/projects/${id}`);
+    } catch (value) {
+      const message = value instanceof Error ? value.message : "";
+      notify.error(
+        message.includes("too-many-projects")
+          ? "Project limit reached"
+          : "Couldn’t duplicate project",
+        {
+          description: message.includes("too-many-projects")
+            ? "Remove a project or upgrade your plan."
+            : "The source project was not changed.",
+        },
+      );
+      setDuplicating(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4">
       <Link
@@ -272,7 +302,39 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
         Projects
       </Link>
 
-      <section className="glass w-full rounded-lg p-6 sm:p-8">
+      <nav
+        aria-label="Project sections"
+        className="glass flex w-fit items-center gap-1 rounded-lg p-1"
+      >
+        <Link
+          href={`/dashboard/projects/${project.id}`}
+          aria-current={!activityOpen ? "page" : undefined}
+          className={cn(
+            "rounded-sm px-4 py-2 font-mono text-xs uppercase tracking-widest",
+            !activityOpen
+              ? "bg-foreground/[0.08] text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Overview
+        </Link>
+        <Link
+          href={`/dashboard/projects/${project.id}?tab=activity`}
+          aria-current={activityOpen ? "page" : undefined}
+          className={cn(
+            "rounded-sm px-4 py-2 font-mono text-xs uppercase tracking-widest",
+            activityOpen
+              ? "bg-foreground/[0.08] text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Activity
+        </Link>
+      </nav>
+
+      {activityOpen ? <ProjectActivity projectId={pid} /> : null}
+
+      <section className={cn("glass w-full rounded-lg p-6 sm:p-8", activityOpen && "hidden")}>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-4">
             {mode === "view" ? (
@@ -317,6 +379,16 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                     )}
                     {exportingZip ? "Exporting…" : "Export ZIP"}
                   </Button>
+                  {isAdmin ? (
+                    <Button
+                      variant="secondary"
+                      className="w-full sm:w-40"
+                      onClick={() => setDuplicateOpen(true)}
+                    >
+                      <Copy className="size-4" />
+                      Duplicate
+                    </Button>
+                  ) : null}
                   {isAdmin ? (
                     <>
                       <Button variant="secondary" className="w-full sm:w-40" onClick={beginEdit}>
@@ -646,6 +718,43 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
           </form>
         )}
       </section>
+      <Dialog
+        open={duplicateOpen}
+        onClose={() => !duplicating && setDuplicateOpen(false)}
+        title="Duplicate project"
+        icon={<Copy className="size-4" />}
+        description={`Create “${project.title} (copy)” with independent files and assets.`}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setDuplicateOpen(false)}
+              disabled={duplicating}
+            >
+              Cancel
+            </Button>
+            <Button onClick={() => void handleDuplicate()} disabled={duplicating}>
+              {duplicating ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Copy className="size-4" />
+              )}
+              {duplicating ? "Copying…" : "Duplicate project"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="p-4 text-muted-foreground text-sm leading-relaxed">
+          <p>
+            The active folder tree, document content, project details, icon, and assets will be
+            copied.
+          </p>
+          <p className="mt-3">
+            Members, comments, version history, shares, activity, notifications, and trash are not
+            copied.
+          </p>
+        </div>
+      </Dialog>
     </div>
   );
 }

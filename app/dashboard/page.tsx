@@ -5,6 +5,7 @@ import { reconcileMembers } from "@/app/dashboard/members-actions";
 import { OrgCard } from "@/app/dashboard/org-card";
 import { OrgInvitations } from "@/app/dashboard/org-invitations";
 import { OrgMembers } from "@/app/dashboard/org-members";
+import { OrgTemplates } from "@/app/dashboard/org-templates";
 import { fetchOrgDetails } from "@/lib/convex-server";
 import { orgAvatarUrl } from "@/lib/org-avatar";
 import { limitsFromFeatures } from "@/lib/plan-limits";
@@ -83,6 +84,7 @@ export default async function DashboardPage() {
           isAdmin={orgRole === "org:admin"}
           maxMembers={limits.maxMembersPerOrganization}
         />
+        <OrgTemplates clerkOrgId={orgId} isAdmin={orgRole === "org:admin"} />
       </div>
     </main>
   );

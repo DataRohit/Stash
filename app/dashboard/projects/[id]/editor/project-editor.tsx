@@ -4,6 +4,7 @@ import { useAuth, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
+  BookmarkPlus,
   Check,
   Code2,
   Columns2,
@@ -56,11 +57,13 @@ import {
   type CollabViewer,
   useCollabDoc,
 } from "@/app/dashboard/projects/[id]/editor/lib/use-collab-doc";
+import { NewDocumentDialog } from "@/app/dashboard/projects/[id]/editor/new-document-dialog";
 import { OutlinePanel } from "@/app/dashboard/projects/[id]/editor/outline-panel";
 import type {
   RichCommentRange,
   RichDocSelection,
 } from "@/app/dashboard/projects/[id]/editor/rich-doc-editor";
+import { SaveTemplateDialog } from "@/app/dashboard/projects/[id]/editor/save-template-dialog";
 import { SearchPanel } from "@/app/dashboard/projects/[id]/editor/search-panel";
 import {
   type ShareMode,
@@ -298,6 +301,7 @@ export function ProjectEditor({
   const createFolder = useMutation(api.documents.createFolder);
   const createFile = useMutation(api.documents.createFile);
   const createDocument = useMutation(api.documents.createDocument);
+  const createFromTemplate = useMutation(api.documents.createFromTemplate);
   const renameDoc = useMutation(api.documents.rename);
   const removeDoc = useMutation(api.documents.remove);
   const moveDoc = useMutation(api.documents.move);
@@ -309,6 +313,8 @@ export function ProjectEditor({
   const replyToComment = useMutation(api.comments.reply);
   const setCommentResolved = useMutation(api.comments.setResolved);
   const setShareMode = useMutation(api.sharing.setMode);
+  const saveTemplate = useMutation(api.templates.saveFromDocument);
+  const recordOpened = useMutation(api.navigation.recordOpened);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
@@ -317,6 +323,8 @@ export function ProjectEditor({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [newDocumentParent, setNewDocumentParent] = useState<string | null | undefined>(undefined);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [docOutline, setDocOutline] = useState<OutlineItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -504,7 +512,7 @@ export function ProjectEditor({
       return;
     }
     const target = nodes.find((node) => node.id === fileId);
-    if (target?.kind === "file") {
+    if (target && target.kind !== "folder") {
       const timer = window.setTimeout(() => {
         handledDeepLinkRef.current = key;
         setSelectedId(target.id);
@@ -516,6 +524,13 @@ export function ProjectEditor({
       return () => window.clearTimeout(timer);
     }
   }, [nodes, searchParams]);
+
+  useEffect(() => {
+    if (!selectedNode || selectedNode.kind === "folder" || accessLost) {
+      return;
+    }
+    void recordOpened({ documentId: selectedNode.id as Id<"documents"> });
+  }, [accessLost, recordOpened, selectedNode]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -924,6 +939,7 @@ export function ProjectEditor({
           })
         }
         onOpenTrash={() => setTrashOpen(true)}
+        onOpenDocumentDialog={setNewDocumentParent}
       />
     </SearchPanel>
   );
@@ -1109,6 +1125,16 @@ export function ProjectEditor({
                     isDoc && collab ? toArrayBuffer(Y.encodeStateAsUpdate(collab.ydoc)) : null
                   }
                 />
+              ) : null}
+              {isAdmin && selectedFileId ? (
+                <button
+                  type="button"
+                  onClick={() => setSaveTemplateOpen(true)}
+                  aria-label="Save as organization template"
+                  className="hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground lg:flex"
+                >
+                  <BookmarkPlus className="size-4" />
+                </button>
               ) : null}
               <div ref={moreRef} className="relative lg:hidden">
                 <button
@@ -1415,6 +1441,34 @@ export function ProjectEditor({
         isAdmin={isAdmin}
         onClose={() => setTrashOpen(false)}
       />
+      <NewDocumentDialog
+        open={newDocumentParent !== undefined}
+        projectId={pid}
+        parentId={newDocumentParent ?? null}
+        onClose={() => setNewDocumentParent(undefined)}
+        onCreate={async (value) => {
+          const id = await createFromTemplate({
+            projectId: pid,
+            parentId: value.parentId as Id<"documents"> | null,
+            name: value.name,
+            fileType: value.fileType,
+            templateId: value.templateId,
+          });
+          selectNode(id);
+        }}
+      />
+      {selectedFileId && selectedNode?.kind === "file" ? (
+        <SaveTemplateDialog
+          open={saveTemplateOpen}
+          documentName={selectedNode.name}
+          fileType={selectedNode.fileType ?? "doc"}
+          onClose={() => setSaveTemplateOpen(false)}
+          onSave={async (name) => {
+            await saveTemplate({ documentId: selectedFileId as Id<"documents">, name });
+            notify.success("Organization template saved");
+          }}
+        />
+      ) : null}
     </div>
   );
 }

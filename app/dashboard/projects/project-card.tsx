@@ -1,4 +1,4 @@
-import { Users } from "lucide-react";
+import { Loader2, TriangleAlert, Users } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,9 @@ type ProjectCardProps = {
   isAdmin: boolean;
   orgName: string;
   orgIconUrl: string;
+  cloneState: "copying" | "ready" | "failed";
+  cloneCopied: number;
+  cloneTotal: number;
 };
 
 export function ProjectCard({
@@ -32,11 +35,15 @@ export function ProjectCard({
   isAdmin,
   orgName,
   orgIconUrl,
+  cloneState,
+  cloneCopied,
+  cloneTotal,
 }: ProjectCardProps) {
   return (
     <Link
       href={`/dashboard/projects/${id}`}
-      className="glass flex flex-col gap-4 rounded-lg p-6 transition-colors hover:border-foreground/20"
+      aria-disabled={cloneState !== "ready"}
+      className={`glass flex flex-col gap-4 rounded-lg p-6 transition-colors hover:border-foreground/20 ${cloneState !== "ready" ? "pointer-events-none opacity-75" : ""}`}
     >
       <div className="flex items-start gap-4">
         <Image
@@ -66,6 +73,18 @@ export function ProjectCard({
       <p className="line-clamp-3 min-h-16 text-muted-foreground text-sm leading-relaxed">
         {description || "No description yet."}
       </p>
+      {cloneState !== "ready" ? (
+        <div className="flex items-center gap-2 rounded-md bg-foreground/[0.04] px-3 py-2 text-muted-foreground text-xs">
+          {cloneState === "copying" ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <TriangleAlert className="size-4 text-warning" />
+          )}
+          {cloneState === "copying"
+            ? `Copying ${cloneCopied} of ${cloneTotal}`
+            : "Copy failed. This project will be removed automatically."}
+        </div>
+      ) : null}
 
       {tags.length > 0 ? (
         <div className="flex flex-wrap gap-1.5">

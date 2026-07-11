@@ -8,16 +8,20 @@
  * @module
  */
 
+import type * as activity from "../activity.js";
 import type * as collab from "../collab.js";
 import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
 import type * as documents from "../documents.js";
 import type * as limits from "../limits.js";
 import type * as members from "../members.js";
+import type * as navigation from "../navigation.js";
 import type * as organizations from "../organizations.js";
 import type * as presence from "../presence.js";
 import type * as projects from "../projects.js";
 import type * as sharing from "../sharing.js";
+import type * as templateContent from "../templateContent.js";
+import type * as templates from "../templates.js";
 
 import type {
   ApiFromModules,
@@ -26,16 +30,20 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  activity: typeof activity;
   collab: typeof collab;
   comments: typeof comments;
   crons: typeof crons;
   documents: typeof documents;
   limits: typeof limits;
   members: typeof members;
+  navigation: typeof navigation;
   organizations: typeof organizations;
   presence: typeof presence;
   projects: typeof projects;
   sharing: typeof sharing;
+  templateContent: typeof templateContent;
+  templates: typeof templates;
 }>;
 
 /**

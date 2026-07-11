@@ -10,5 +10,7 @@ crons.interval("resume document purges", { minutes: 10 }, internal.documents.res
 crons.interval("purge expired trash", { hours: 6 }, internal.documents.purgeExpiredTrash, {});
 crons.interval("prune old notifications", { hours: 6 }, internal.comments.pruneNotifications, {});
 crons.interval("prune old share events", { hours: 12 }, internal.sharing.pruneShareEvents, {});
+crons.interval("prune project activity", { hours: 12 }, internal.activity.pruneProjectEvents, {});
+crons.interval("reap stuck project clones", { minutes: 30 }, internal.projects.reapStuckClones, {});
 
 export default crons;

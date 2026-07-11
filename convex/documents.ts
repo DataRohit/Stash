@@ -4,7 +4,9 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { recordProjectEvent } from "./activity";
 import { clampInt, HARD_MAX_PROJECT_BYTES, MIN_PROJECT_BYTES } from "./limits";
+import { BUILTIN_TEMPLATES } from "./templateContent";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_FILE_BYTES = 512 * 1024;
@@ -131,7 +133,7 @@ export async function accessForProject(
   projectId: Id<"projects">,
 ): Promise<Access | null> {
   const project = await ctx.db.get(projectId);
-  if (!project || project.deletedAt) {
+  if (!project || project.deletedAt || (project.cloneState && project.cloneState !== "ready")) {
     return null;
   }
   const caller = await callerFor(ctx, project.clerkOrgId);
@@ -671,7 +673,7 @@ export const createFolder = mutation({
       throw new Error("name-taken");
     }
     const now = Date.now();
-    return await ctx.db.insert("documents", {
+    const id = await ctx.db.insert("documents", {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
       parentId: args.parentId,
@@ -685,6 +687,15 @@ export const createFolder = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await recordProjectEvent(ctx, {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_created",
+      documentId: id,
+      targetName: name,
+      detail: "folder",
+    });
+    return id;
   },
 });
 
@@ -710,7 +721,7 @@ export const createFile = mutation({
       throw new Error("name-taken");
     }
     const now = Date.now();
-    return await ctx.db.insert("documents", {
+    const id = await ctx.db.insert("documents", {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
       parentId: args.parentId,
@@ -724,6 +735,15 @@ export const createFile = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await recordProjectEvent(ctx, {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_created",
+      documentId: id,
+      targetName: name,
+      detail: fileType,
+    });
+    return id;
   },
 });
 
@@ -745,7 +765,7 @@ export const createDocument = mutation({
       throw new Error("name-taken");
     }
     const now = Date.now();
-    return await ctx.db.insert("documents", {
+    const id = await ctx.db.insert("documents", {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
       parentId: args.parentId,
@@ -759,6 +779,100 @@ export const createDocument = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await recordProjectEvent(ctx, {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_created",
+      documentId: id,
+      targetName: name,
+      detail: "doc",
+    });
+    return id;
+  },
+});
+
+export const createFromTemplate = mutation({
+  args: {
+    projectId: v.id("projects"),
+    parentId: v.union(v.id("documents"), v.null()),
+    name: v.string(),
+    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("doc")),
+    templateId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const access = await requireProjectAccess(ctx, args.projectId);
+    await assertParent(ctx, args.projectId, args.parentId);
+    await assertCapacity(ctx, args.projectId);
+    if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) throw new Error("too-deep");
+    let content = "";
+    let contentState: ArrayBuffer | undefined;
+    if (args.templateId?.startsWith("builtin:")) {
+      const template = BUILTIN_TEMPLATES.find((item) => item.id === args.templateId);
+      if (!template || template.fileType !== args.fileType) throw new Error("invalid-template");
+      content = template.content;
+    } else if (args.templateId) {
+      const templateId = ctx.db.normalizeId("orgTemplates", args.templateId);
+      const template = templateId ? await ctx.db.get(templateId) : null;
+      if (
+        !template ||
+        template.clerkOrgId !== access.project.clerkOrgId ||
+        template.fileType !== args.fileType
+      )
+        throw new Error("invalid-template");
+      content = template.content;
+      contentState = template.contentState;
+    }
+    let rawName = args.name.trim();
+    if (args.fileType === "md" && !/\.md$/i.test(rawName)) rawName += ".md";
+    if (args.fileType === "html" && !/\.html$/i.test(rawName)) rawName += ".html";
+    const name = cleanName(rawName);
+    if (await nameTaken(ctx, args.projectId, args.parentId, name)) throw new Error("name-taken");
+    const size = byteLength(content);
+    if (size > MAX_FILE_BYTES) throw new Error("file-too-large");
+    if (
+      (await cachedProjectBytes(ctx, access.project)) + size >
+      (await maxProjectBytes(ctx, access.project))
+    )
+      throw new Error("project-full");
+    if (!contentState) {
+      const ydoc = new Y.Doc();
+      if (args.fileType !== "doc" && content) ydoc.getText("codemirror").insert(0, content);
+      contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+      ydoc.destroy();
+    }
+    const now = Date.now();
+    const id = await ctx.db.insert("documents", {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      parentId: args.parentId,
+      kind: "file",
+      name,
+      fileType: args.fileType,
+      content,
+      contentSeq: 1,
+      contentState,
+      storageId: null,
+      mimeType: null,
+      size,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("yjsUpdates", {
+      documentId: id,
+      seq: 1,
+      update: contentState,
+      createdAt: now,
+    });
+    await addProjectBytes(ctx, access.project, size);
+    await recordProjectEvent(ctx, {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_created",
+      documentId: id,
+      targetName: name,
+      detail: args.templateId ? "template" : args.fileType,
+    });
+    return id;
   },
 });
 
@@ -844,6 +958,16 @@ export const importDocuments = mutation({
       ids.push(id);
     }
     await addProjectBytes(ctx, access.project, addedBytes);
+    await recordProjectEvent(ctx, {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "documents_imported",
+      targetName: `${prepared.length} ${prepared.length === 1 ? "document" : "documents"}`,
+      detail: prepared
+        .slice(0, 5)
+        .map((file) => file.name)
+        .join(", "),
+    });
     return ids;
   },
 });
@@ -855,7 +979,7 @@ export const rename = mutation({
     if (!doc || isInactive(doc)) {
       throw new Error("not-found");
     }
-    await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectAccess(ctx, doc.projectId);
     const name = cleanName(args.name);
     let fileType = doc.fileType;
     if (doc.kind === "file") {
@@ -871,7 +995,17 @@ export const rename = mutation({
     if (await nameTaken(ctx, doc.projectId, doc.parentId, name, doc._id)) {
       throw new Error("name-taken");
     }
+    if (name === doc.name) return;
     await ctx.db.patch(doc._id, { name, fileType, updatedAt: Date.now() });
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_renamed",
+      documentId: doc._id,
+      targetName: name,
+      previousValue: doc.name,
+      nextValue: name,
+    });
   },
 });
 
@@ -882,7 +1016,8 @@ export const move = mutation({
     if (!doc || isInactive(doc)) {
       throw new Error("not-found");
     }
-    await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectAccess(ctx, doc.projectId);
+    if (doc.parentId === args.parentId) return;
     if (args.parentId) {
       await assertParent(ctx, doc.projectId, args.parentId);
       const descendants = await subtree(ctx, doc.projectId, doc._id);
@@ -900,6 +1035,19 @@ export const move = mutation({
       throw new Error("name-taken");
     }
     await ctx.db.patch(doc._id, { parentId: args.parentId, updatedAt: Date.now() });
+    const [previousParent, nextParent] = await Promise.all([
+      doc.parentId ? ctx.db.get(doc.parentId) : null,
+      args.parentId ? ctx.db.get(args.parentId) : null,
+    ]);
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_moved",
+      documentId: doc._id,
+      targetName: doc.name,
+      previousValue: previousParent?.name ?? "Root",
+      nextValue: nextParent?.name ?? "Root",
+    });
   },
 });
 
@@ -981,6 +1129,14 @@ export const duplicate = mutation({
       await ctx.db.insert("yjsUpdates", { documentId: id, seq: 1, update: state, createdAt: now });
     }
     await addProjectBytes(ctx, access.project, doc.size);
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "document_duplicated",
+      documentId: id,
+      targetName: name,
+      previousValue: doc.name,
+    });
     return id;
   },
 });
@@ -1014,8 +1170,15 @@ export const remove = mutation({
     if (!doc || isInactive(doc)) {
       return;
     }
-    await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectAccess(ctx, doc.projectId);
     await ctx.db.patch(doc._id, { trashedAt: Date.now(), updatedAt: Date.now() });
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_trashed",
+      documentId: doc._id,
+      targetName: doc.name,
+    });
   },
 });
 
@@ -1066,7 +1229,7 @@ export const restoreDocument = mutation({
     if (!doc?.trashedAt || doc.deletingAt) {
       throw new Error("not-found");
     }
-    await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectAccess(ctx, doc.projectId);
     let parentId = doc.parentId;
     if (parentId) {
       const parent = await ctx.db.get(parentId);
@@ -1083,6 +1246,13 @@ export const restoreDocument = mutation({
       name,
       updatedAt: Date.now(),
     });
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_restored",
+      documentId: doc._id,
+      targetName: name,
+    });
     return doc._id;
   },
 });
@@ -1095,6 +1265,13 @@ export const deleteForever = mutation({
       throw new Error("not-found");
     }
     const access = await requireProjectAdmin(ctx, doc.projectId);
+    await recordProjectEvent(ctx, {
+      projectId: doc.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_deleted",
+      documentId: doc._id,
+      targetName: doc.name,
+    });
     await ctx.db.patch(doc._id, { deletingAt: Date.now(), updatedAt: Date.now() });
     await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, {
       projectId: access.project._id,
@@ -1188,6 +1365,14 @@ export const createAsset = mutation({
       updatedAt: now,
     });
     await addProjectBytes(ctx, access.project, meta.size);
+    await recordProjectEvent(ctx, {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "node_created",
+      documentId: id,
+      targetName: name,
+      detail: "asset",
+    });
     return { id, name };
   },
 });

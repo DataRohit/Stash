@@ -178,6 +178,11 @@ export const purgeDeletedOrg = mutation({
     for (const member of members) {
       await ctx.db.delete(member._id);
     }
+    const templates = await ctx.db
+      .query("orgTemplates")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .collect();
+    for (const template of templates) await ctx.db.delete(template._id);
     const projects = await ctx.db
       .query("projects")
       .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
