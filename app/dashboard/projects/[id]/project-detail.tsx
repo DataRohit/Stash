@@ -523,7 +523,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
               <ProjectAccessManager
                 projectId={project.id}
                 clerkOrgId={clerkOrgId}
-                accessUserIds={project.accessUserIds}
+                access={project.access}
                 maxCollaborators={project.maxCollaborators}
               />
             ) : null}

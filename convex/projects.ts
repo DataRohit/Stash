@@ -22,6 +22,7 @@ const PURGE_DOC_BATCH = 20;
 const STUCK_CLONE_MS = 15 * 60 * 1000;
 
 type Caller = { userId: string; isAdmin: boolean };
+type GrantLevel = "viewer" | "editor";
 
 function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>();
@@ -298,6 +299,7 @@ export const get = query({
     if (!caller) {
       return null;
     }
+    let viewerLevel: GrantLevel = "editor";
     if (!caller.isAdmin) {
       const grant = await ctx.db
         .query("projectAccess")
@@ -308,6 +310,7 @@ export const get = query({
       if (!grant) {
         return null;
       }
+      viewerLevel = grant.level ?? "editor";
     }
     const access = caller.isAdmin ? await accessRowsFor(ctx, project._id) : [];
     const viewerMember = await acceptedMemberFor(ctx, project.clerkOrgId, caller.userId);
@@ -321,8 +324,12 @@ export const get = query({
       createdAt: project.createdAt,
       lastSavedAt: await lastSavedAtFor(ctx, project._id),
       isAdmin: caller.isAdmin,
+      viewerLevel,
       viewerIsOwner: viewerMember?.isOwner === true,
-      accessUserIds: access.map((row) => row.userId),
+      access: access.map((row) => ({
+        userId: row.userId,
+        level: row.level ?? ("editor" as const),
+      })),
       maxCollaborators: project.maxCollaborators ?? DEFAULT_MAX_COLLABORATORS,
     };
   },
@@ -712,18 +719,26 @@ export const removeImage = mutation({
 });
 
 export const grantAccess = mutation({
-  args: { projectId: v.id("projects"), userId: v.string() },
+  args: {
+    projectId: v.id("projects"),
+    userId: v.string(),
+    level: v.optional(v.union(v.literal("viewer"), v.literal("editor"))),
+  },
   handler: async (ctx, args) => {
     const project = await ctx.db.get(args.projectId);
     if (!project) {
       throw new Error("Not found");
     }
     const actorUserId = await requireAdmin(ctx, project.clerkOrgId);
+    const level: GrantLevel = args.level ?? "editor";
     const existing = await ctx.db
       .query("projectAccess")
       .withIndex("by_project_user", (q) => q.eq("projectId", project._id).eq("userId", args.userId))
       .unique();
     if (existing) {
+      if ((existing.level ?? "editor") !== level) {
+        await ctx.db.patch(existing._id, { level });
+      }
       return;
     }
     const member = await acceptedMemberFor(ctx, project.clerkOrgId, args.userId);
@@ -746,6 +761,7 @@ export const grantAccess = mutation({
       projectId: project._id,
       clerkOrgId: project.clerkOrgId,
       userId: args.userId,
+      level,
       createdAt: Date.now(),
     });
     const memberName =

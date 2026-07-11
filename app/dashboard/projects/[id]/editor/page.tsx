@@ -37,13 +37,15 @@ export default async function ProjectEditorPage({ params }: { params: Promise<{ 
     }
   }
 
+  const canEdit = project.isAdmin || project.viewerLevel === "editor";
+
   return (
     <main className="flex h-dvh w-full flex-col px-3 pt-32 pb-4 sm:px-6 lg:pt-24">
       <ProjectEditor
         projectId={id}
         projectTitle={project.title}
         clerkOrgId={orgId}
-        canEdit
+        canEdit={canEdit}
         isAdmin={project.isAdmin}
       />
     </main>

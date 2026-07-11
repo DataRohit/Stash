@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { Check, Loader2, UserPlus, X } from "lucide-react";
+import { Loader2, UserPlus, X } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
 import { RoleBadge } from "@/components/dashboard/role-badge";
@@ -12,10 +12,12 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { labelClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
+type GrantLevel = "viewer" | "editor";
+
 type ProjectAccessManagerProps = {
   projectId: string;
   clerkOrgId: string;
-  accessUserIds: string[];
+  access: { userId: string; level: GrantLevel }[];
   maxCollaborators: number;
 };
 
@@ -27,7 +29,7 @@ function initial(firstName: string | null, lastName: string | null, email: strin
 export function ProjectAccessManager({
   projectId,
   clerkOrgId,
-  accessUserIds,
+  access,
   maxCollaborators,
 }: ProjectAccessManagerProps) {
   const people = useQuery(api.members.listByOrg, { clerkOrgId });
@@ -36,18 +38,14 @@ export function ProjectAccessManager({
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const pid = projectId as Id<"projects">;
-  const accessSet = new Set(accessUserIds);
-  const used = accessUserIds.length;
+  const levelByUser = new Map(access.map((row) => [row.userId, row.level]));
+  const used = access.length;
   const full = used >= maxCollaborators;
 
-  const toggle = async (userId: string, hasAccess: boolean) => {
+  const run = async (userId: string, action: () => Promise<unknown>) => {
     setBusyId(userId);
     try {
-      if (hasAccess) {
-        await revoke({ projectId: pid, userId });
-      } else {
-        await grant({ projectId: pid, userId });
-      }
+      await action();
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       if (message.includes("too-many-collaborators")) {
@@ -70,7 +68,7 @@ export function ProjectAccessManager({
         <div className="flex flex-col gap-1">
           <span className={labelClass}>Access</span>
           <p className="text-muted-foreground text-sm">
-            Admins always have access. Grant specific members to unlock this project for them.
+            Admins always have full access. Grant members as an editor or a read-only viewer.
           </p>
         </div>
         <span
@@ -91,7 +89,8 @@ export function ProjectAccessManager({
         {members.map((person) => {
           const userId = person.memberUserId;
           const privileged = person.isOwner || person.role === "org:admin";
-          const hasAccess = userId ? accessSet.has(userId) : false;
+          const level = userId ? levelByUser.get(userId) : undefined;
+          const hasAccess = Boolean(level);
           const busy = busyId === userId;
           return (
             <li key={person.id} className="flex items-center gap-3 py-3">
@@ -125,36 +124,52 @@ export function ProjectAccessManager({
                 <span className="font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
                   Full access
                 </span>
-              ) : hasAccess ? (
-                <Button
-                  variant="success"
-                  size="sm"
-                  className="group w-28 hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
-                  onClick={() => userId && toggle(userId, true)}
-                  disabled={busy || !userId}
-                  aria-label="Revoke access"
-                >
-                  {busy ? (
-                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <>
-                      <span className="flex items-center gap-2 group-hover:hidden">
-                        <Check className="size-4" aria-hidden="true" />
-                        Access
-                      </span>
-                      <span className="hidden items-center gap-2 group-hover:flex">
-                        <X className="size-4" aria-hidden="true" />
-                        Revoke
-                      </span>
-                    </>
-                  )}
-                </Button>
+              ) : hasAccess && userId ? (
+                <div className="flex items-center gap-1.5">
+                  <fieldset className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
+                    <legend className="sr-only">Access level</legend>
+                    {(["viewer", "editor"] as const).map((option) => (
+                      <button
+                        key={option}
+                        type="button"
+                        aria-pressed={level === option}
+                        disabled={busy || level === option}
+                        onClick={() =>
+                          run(userId, () => grant({ projectId: pid, userId, level: option }))
+                        }
+                        className={cn(
+                          "flex h-7 cursor-pointer items-center rounded-xs px-2.5 font-medium text-xs capitalize transition-colors disabled:cursor-default",
+                          level === option
+                            ? "bg-foreground/[0.08] text-foreground"
+                            : "text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </fieldset>
+                  <button
+                    type="button"
+                    aria-label="Revoke access"
+                    disabled={busy}
+                    onClick={() => run(userId, () => revoke({ projectId: pid, userId }))}
+                    className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-xs border border-hairline text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive disabled:cursor-default"
+                  >
+                    {busy ? (
+                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <X className="size-4" aria-hidden="true" />
+                    )}
+                  </button>
+                </div>
               ) : (
                 <Button
                   variant="secondary"
                   size="sm"
                   className="w-28"
-                  onClick={() => userId && toggle(userId, false)}
+                  onClick={() =>
+                    userId && run(userId, () => grant({ projectId: pid, userId, level: "editor" }))
+                  }
                   disabled={busy || !userId || full}
                   aria-label="Grant access"
                 >

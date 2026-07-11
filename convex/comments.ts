@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { accessForProject, isInactiveTree, requireProjectAccess } from "./documents";
+import { accessForProject, isInactiveTree, requireProjectEditor } from "./documents";
 
 const MAX_ANCHOR_BYTES = 4096;
 const MAX_BODY_LENGTH = 2000;
@@ -183,7 +183,7 @@ async function fileForAccess(ctx: MutationCtx, documentId: Id<"documents">) {
   if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
     throw new Error("not-found");
   }
-  const access = await requireProjectAccess(ctx, doc.projectId);
+  const access = await requireProjectEditor(ctx, doc.projectId);
   return { doc, access };
 }
 
@@ -375,7 +375,7 @@ export const reply = mutation({
     if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, thread.projectId);
+    const access = await requireProjectEditor(ctx, thread.projectId);
     const actor = await actorFor(ctx, access.userId);
     const body = trimBody(args.body);
     const mentionUserIds = await validatedMentionIds(ctx, access.project, args.mentionUserIds);
@@ -441,7 +441,7 @@ export const setResolved = mutation({
     if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, thread.projectId);
+    const access = await requireProjectEditor(ctx, thread.projectId);
     const actor = await actorFor(ctx, access.userId);
     if ((thread.status === "resolved") === args.resolved) return;
     const messages = await ctx.db

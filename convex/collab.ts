@@ -12,8 +12,8 @@ import {
   cachedProjectBytes,
   isInactiveTree,
   maxProjectBytes,
-  requireProjectAccess,
   requireProjectAdmin,
+  requireProjectEditor,
 } from "./documents";
 
 const COMPACT_THRESHOLD = 200;
@@ -355,7 +355,7 @@ export const pushUpdate = mutation({
     if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     if (args.update.byteLength > MAX_COLLAB_UPDATE_BYTES) {
       throw new Error("update-too-large");
     }
@@ -460,7 +460,7 @@ export const ensureSeed = mutation({
     if (doc?.kind !== "file") {
       throw new Error("not-found");
     }
-    await requireProjectAccess(ctx, doc.projectId);
+    await requireProjectEditor(ctx, doc.projectId);
     if (doc.fileType === "doc") {
       return { seeded: false };
     }
@@ -521,7 +521,7 @@ export const createHistoryCheckpoint = mutation({
     if (doc?.kind !== "file") {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     const seq = await latestSeq(ctx, doc._id);
     if (seq === 0) {
       return { seq, created: false };

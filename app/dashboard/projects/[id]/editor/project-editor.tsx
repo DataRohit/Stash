@@ -1000,6 +1000,12 @@ export function ProjectEditor({
               {selectedNode.name}
             </span>
           ) : null}
+          {!canEdit ? (
+            <span className="hidden shrink-0 items-center gap-1 rounded-full border border-hairline bg-surface/60 px-2 py-0.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest sm:inline-flex">
+              <Eye className="size-3" aria-hidden="true" />
+              View only
+            </span>
+          ) : null}
           {saveStatus ? (
             <span className="hidden shrink-0 items-center gap-1 font-mono text-muted-foreground text-xs sm:flex">
               {collab?.syncing ? (

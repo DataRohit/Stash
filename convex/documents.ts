@@ -42,7 +42,14 @@ const WINDOWS_RESERVED_NAMES = new Set([
   "lpt9",
 ]);
 
-type Access = { project: Doc<"projects">; userId: string; isAdmin: boolean };
+type GrantLevel = "viewer" | "editor";
+
+type Access = {
+  project: Doc<"projects">;
+  userId: string;
+  isAdmin: boolean;
+  level: GrantLevel;
+};
 
 export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
@@ -140,6 +147,7 @@ export async function accessForProject(
   if (!caller) {
     return null;
   }
+  let level: GrantLevel = "editor";
   if (!caller.isAdmin) {
     const grant = await ctx.db
       .query("projectAccess")
@@ -148,8 +156,9 @@ export async function accessForProject(
     if (!grant) {
       return null;
     }
+    level = grant.level ?? "editor";
   }
-  return { project, userId: caller.userId, isAdmin: caller.isAdmin };
+  return { project, userId: caller.userId, isAdmin: caller.isAdmin, level };
 }
 
 export async function requireProjectAccess(
@@ -158,6 +167,17 @@ export async function requireProjectAccess(
 ): Promise<Access> {
   const access = await accessForProject(ctx, projectId);
   if (!access) {
+    throw new Error("Forbidden");
+  }
+  return access;
+}
+
+export async function requireProjectEditor(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+): Promise<Access> {
+  const access = await accessForProject(ctx, projectId);
+  if (!access || !(access.isAdmin || access.level === "editor")) {
     throw new Error("Forbidden");
   }
   return access;
@@ -662,7 +682,7 @@ export const createFolder = mutation({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const access = await requireProjectAccess(ctx, args.projectId);
+    const access = await requireProjectEditor(ctx, args.projectId);
     await assertParent(ctx, args.projectId, args.parentId);
     await assertCapacity(ctx, args.projectId);
     if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) {
@@ -706,7 +726,7 @@ export const createFile = mutation({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const access = await requireProjectAccess(ctx, args.projectId);
+    const access = await requireProjectEditor(ctx, args.projectId);
     await assertParent(ctx, args.projectId, args.parentId);
     await assertCapacity(ctx, args.projectId);
     if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) {
@@ -754,7 +774,7 @@ export const createDocument = mutation({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const access = await requireProjectAccess(ctx, args.projectId);
+    const access = await requireProjectEditor(ctx, args.projectId);
     await assertParent(ctx, args.projectId, args.parentId);
     await assertCapacity(ctx, args.projectId);
     if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) {
@@ -800,7 +820,7 @@ export const createFromTemplate = mutation({
     templateId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const access = await requireProjectAccess(ctx, args.projectId);
+    const access = await requireProjectEditor(ctx, args.projectId);
     await assertParent(ctx, args.projectId, args.parentId);
     await assertCapacity(ctx, args.projectId);
     if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) throw new Error("too-deep");
@@ -886,7 +906,7 @@ export const importDocuments = mutation({
     if (args.files.length === 0 || args.files.length > 100) {
       throw new Error("invalid-import");
     }
-    const access = await requireProjectAccess(ctx, args.projectId);
+    const access = await requireProjectEditor(ctx, args.projectId);
     await assertParent(ctx, args.projectId, args.parentId);
     if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) {
       throw new Error("too-deep");
@@ -979,7 +999,7 @@ export const rename = mutation({
     if (!doc || isInactive(doc)) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     const name = cleanName(args.name);
     let fileType = doc.fileType;
     if (doc.kind === "file") {
@@ -1016,7 +1036,7 @@ export const move = mutation({
     if (!doc || isInactive(doc)) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     if (doc.parentId === args.parentId) return;
     if (args.parentId) {
       await assertParent(ctx, doc.projectId, args.parentId);
@@ -1093,7 +1113,7 @@ export const duplicate = mutation({
     if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     await assertCapacity(ctx, doc.projectId);
     const total = await cachedProjectBytes(ctx, access.project);
     const max = await maxProjectBytes(ctx, access.project);
@@ -1148,7 +1168,7 @@ export const setContent = mutation({
     if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     const newSize = byteLength(args.content);
     if (newSize > MAX_FILE_BYTES) {
       throw new Error("file-too-large");
@@ -1170,7 +1190,7 @@ export const remove = mutation({
     if (!doc || isInactive(doc)) {
       return;
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     await ctx.db.patch(doc._id, { trashedAt: Date.now(), updatedAt: Date.now() });
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
@@ -1229,7 +1249,7 @@ export const restoreDocument = mutation({
     if (!doc?.trashedAt || doc.deletingAt) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     let parentId = doc.parentId;
     if (parentId) {
       const parent = await ctx.db.get(parentId);
@@ -1303,7 +1323,7 @@ export const purgeExpiredTrash = internalMutation({
 export const generateUploadUrl = mutation({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    await requireProjectAccess(ctx, args.projectId);
+    await requireProjectEditor(ctx, args.projectId);
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -1316,7 +1336,7 @@ export const createAsset = mutation({
     storageId: v.id("_storage"),
   },
   handler: async (ctx, args) => {
-    const access = await requireProjectAccess(ctx, args.projectId);
+    const access = await requireProjectEditor(ctx, args.projectId);
     const meta = await ctx.db.system.get(args.storageId);
     if (!meta) {
       throw new Error("invalid-asset");

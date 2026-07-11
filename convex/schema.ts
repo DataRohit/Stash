@@ -101,6 +101,7 @@ const schema = defineSchema({
     projectId: v.id("projects"),
     clerkOrgId: v.string(),
     userId: v.string(),
+    level: v.optional(v.union(v.literal("viewer"), v.literal("editor"))),
     createdAt: v.number(),
   })
     .index("by_project", ["projectId"])
