@@ -654,17 +654,16 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
         },
       }),
     ];
-    const insertImagesAt = async (_target: EditorView, files: File[], startPos: number) => {
+    const insertImagesAt = async (target: EditorView, files: File[], startPos: number) => {
       let pos = startPos;
       for (const file of files) {
         const path = await onInsertImageRef.current?.(file);
-        const active = viewRef.current;
-        if (!path || !active) {
+        if (!path || viewRef.current !== target) {
           continue;
         }
-        const at = Math.min(pos, active.state.doc.length);
+        const at = Math.min(pos, target.state.doc.length);
         const snippet = imageSnippet(language, path, imageAlt(file.name));
-        active.dispatch({
+        target.dispatch({
           changes: { from: at, insert: snippet },
           selection: { anchor: at + snippet.length },
         });

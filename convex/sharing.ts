@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { accessForProject, requireProjectAdmin } from "./documents";
+import { accessForProject, isInactive, isInactiveTree, requireProjectAdmin } from "./documents";
 
 type ShareMode = "private" | "org" | "public";
 
@@ -62,7 +62,7 @@ function visibleDocuments(docs: Doc<"documents">[]): Doc<"documents">[] {
     const seen = new Set<Id<"documents">>();
     while (current && !seen.has(current._id)) {
       seen.add(current._id);
-      if (current.deletingAt) {
+      if (isInactive(current)) {
         hidden.add(doc._id);
         break;
       }
@@ -153,7 +153,7 @@ function includeAncestors(
 
 async function fileForAdmin(ctx: MutationCtx, documentId: Id<"documents">) {
   const doc = await ctx.db.get(documentId);
-  if (doc?.kind !== "file" || doc.deletingAt) {
+  if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
     throw new Error("not-found");
   }
   const access = await requireProjectAdmin(ctx, doc.projectId);
@@ -199,7 +199,11 @@ export const getState = query({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (doc?.kind !== "file" || doc.deletingAt || !(await accessForProject(ctx, doc.projectId))) {
+    if (
+      doc?.kind !== "file" ||
+      (await isInactiveTree(ctx, doc)) ||
+      !(await accessForProject(ctx, doc.projectId))
+    ) {
       return null;
     }
     const share = await shareForDocument(ctx, doc._id);
@@ -294,7 +298,7 @@ export const getSharedDocument = query({
     }
     const project = await ctx.db.get(share.projectId);
     const doc = await ctx.db.get(share.documentId);
-    if (!project || project.deletedAt || doc?.kind !== "file" || doc.deletingAt) {
+    if (!project || project.deletedAt || doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       return null;
     }
     if (share.mode === "public" && !(await publicSharingEnabled(ctx, share.clerkOrgId))) {

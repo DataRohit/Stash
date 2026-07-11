@@ -127,10 +127,12 @@ function iframeCspHtml(): string {
 
 function previewScript(): string {
   return `
+document.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((heading, index) => {
+  heading.id = "stash-heading-" + index;
+});
 window.addEventListener("message", (event) => {
   if (event.data && event.data.type === "stash-scroll-heading") {
-    const headings = document.querySelectorAll("h1,h2,h3,h4,h5,h6");
-    const target = headings[event.data.index];
+    const target = document.getElementById(event.data.target);
     if (target) {
       target.scrollIntoView({ behavior: "smooth", block: "start" });
     }

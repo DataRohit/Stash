@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { purgeDocCollabBatch } from "./documents";
+import { isInactive, purgeDocCollabBatch } from "./documents";
 import {
   clampInt,
   DEFAULT_MAX_COLLABORATORS,
@@ -81,7 +81,7 @@ async function lastSavedAtFor(
     .collect();
   let latest: number | null = null;
   for (const doc of docs) {
-    if (doc.kind !== "folder" && doc.deletingAt === undefined) {
+    if (doc.kind !== "folder" && !isInactive(doc)) {
       latest = latest === null ? doc.updatedAt : Math.max(latest, doc.updatedAt);
     }
   }

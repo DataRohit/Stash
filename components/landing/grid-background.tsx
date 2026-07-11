@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { cn } from "@/lib/utils";
 
 const TWO_PI = Math.PI * 2;
 const DOT_RADIUS = 1.35;
@@ -17,6 +18,7 @@ type Dot = {
 
 type GridBackgroundProps = {
   ripples?: boolean;
+  fade?: boolean;
 };
 
 const drawDot = (ctx: CanvasRenderingContext2D, x: number, y: number, radius: number) => {
@@ -24,7 +26,7 @@ const drawDot = (ctx: CanvasRenderingContext2D, x: number, y: number, radius: nu
   ctx.arc(x, y, radius, 0, TWO_PI);
 };
 
-export function GridBackground({ ripples = true }: GridBackgroundProps) {
+export function GridBackground({ ripples = true, fade = true }: GridBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -193,5 +195,7 @@ export function GridBackground({ ripples = true }: GridBackgroundProps) {
     };
   }, [ripples]);
 
-  return <canvas ref={canvasRef} className="hero-fade absolute inset-0 size-full" />;
+  return (
+    <canvas ref={canvasRef} className={cn("absolute inset-0 size-full", fade && "hero-fade")} />
+  );
 }

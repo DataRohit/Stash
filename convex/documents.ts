@@ -8,6 +8,7 @@ import { clampInt, HARD_MAX_PROJECT_BYTES, MIN_PROJECT_BYTES } from "./limits";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_FILE_BYTES = 512 * 1024;
+const MAX_ASSET_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
 const MAX_NODES_PER_PROJECT = 2000;
 const MAX_DEPTH = 16;
@@ -45,8 +46,24 @@ export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-function isInactive(doc: Doc<"documents">): boolean {
+export function isInactive(doc: Doc<"documents">): boolean {
   return Boolean(doc.deletingAt || doc.trashedAt);
+}
+
+export async function isInactiveTree(
+  ctx: Pick<QueryCtx, "db">,
+  doc: Doc<"documents">,
+): Promise<boolean> {
+  let current: Doc<"documents"> | null = doc;
+  const seen = new Set<Id<"documents">>();
+  while (current && !seen.has(current._id)) {
+    seen.add(current._id);
+    if (isInactive(current)) {
+      return true;
+    }
+    current = current.parentId ? await ctx.db.get(current.parentId) : null;
+  }
+  return false;
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -171,7 +188,12 @@ async function assertParent(
     return;
   }
   const parent = await ctx.db.get(parentId);
-  if (!parent || isInactive(parent) || parent.projectId !== projectId || parent.kind !== "folder") {
+  if (
+    !parent ||
+    parent.projectId !== projectId ||
+    parent.kind !== "folder" ||
+    (await isInactiveTree(ctx, parent))
+  ) {
     throw new Error("invalid-parent");
   }
 }
@@ -894,12 +916,21 @@ async function copyName(
   const dot = name.lastIndexOf(".");
   const stem = dot > 0 ? name.slice(0, dot) : name;
   const extension = dot > 0 ? name.slice(dot) : "";
-  const first = `${stem} (copy)${extension}`;
+  const candidateFor = (suffix: string) => {
+    const maxExtensionLength = Math.max(0, MAX_NAME_LENGTH - suffix.length - 1);
+    const fittedExtension = extension.slice(0, maxExtensionLength);
+    const fittedStem = stem.slice(
+      0,
+      Math.max(1, MAX_NAME_LENGTH - suffix.length - fittedExtension.length),
+    );
+    return `${fittedStem}${suffix}${fittedExtension}`;
+  };
+  const first = candidateFor(" (copy)");
   if (!taken.has(first.toLowerCase())) {
     return first;
   }
   for (let index = 2; index < 10_000; index += 1) {
-    const candidate = `${stem} (copy ${index})${extension}`;
+    const candidate = candidateFor(` (copy ${index})`);
     if (!taken.has(candidate.toLowerCase())) {
       return candidate;
     }
@@ -1118,7 +1149,7 @@ export const createAsset = mutation({
       await ctx.storage.delete(args.storageId);
       throw new Error("invalid-asset");
     }
-    if (meta.size > MAX_FILE_BYTES) {
+    if (meta.size > MAX_ASSET_BYTES) {
       await ctx.storage.delete(args.storageId);
       throw new Error("file-too-large");
     }

@@ -167,7 +167,7 @@ export function SearchPanel({
             </p>
           ) : null}
           {nameMatches.length > 0 ? (
-            <ul className="flex flex-col">
+            <ul className="flex flex-col gap-1 px-2">
               {nameMatches.map((node) => (
                 <li key={node.id}>
                   <button
@@ -175,7 +175,7 @@ export function SearchPanel({
                     onClick={() => onSelect(node.id)}
                     aria-current={node.id === selectedId ? "true" : undefined}
                     className={cn(
-                      "flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-foreground/[0.04]",
+                      "flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors hover:bg-foreground/[0.04]",
                       node.id === selectedId ? "bg-accent/[0.09]" : null,
                     )}
                   >
@@ -198,7 +198,7 @@ export function SearchPanel({
               <p className="px-3 pt-3 pb-1 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                 In file contents
               </p>
-              <ul className="flex flex-col">
+              <ul className="flex flex-col gap-1 px-2">
                 {contentHits.map((hit) => {
                   const node = byId.get(hit.id);
                   return (
@@ -208,7 +208,7 @@ export function SearchPanel({
                         onClick={() => onSelect(hit.id)}
                         aria-current={hit.id === selectedId ? "true" : undefined}
                         className={cn(
-                          "flex w-full cursor-pointer flex-col gap-1 px-3 py-2 text-left transition-colors hover:bg-foreground/[0.04]",
+                          "flex w-full cursor-pointer flex-col gap-1 rounded-md px-3 py-2 text-left transition-colors hover:bg-foreground/[0.04]",
                           hit.id === selectedId ? "bg-accent/[0.09]" : null,
                         )}
                       >

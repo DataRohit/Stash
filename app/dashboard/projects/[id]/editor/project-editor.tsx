@@ -12,6 +12,7 @@ import {
   List,
   Loader2,
   MessageSquare,
+  MoreHorizontal,
   PanelLeft,
   Share2,
   X,
@@ -326,6 +327,7 @@ export function ProjectEditor({
   >(null);
   const [focusRequest, setFocusRequest] = useState<CommentFocusRequest | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [origin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [historyState, setHistoryState] = useState<{ documentId: string | null; open: boolean }>({
     documentId: null,
@@ -336,6 +338,7 @@ export function ProjectEditor({
   const editorRef = useRef<DocEditorHandle | null>(null);
   const handledDeepLinkRef = useRef<string | null>(null);
   const mobileCloseRef = useRef<HTMLButtonElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
 
   const startResize = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -469,6 +472,7 @@ export function ProjectEditor({
   }, [outlineOpen, selectedFileId, selectedNode, isDoc, docOutline, buffer, canEdit, doc]);
 
   const scrollToOutline = (item: OutlineItem) => {
+    setOutlineOpen(false);
     if (isDoc) {
       const headings = document.querySelectorAll<HTMLElement>(
         ".tiptap-doc-content :is(h1,h2,h3,h4,h5,h6)",
@@ -478,7 +482,7 @@ export function ProjectEditor({
     }
     editorRef.current?.focusRange(item.offset, item.offset);
     previewFrameRef.current?.contentWindow?.postMessage(
-      { type: "stash-scroll-heading", index: item.index },
+      { type: "stash-scroll-heading", target: item.target },
       "*",
     );
   };
@@ -547,6 +551,28 @@ export function ProjectEditor({
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [mobileFilesOpen]);
+
+  useEffect(() => {
+    if (!moreOpen) {
+      return;
+    }
+    const onPointer = (event: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(event.target as Node)) {
+        setMoreOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMoreOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [moreOpen]);
 
   useEffect(() => {
     if (doc && doc.id === selectedFileId && lastSeeded.current !== selectedFileId) {
@@ -972,7 +998,7 @@ export function ProjectEditor({
             {saveStatus ? `Save state: ${saveStatus}` : "No document selected"}
           </span>
         </div>
-        <div className="thin-scrollbar flex min-w-0 shrink items-center gap-3 overflow-x-auto">
+        <div className="flex min-w-0 shrink items-center gap-2">
           {selectedFileId && collab ? (
             <>
               <ViewerPresence viewers={collab.viewers} canOpen={isAdmin} />
@@ -982,7 +1008,7 @@ export function ProjectEditor({
               </span>
             </>
           ) : null}
-          <div className="hidden items-center gap-2 sm:flex">
+          <div className="hidden items-center gap-2 xl:flex">
             <div
               className="h-1.5 w-24 overflow-hidden rounded-full bg-foreground/10"
               role="progressbar"
@@ -1004,13 +1030,15 @@ export function ProjectEditor({
             </span>
           </div>
           {selectedFileId ? (
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
               {isAdmin ? (
                 <div className="relative">
                   <button
                     type="button"
                     onClick={() => setShareOpen((value) => !value)}
                     aria-label="Share document"
+                    aria-haspopup="dialog"
+                    aria-expanded={shareOpen}
                     aria-pressed={shareOpen}
                     className={cn(
                       "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
@@ -1026,6 +1054,8 @@ export function ProjectEditor({
                   </button>
                   {shareOpen ? (
                     <SharePopover
+                      open={shareOpen}
+                      onClose={() => setShareOpen(false)}
                       state={shareState}
                       origin={origin}
                       onSetMode={updateShareMode}
@@ -1057,9 +1087,11 @@ export function ProjectEditor({
                 type="button"
                 onClick={() => setOutlineOpen((value) => !value)}
                 aria-label="Document outline"
+                aria-haspopup="dialog"
+                aria-expanded={outlineOpen}
                 aria-pressed={outlineOpen}
                 className={cn(
-                  "hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors sm:flex",
+                  "hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors lg:flex",
                   outlineOpen
                     ? "bg-foreground/[0.08] text-foreground"
                     : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
@@ -1078,6 +1110,49 @@ export function ProjectEditor({
                   }
                 />
               ) : null}
+              <div ref={moreRef} className="relative lg:hidden">
+                <button
+                  type="button"
+                  onClick={() => setMoreOpen((value) => !value)}
+                  aria-label="More document actions"
+                  aria-haspopup="menu"
+                  aria-expanded={moreOpen}
+                  className="flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+                >
+                  <MoreHorizontal className="size-4" aria-hidden="true" />
+                </button>
+                {moreOpen ? (
+                  <div
+                    className="absolute top-10 right-0 z-[80] w-48 rounded-lg border border-hairline bg-surface p-1 shadow-xl"
+                    role="menu"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMoreOpen(false);
+                        setOutlineOpen(true);
+                      }}
+                      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                    >
+                      <List className="size-4" aria-hidden="true" />
+                      Document outline
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMoreOpen(false);
+                        setHistoryState({ documentId: selectedFileId, open: true });
+                      }}
+                      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                    >
+                      <History className="size-4" aria-hidden="true" />
+                      Version history
+                    </button>
+                  </div>
+                ) : null}
+              </div>
               {!isDoc ? (
                 <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                   <legend className="sr-only">View mode</legend>
@@ -1120,7 +1195,7 @@ export function ProjectEditor({
               aria-label="Version history"
               aria-pressed={historyOpen}
               className={cn(
-                "flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                "hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors lg:flex",
                 historyOpen
                   ? "bg-foreground/[0.08] text-foreground"
                   : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
@@ -1132,7 +1207,7 @@ export function ProjectEditor({
         </div>
       </div>
 
-      <div className="relative z-0 flex min-h-0 flex-1">
+      <div className="relative z-0 flex min-h-0 min-w-0 flex-1 overflow-hidden">
         {mobileFilesOpen ? (
           <div className="fixed inset-0 z-[95] p-3 pt-24 sm:hidden">
             <button
@@ -1295,6 +1370,7 @@ export function ProjectEditor({
         </div>
         {outlineOpen && selectedFileId && selectedNode?.kind === "file" ? (
           <OutlinePanel
+            open={outlineOpen}
             items={outlineItems}
             onSelect={scrollToOutline}
             onClose={() => setOutlineOpen(false)}
@@ -1333,9 +1409,12 @@ export function ProjectEditor({
           }}
         />
       ) : null}
-      {trashOpen ? (
-        <TrashPanel projectId={pid} isAdmin={isAdmin} onClose={() => setTrashOpen(false)} />
-      ) : null}
+      <TrashPanel
+        open={trashOpen}
+        projectId={pid}
+        isAdmin={isAdmin}
+        onClose={() => setTrashOpen(false)}
+      />
     </div>
   );
 }

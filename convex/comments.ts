@@ -3,7 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { accessForProject, requireProjectAccess } from "./documents";
+import { accessForProject, isInactiveTree, requireProjectAccess } from "./documents";
 
 const MAX_ANCHOR_BYTES = 4096;
 const MAX_BODY_LENGTH = 2000;
@@ -144,7 +144,7 @@ async function notifyMentions(
 
 async function fileForAccess(ctx: MutationCtx, documentId: Id<"documents">) {
   const doc = await ctx.db.get(documentId);
-  if (doc?.kind !== "file" || doc.deletingAt) {
+  if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
     throw new Error("not-found");
   }
   const access = await requireProjectAccess(ctx, doc.projectId);
@@ -160,7 +160,7 @@ async function visibleNotificationTarget(ctx: QueryCtx, row: Doc<"notifications"
     !project ||
     project.deletedAt ||
     doc?.kind !== "file" ||
-    doc.deletingAt ||
+    (await isInactiveTree(ctx, doc)) ||
     !thread ||
     thread.documentId !== row.documentId ||
     thread.projectId !== row.projectId ||
@@ -177,7 +177,11 @@ export const listForDocument = query({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (doc?.kind !== "file" || doc.deletingAt || !(await accessForProject(ctx, doc.projectId))) {
+    if (
+      doc?.kind !== "file" ||
+      (await isInactiveTree(ctx, doc)) ||
+      !(await accessForProject(ctx, doc.projectId))
+    ) {
       return [];
     }
     const threads = await ctx.db
@@ -333,7 +337,7 @@ export const reply = mutation({
       throw new Error("not-found");
     }
     const doc = await ctx.db.get(thread.documentId);
-    if (doc?.kind !== "file" || doc.deletingAt) {
+    if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       throw new Error("not-found");
     }
     const access = await requireProjectAccess(ctx, thread.projectId);
@@ -378,7 +382,7 @@ export const setResolved = mutation({
       throw new Error("not-found");
     }
     const doc = await ctx.db.get(thread.documentId);
-    if (doc?.kind !== "file" || doc.deletingAt) {
+    if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       throw new Error("not-found");
     }
     const access = await requireProjectAccess(ctx, thread.projectId);

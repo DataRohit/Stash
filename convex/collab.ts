@@ -9,6 +9,7 @@ import {
   addProjectBytes,
   byteLength,
   cachedProjectBytes,
+  isInactiveTree,
   maxProjectBytes,
   requireProjectAccess,
   requireProjectAdmin,
@@ -349,7 +350,7 @@ export const pushUpdate = mutation({
   args: { documentId: v.id("documents"), update: v.bytes() },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (doc?.kind !== "file") {
+    if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc))) {
       throw new Error("not-found");
     }
     const access = await requireProjectAccess(ctx, doc.projectId);

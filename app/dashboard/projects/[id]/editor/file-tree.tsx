@@ -426,7 +426,10 @@ export function FileTree({
   const renderNodes = (parentId: string | null, depth: number) => {
     const list = sortedChildren(parentId);
     return (
-      <ul className="flex flex-col" role={depth === 0 ? "presentation" : "group"}>
+      <ul
+        className={cn("flex flex-col gap-0.5", depth === 0 && "px-2")}
+        role={depth === 0 ? "presentation" : "group"}
+      >
         {draft?.parentId === parentId ? renderDraft(depth) : null}
         {list.map((node) => {
           const isOpen = isExpanded(node.id);
@@ -437,7 +440,7 @@ export function FileTree({
             <li key={node.id}>
               <div
                 className={cn(
-                  "group relative flex h-7 items-center transition-colors",
+                  "group relative flex h-7 items-center overflow-hidden rounded-md transition-colors",
                   !isRenaming && "cursor-pointer",
                   dropTargetId === node.id && node.kind === "folder"
                     ? "bg-accent/12 ring-1 ring-accent/50 ring-inset"
@@ -485,18 +488,26 @@ export function FileTree({
                     onDragStart={canEdit ? (event) => onNodeDragStart(event, node) : undefined}
                     onDragEnd={canEdit ? endDrag : undefined}
                     onDragOver={
-                      canEdit && node.kind === "folder"
-                        ? (event) => onZoneDragOver(event, node.id)
+                      canEdit
+                        ? (event) =>
+                            onZoneDragOver(event, node.kind === "folder" ? node.id : node.parentId)
                         : undefined
                     }
                     onDragLeave={
-                      canEdit && node.kind === "folder"
-                        ? () => setDropTargetId((prev) => (prev === node.id ? null : prev))
+                      canEdit
+                        ? () =>
+                            setDropTargetId((prev) =>
+                              prev ===
+                              (node.kind === "folder" ? node.id : (node.parentId ?? ROOT_TARGET))
+                                ? null
+                                : prev,
+                            )
                         : undefined
                     }
                     onDrop={
-                      canEdit && node.kind === "folder"
-                        ? (event) => onZoneDrop(event, node.id)
+                      canEdit
+                        ? (event) =>
+                            onZoneDrop(event, node.kind === "folder" ? node.id : node.parentId)
                         : undefined
                     }
                     data-tree-node-id={node.id}
@@ -506,7 +517,8 @@ export function FileTree({
                     aria-expanded={node.kind === "folder" ? isOpen : undefined}
                     tabIndex={isSelected || (!selectedId && visibleIds[0] === node.id) ? 0 : -1}
                     className={cn(
-                      "flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent pr-32 text-left",
+                      "flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent text-left",
+                      node.kind === "folder" ? "pr-40" : node.kind === "file" ? "pr-28" : "pr-20",
                       canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
                     )}
                     style={{ paddingLeft: rowPadding(depth) }}
@@ -537,7 +549,7 @@ export function FileTree({
                   </button>
                 )}
                 {canEdit && !isRenaming ? (
-                  <div className="pointer-events-none absolute right-2 z-10 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                  <div className="pointer-events-none absolute right-1 z-10 flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                     {node.kind === "folder" ? (
                       <>
                         <ActionButton
@@ -560,7 +572,7 @@ export function FileTree({
                         </ActionButton>
                       </>
                     ) : null}
-                    {node.kind !== "folder" ? (
+                    {node.kind === "file" ? (
                       <ActionButton label="Duplicate" onClick={() => void onDuplicate(node)}>
                         <Copy className="size-3.5" aria-hidden="true" />
                       </ActionButton>
