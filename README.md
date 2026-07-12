@@ -1,193 +1,310 @@
 # Stash
 
-[![Quality](https://github.com/datarohit/stash/actions/workflows/quality.yml/badge.svg)](https://github.com/datarohit/stash/actions/workflows/quality.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Next.js](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
-[![Biome](https://img.shields.io/badge/Biome-2-60A5FA?logo=biome&logoColor=white)](https://biomejs.dev)
+## Collaborative document workspace for Markdown, HTML, and rich text
 
-**A collaborative workspace for Markdown, HTML, and rich-text documents.**
+[![Quality](https://github.com/DataRohit/Stash/actions/workflows/quality.yml/badge.svg)](https://github.com/DataRohit/Stash/actions/workflows/quality.yml)
+[![Project Status: Active](https://img.shields.io/badge/Project%20Status-Active-brightgreen)](https://github.com/DataRohit/Stash)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue)](./package.json)
+[![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)](https://nextjs.org)
+[![React 19](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://react.dev)
+[![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
+[![Convex](https://img.shields.io/badge/Convex-Backend-EE342F)](https://convex.dev)
+[![Clerk](https://img.shields.io/badge/Clerk-Identity-6C47FF?logo=clerk&logoColor=white)](https://clerk.com)
+[![pnpm 11](https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
 
-Stash organizes documentation, planning notes, and web content into projects with nested folders. Work in Markdown, HTML, or rich text; collaborate on the same file in real time; review version history; and share read-only links when the document is ready.
+**Stash organizes collaborative documents, assets, discussion, history, search, and controlled sharing inside organization-scoped projects.**
 
-## Features
+[Features](#key-features) · [Architecture](#architecture) · [Technology](#technology-stack) · [Setup](#local-development) · [Quality](#quality-verification) · [Production](#production-deployment)
 
-- **Document workspace** — create Markdown (`.md`), HTML (`.html`), and rich-text documents in nested project folders; import existing `.md`/`.html`/`.txt` files; upload image and SVG assets alongside them; drag-and-drop to move, duplicate, and restore from trash.
-- **Editor productivity** — cross-file link autocomplete, a live document outline for every format, and paste or drop images straight into Markdown and HTML.
-- **Live collaboration** — Yjs-backed collaborative editing keeps Markdown, HTML, and rich-text files synchronized, with remote cursors, presence, incremental updates, and clear sync or quota states.
-- **Safe previews** — preview Markdown, Mermaid diagrams, and HTML in a sandboxed iframe. Mermaid SVG is rendered locally, and linked assets or documents resolve from the project tree.
-- **Search and discussion** — search accessible projects, file paths, and document contents from anywhere with the quick-open palette, revisit recent documents, and collaborate through anchored comment threads and mentions.
-- **Activity and notifications** — review a real-time project lifecycle feed, receive alerts for mentions, thread replies, and resolution changes, and mute future notifications per project.
-- **Templates and reuse** — start documents from built-in or organization templates, save reusable content in every format, and duplicate complete projects with independent assets.
-- **Version history** — create checkpoints, compare revisions with inline diffs, preview an older version, and restore Markdown, HTML, or rich-text revisions as an administrator.
-- **Export and sharing** — export any document as standalone HTML or print/PDF, download Markdown files as `.md`, or export a whole project as a ZIP. Admins can create private, organization-only, or public read-only links for every document format.
-- **Organizations and access** — Clerk organizations, invitations, project-level grants, plan limits, and server-side authorization keep workspaces isolated.
+---
 
-## Project status
+## Overview
 
-Stash is in active development, but the collaborative document workspace is implemented: authentication, organization onboarding, membership management, project access, the real-time editor, rich-text files, comments, version history, sharing, global search and quick open, recent documents, exports, and plan-limit enforcement are all present. Expect product and integration details to keep evolving.
+Stash is a multi-tenant document workspace built for teams that maintain Markdown, HTML, and rich-text content together. Every format participates in real-time collaboration, comments, version history, search, sharing, and export. Convex owns reactive data and authorization boundaries; Clerk owns sessions, organizations, roles, invitations, and billing-plan data.
 
-## Tech stack
+The repository includes the complete application and local backend workflow. Production account provisioning, webhook configuration, deployment, and monitoring remain operator-controlled requirements.
 
-| Area | Choice |
-| --- | --- |
-| Framework | Next.js 16 (App Router) + React 19 |
-| Language | TypeScript 5 (strict) |
-| Backend | [Convex](https://convex.dev) (reactive database) |
-| Auth & billing | [Clerk](https://clerk.com) (sessions, organizations, roles, plans) |
-| Collaboration | [Yjs](https://yjs.dev) + CodeMirror 6 + Tiptap |
-| Styling | Tailwind CSS v4 + [next-themes](https://github.com/pacocoursey/next-themes) |
-| UI extras | [Sonner](https://sonner.emilkowal.ski) toasts, [DiceBear](https://dicebear.com) generated org icons |
-| Package manager | pnpm |
+## Key features
 
-## Quality toolchain
+### Documents and files
 
-| Concern | Tool |
-| --- | --- |
-| Formatting + import/class sorting | [Biome](https://biomejs.dev) |
-| Linting (Next.js framework rules) | [ESLint](https://eslint.org) + `eslint-config-next` |
-| Type checking | TypeScript (`tsc --noEmit`) |
-| Unused files / exports / deps | [Knip](https://knip.dev) |
-| Spell checking | [CSpell](https://cspell.org) |
-| Secret scanning | [secretlint](https://github.com/secretlint/secretlint) |
-| Markdown linting | [markdownlint-cli2](https://github.com/DavidAnson/markdownlint-cli2) |
-| No-comments policy | Custom script (`tools/check-no-comments.mjs`) |
-| `package.json` order | [sort-package-json](https://github.com/keithamus/sort-package-json) |
-| Git hooks | [Husky](https://typicode.github.io/husky) + [lint-staged](https://github.com/lint-staged/lint-staged) |
-| Commit messages | [commitlint](https://commitlint.js.org) (Conventional Commits) |
+- Nested project folders with Markdown, HTML, rich-text, image, and SVG nodes.
+- Multi-file Markdown, HTML, and text import with 512 KB file limits.
+- Drag-and-drop movement with cycle prevention and an accessible move dialog.
+- File duplication with collision-safe names and independent collaboration state.
+- Thirty-day trash, restoration, administrator-only permanent deletion, and bounded purge jobs.
+- Project and plan storage accounting enforced at the backend boundary.
 
-### Lint and format split
+### Editing and collaboration
 
-Biome is the formatter and the import/Tailwind-class organizer. ESLint runs only `eslint-config-next` to keep the Next.js framework rules Biome does not provide (for example `no-html-link-for-pages` and the React Hooks rules). There is no Prettier — Biome replaces it.
+- CodeMirror 6 editors for Markdown and HTML.
+- Tiptap editor for collaborative rich text.
+- Yjs incremental synchronization over Convex with snapshots and compaction.
+- Presence and remote cursors with session ownership protection.
+- Cross-file link completion, synchronized outlines, and image paste or drop.
+- Sandboxed Markdown, Mermaid, and full HTML preview.
 
-## Prerequisites
+### Review and communication
 
-- [Node.js](https://nodejs.org) `>=20` (the repo pins `22` via `.nvmrc`)
-- [pnpm](https://pnpm.io) `11` (run `corepack enable` to use the version pinned in `package.json`)
+- Yjs-relative comment anchors for code and rich-text editors.
+- Replies, resolution, reopening, mentions, and notification preferences.
+- Version checkpoints, text comparison, restoration, and live collaborator updates.
+- Project activity feed with actor, target, event type, and time.
 
-## Getting started
+### Search and navigation
 
-```bash
-pnpm install
-pnpm dev:local
+- Full-text search across every accessible project.
+- Token-aware multi-term results without contiguous-substring loss.
+- Dashboard quick-open palette with project, path, file, and content results.
+- Per-user recent-document tracking with access revalidation.
+
+### Sharing and export
+
+- Private, organization-only, and public read-only document modes.
+- Optional expiry and share-token rotation.
+- Organization policy that degrades public links to organization access.
+- Public-edge throttling isolated by token and IP.
+- Standalone HTML, print/PDF, Markdown, and project ZIP export.
+
+### Organizations and authorization
+
+- Mandatory Clerk organizations and organization-scoped routing.
+- Administrator, editor, and viewer behavior.
+- Server-side organization, role, membership, project-grant, and mutation checks.
+- Project, member, collaborator, and storage plan limits.
+- Clerk webhook synchronization with a local reconciliation fallback.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Browser["Browser"] --> Next["Next.js App Router"]
+  Browser <--> Convex["Convex reactive backend"]
+  Next <--> Clerk["Clerk identity and billing"]
+  Next --> Convex
+  Clerk --> Webhook["Signed webhook route"]
+  Webhook --> Convex
+  Convex --> Data["Documents, Yjs, comments, history, shares"]
+  Convex --> Storage["Asset storage"]
+  Convex --> Cron["Maintenance jobs"]
 ```
 
-`pnpm dev:local` provisions a local Convex backend if needed, writes the Convex-managed values to `.env.local`, then runs the Convex dev server and the Next.js dev server together. Open [http://localhost:3000](http://localhost:3000) to view the app. To initialize only the local database without starting the web server, use `pnpm db:setup`. To run only the web server, use `pnpm dev:web`.
+Authorization is enforced inside Convex public functions. UI restrictions are presentation controls and are not treated as security boundaries.
 
-## Sample documents
+### Data lifecycle
 
-Two matching product-tour files are provided for exercising previews, Mermaid rendering, custom HTML styles and scripts, cross-file links, sharing, and exports:
-
-- [Markdown demo](./examples/demo.md)
-- [HTML demo](./examples/demo.html)
-
-Upload either file to a project or paste its contents into a new file in the editor.
-
-## Backend (Convex)
-
-The backend is [Convex](https://convex.dev), a reactive database with type-safe functions.
-
-- **Local development** runs an open-source Convex backend on your machine — no account needed. `pnpm db:setup` runs the Convex local initialization once and writes `CONVEX_DEPLOYMENT`, `NEXT_PUBLIC_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_SITE_URL` to `.env.local`. `pnpm dev:local` starts local Convex and Next.js together; `pnpm dev:db` starts only Convex.
-- **Schema** lives in `convex/schema.ts`. It models organizations, members, projects and access grants, templates, the document tree, Yjs updates and snapshots, presence, comments and notifications, notification preferences, project activity, and document shares. Backend functions live in `convex/`; generated types in `convex/_generated/` are committed.
-- **Data lifecycle** — project and document removal is marked first, then drained in bounded batches. Scheduled jobs compact collaboration state, prune version history and project activity, clear stale presence, and clean up obsolete notifications and share events.
-- **Clerk is wired to Convex** via `convex/auth.config.ts` (using `CLERK_JWT_ISSUER_DOMAIN`), so Convex functions can read the signed-in identity from the Clerk session token.
-- **Generated code** in `convex/_generated/` is produced by the Convex CLI and committed so the project type-checks in CI. It is excluded from formatting, linting, spell-checking, and the no-comments policy.
-- **Dashboard** for the local backend runs at `http://127.0.0.1:6790`. `pnpm dev:local` prints its URL once the backend is up; or open it any time with `pnpm db:dashboard`.
-- **Deploying to the cloud** later is a matter of running `npx convex login` and `npx convex deploy`; no app code changes.
-
-The React client is wired in `components/providers/ConvexClientProvider.tsx` and mounted in `app/layout.tsx`. It falls back to a placeholder URL when `NEXT_PUBLIC_CONVEX_URL` is unset, so builds without a backend (such as CI) never fail.
-
-## Authentication, organizations & billing
-
-Authentication and billing run on [Clerk](https://clerk.com); set the Clerk keys from `.env.example` before signing in.
-
-- **Auth** — `proxy.ts` protects `/dashboard` and `/onboarding`. A signed-in user without an active organization is redirected into onboarding.
-- **Organizations are mandatory** — every user must create or select an organization before reaching the dashboard. Orgs are created through a server action (not Clerk's client widgets) so the plan cap is always enforced.
-- **Plan-based limits** — the active plan and its limits are read straight from the Clerk billing API (`lib/subscription.ts`, `lib/plan-limits.ts`) rather than the session token, so a fresh upgrade takes effect immediately. Free allows one organization; Pro allows more.
-- **Per-org customization** — an organization's name and icon are stored in Clerk while its description and tags live in Convex (`convex/organizations.ts`). The icon reuses Clerk's org logo: a [DiceBear](https://dicebear.com) icon is generated locally (no external avatar service) and uploaded as the default on creation, admins can replace it with their own upload, and Clerk hosts and serves it so the app and Clerk's own widgets show the same icon. Admins can also delete the organization (a two-step confirmation that switches to another org and blocks deleting the last one).
-- **Real-time members & invitations** — admins invite existing users by email (with a role), cancel pending invites, and remove members, capped per plan by a `N_organization_members` billing feature (`lib/plan-limits.ts`). Clerk remains authoritative; Convex holds a denormalized read model for live dashboard updates. In a hosted deployment, configure Clerk webhooks for `/api/webhooks/clerk` and set `CLERK_WEBHOOK_SIGNING_SECRET` plus a strong `CONVEX_PURGE_SECRET`. Local development falls back to a throttled dashboard reconciliation.
-- **Plan status** — the dashboard navbar shows a badge for the current plan (Free or Pro) with the renewal or cancellation date, read from the Clerk billing API (`lib/subscription.ts`).
-- **Projects** — under `/dashboard/projects`, admins create or duplicate projects (icon, title, description, tags, active tree, and independent assets) capped by the `N_projects_per_organization` billing feature. Admins manage metadata, access grants, sharing, and file-tree changes; people granted project access can open the workspace. Convex enforces `org_id`, `org_role`, and user identity checks at its public API boundary, and deletion revokes related access and data.
-- **Project document editor** — each project opens `/dashboard/projects/[id]/editor`. It includes a nested file tree with import, drag-and-drop move, duplicate, and trash/restore; Markdown, HTML, and rich-text documents; a live outline and image paste/drop; local Mermaid rendering in a sandboxed preview; live Yjs collaboration and presence; file search; threaded comments; version history with diff and restore; document sharing; and individual or ZIP exports. Files are limited to 512 KB, while project capacity is limited by the active plan (Free defaults to 8 MB and Pro defaults to 64 MB).
-
-To fully activate members/invitations, two one-time steps are needed in the Clerk dashboard (the code ships with safe fallbacks until then): add a `N_organization_members` feature to the Free and Pro plans (e.g. `3_organization_members` / `25_organization_members`), and add `org_id`/`org_role` claims (`{"org_id": "{{org.id}}", "org_role": "{{org.role}}"}`) to the `convex` JWT template so Convex can scope reads to the caller's organization.
-
-## Scripts
-
-| Script | What it does |
-| --- | --- |
-| `pnpm db:setup` | Initialize local Convex once and write Convex-managed env vars to `.env.local` |
-| `pnpm db:dashboard` | Open the local Convex dashboard |
-| `pnpm dev:web` | Start the Next.js dev server |
-| `pnpm dev:db` | Start the Convex dev server (local backend) |
-| `pnpm dev:local` | Run local Convex + web together; prints the backend, web, and dashboard URLs |
-| `pnpm build` | Create a production build |
-| `pnpm start` | Serve the production build |
-| `pnpm check` | Run the full quality gate (all checks below + build) |
-| `pnpm fix` | Auto-fix formatting, lint, and `package.json` order |
-| `pnpm format` | Format and organize imports/classes (Biome, writes) |
-| `pnpm format:check` | Verify formatting and organization (Biome, read-only) |
-| `pnpm lint` | Lint with ESLint (`--max-warnings 0`) |
-| `pnpm lint:fix` | Lint and auto-fix with ESLint |
-| `pnpm typecheck` | Type-check with TypeScript |
-| `pnpm knip` | Report unused files, exports, and dependencies |
-| `pnpm spellcheck` | Spell-check source and docs |
-| `pnpm secrets` | Scan the repo for committed secrets |
-| `pnpm markdownlint` | Lint Markdown files |
-| `pnpm comments:check` | Fail if any comment exists in `.ts`, `.tsx`, or `.css` |
-| `pnpm package:check` | Verify `package.json` key order |
-| `pnpm package:fix` | Sort `package.json` keys |
-| `pnpm prepare` | Install Husky git hooks |
-
-## The quality gate
-
-`pnpm check` runs, in order and fail-fast:
-
-```text
-package:check → format:check → lint → typecheck → knip
-→ spellcheck → secrets → markdownlint → comments:check → build
+```mermaid
+flowchart LR
+  Active["Active node"] --> Trash["Trash"]
+  Trash -->|restore| Active
+  Trash -->|30 days or admin deletion| Marked["Marked for purge"]
+  Marked --> Drain["Bounded purge batches"]
+  Drain --> Removed["Data and storage removed"]
 ```
 
-The same command runs in CI on every push and pull request, so green locally means green on the server. Run `pnpm fix` first to auto-resolve most failures.
+Scheduled functions sweep stale presence, prune history, notifications, activity and share windows, purge expired trash, resume interrupted purges, and reap failed project clones.
 
-## Conventions
+## Technology stack
 
-- **No comments.** Authored `.ts`, `.tsx`, and `.css` files must contain zero comments or doc-strings. Write code that explains itself; the gate enforces this.
-- **Conventional Commits.** Commit messages must follow [Conventional Commits](https://www.conventionalcommits.org) (for example `feat: add search`). `commitlint` validates each message.
-- **No arbitrary Tailwind values.** Register design tokens in `@theme` and push complex styles into `@layer components` rather than using bracketed arbitrary values.
-- **Pre-commit checks.** Husky runs `lint-staged` (format + lint of staged files) and validates the commit message automatically.
+| Area | Technology | Purpose |
+| --- | --- | --- |
+| Web | Next.js 16, React 19 | App Router, server rendering, server actions |
+| Language | TypeScript 5 | Strict application and backend types |
+| Backend | Convex | Reactive database, functions, storage, scheduled jobs |
+| Identity | Clerk | Authentication, organizations, roles, plans, invitations |
+| Collaboration | Yjs | Shared document state and relative positions |
+| Code editing | CodeMirror 6 | Markdown and HTML editing |
+| Rich text | Tiptap 3 | ProseMirror-based collaborative editing |
+| Rendering | marked, Mermaid, Resvg | Markdown, diagrams, and SVG processing |
+| Styling | Tailwind CSS 4 | Theme tokens and application styling |
+| Testing | Vitest | Automated regression tests |
+| Quality | Biome, ESLint, TypeScript, Knip | Formatting and static verification |
+| Package management | pnpm 11 | Reproducible dependency installation |
 
 ## Project structure
 
 ```text
-app/                 App Router routes (landing, auth, onboarding, dashboard), layout, and global styles
-components/          UI primitives, providers, and landing-page sections
-lib/                 Server/client helpers (Clerk billing, plan limits, Convex access, org avatars)
-convex/              Convex backend: schema and functions (_generated is committed)
-docs/                Product roadmap and design documents
-examples/            Matching Markdown and HTML files for manual workspace testing
-tools/               Repo automation (no-comments checker, dashboard URL printer)
-.github/             CI workflow, Dependabot, issue/PR templates, CODEOWNERS
-.husky/              Git hooks (pre-commit, commit-msg)
-convex.json          Convex project configuration
-package.json         Project metadata, dependencies, and scripts
-pnpm-workspace.yaml  pnpm workspace and approved build-script policy
-biome.json           Formatter + linter (Biome)
-eslint.config.mjs    ESLint flat config (Next.js rules)
-knip.json            Unused-code configuration
-cspell.json          Spell-check dictionary and ignores
+stash/
+├── app/                 Next.js routes, server actions, editor, share view
+├── components/          UI primitives, providers, dashboard and landing UI
+├── convex/              Schema, public functions, internal jobs, generated API
+├── lib/                 Billing, identity, server and domain helpers
+├── tools/               Repository verification and local dashboard helpers
+├── .github/             CI, dependency updates, issue and PR templates
+├── .husky/              Staged-file and commit-message hooks
+├── .env.example         Required local and production configuration keys
+├── convex.json          Convex project configuration
+├── package.json         Scripts and dependency manifest
+└── pnpm-lock.yaml       Locked dependency graph
 ```
 
-## Continuous integration
+## Prerequisites
 
-- **Quality workflow** (`.github/workflows/quality.yml`) installs with a frozen lockfile and runs `pnpm check` on every push and pull request.
-- **Dependabot** (`.github/dependabot.yml`) opens monthly grouped updates for npm and GitHub Actions, with a 7-day cooldown to avoid pnpm's `minimumReleaseAge` install failures on fresh releases. Major version bumps are ignored to keep CI green; do those manually.
+- Node.js 22 or later; `.nvmrc` pins the repository runtime.
+- pnpm 11 through Corepack.
+- A Clerk development instance for authenticated workflows.
+- No Convex account is required for local development.
+
+```bash
+corepack enable
+pnpm install --frozen-lockfile
+```
+
+## Configuration
+
+Copy the environment template:
+
+```bash
+cp .env.example .env.local
+```
+
+| Variable | Required for | Handling |
+| --- | --- | --- |
+| `NEXT_PUBLIC_SITE_URL` | Canonical application URL | Public |
+| `CONVEX_DEPLOYMENT` | Convex target | Server tooling |
+| `NEXT_PUBLIC_CONVEX_URL` | Browser Convex client | Public |
+| `NEXT_PUBLIC_CONVEX_SITE_URL` | Convex HTTP endpoint | Public |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk browser SDK | Public |
+| `CLERK_SECRET_KEY` | Clerk server API | Secret |
+| `CLERK_WEBHOOK_SIGNING_SECRET` | Webhook verification | Secret |
+| `CONVEX_PURGE_SECRET` | Trusted server-to-Convex operations | Secret, 32+ random characters |
+| `SHARE_IP_SALT` | Share throttle privacy | Secret, independent random value |
+| `CLERK_JWT_ISSUER_DOMAIN` | Convex JWT verification | Server configuration |
+
+Never commit `.env.local` or production credentials.
+
+## Local development
+
+```bash
+pnpm dev:local
+```
+
+The command initializes local Convex and runs the database, web application, and local dashboard helper together.
+
+| Address | Service |
+| --- | --- |
+| `http://localhost:3000` | Stash web application |
+| `http://127.0.0.1:6790` | Local Convex dashboard |
+| `http://127.0.0.1:3210` | Local Convex client endpoint |
+| `http://127.0.0.1:3211` | Local Convex HTTP endpoint |
+
+Independent processes:
+
+```bash
+pnpm db:setup
+pnpm dev:db
+pnpm dev:web
+```
+
+## Quality verification
+
+Run the complete release gate:
+
+```bash
+pnpm check
+```
+
+The gate runs fail-fast in this order:
+
+```text
+package order → formatting → ESLint → TypeScript → unused code
+→ spelling → secret scan → Markdown → source policy → production build
+```
+
+| Command | Function |
+| --- | --- |
+| `pnpm check` | Execute the complete release gate |
+| `pnpm fix` | Apply supported formatting and lint fixes |
+| `pnpm typecheck` | Run strict TypeScript checking |
+| `pnpm lint` | Run Next.js ESLint rules with zero warnings |
+| `pnpm knip` | Detect unused files, exports, and dependencies |
+| `pnpm secrets` | Scan tracked content for credentials |
+| `pnpm build` | Create the optimized production build |
+
+CI installs from the frozen lockfile and executes `pnpm check` for every push to `main` or `master` and every pull request.
+
+## Security controls
+
+- Convex functions validate authenticated identity, active organization, organization role, project grant, and write level.
+- Viewers cannot modify documents, comments, checkpoints, files, or shares.
+- Presence removal requires ownership of the target session.
+- Share tokens contain 256 random bits and support expiry and rotation.
+- Public share throttling uses a salted token-and-IP digest; raw IP addresses are not stored.
+- Server service secrets use constant-time comparison.
+- HTML preview runs in a sandboxed iframe.
+- Upload type, file size, project size, tree depth, and node-count limits are enforced server-side.
+- Secretlint runs locally and in CI.
+
+## Production deployment
+
+Production deployment is an operator-controlled process. Repository checks do not prove that account-side controls are active.
+
+Minimum deployment commands:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm check
+npx convex deploy
+pnpm build
+```
+
+Production approval additionally requires:
+
+- A production Clerk instance and `convex` JWT template containing `org_id` and `org_role`.
+- Production billing plans and limits.
+- A signed Clerk webhook configured for `/api/webhooks/clerk`.
+- Strong independent purge and share-rate secrets.
+- External health monitoring for `/api/health`.
+- Convex scheduled-function failure and purge-backlog visibility.
+- Successful execution of every runbook acceptance check.
+
+Repository code alone does not prove these account-side controls are active.
+
+## Performance verification
+
+Performance work is accepted only when before-and-after measurements use the same machine, browser, network profile, dataset, and production build. Record the source commit, browser trace, route bundle output, editor interaction readiness, preview latency, Mermaid cancellation latency, and collaboration replay time.
+
+## Repository conventions
+
+- Use pnpm only.
+- Use Conventional Commits.
+- Do not add source comments to authored `.ts`, `.tsx`, or `.css` files.
+- Use Biome instead of Prettier.
+- Register Tailwind design values as theme tokens; do not introduce arbitrary values.
+- Run `pnpm fix` and `pnpm check` before committing.
+- Update the README with behavior changes.
+
+## Contributing
+
+1. Fork the repository.
+2. Create a focused branch.
+3. Implement one coherent change.
+4. Run `pnpm fix` and `pnpm check`.
+5. Commit with a Conventional Commit message.
+6. Open a pull request with verification evidence.
 
 ## License
 
-[MIT](./LICENSE) © [Rohit Vilas Ingole](https://github.com/datarohit)
+Stash is distributed under the [MIT License](./LICENSE).
 
-## Links
+## Author
 
-- Repository: [github.com/datarohit/stash](https://github.com/datarohit/stash)
-- Issues: [github.com/datarohit/stash/issues](https://github.com/datarohit/stash/issues)
+### Rohit Vilas Ingole
+
+- [GitHub](https://github.com/DataRohit)
+- [LinkedIn](https://www.linkedin.com/in/rohit-vilas-ingole)
+- [Email](mailto:rohit.vilas.ingole@gmail.com)
+
+## Resources
+
+- [Next.js documentation](https://nextjs.org/docs)
+- [Convex documentation](https://docs.convex.dev)
+- [Clerk documentation](https://clerk.com/docs)
+- [Yjs documentation](https://docs.yjs.dev)
+- [CodeMirror documentation](https://codemirror.net/docs/)
+- [Tiptap documentation](https://tiptap.dev/docs)
+
+---
+
+**Built by [Rohit Vilas Ingole](https://github.com/DataRohit).**

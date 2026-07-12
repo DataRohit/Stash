@@ -183,14 +183,14 @@ export async function fetchSharedDocument(token: string, ip: string) {
   if (!url || !secret || !salt) {
     return { status: "unconfigured" as const };
   }
-  const ipHash = createHash("sha256").update(`${ip}${salt}`).digest("hex");
+  const rateKey = createHash("sha256").update(`${token}\0${ip}\0${salt}`).digest("hex");
   const { userId, orgId, orgRole } = await auth();
   const client = new ConvexHttpClient(url);
   try {
     return await client.mutation(api.sharing.redeemShare, {
       secret,
       token,
-      ipHash,
+      rateKey,
       viewerUserId: userId ?? undefined,
       viewerOrgId: orgId ?? undefined,
       viewerOrgRole: orgRole ?? undefined,

@@ -39,6 +39,9 @@ export const heartbeat = mutation({
       state: args.state.length > MAX_STATE_LENGTH ? "" : args.state,
       lastSeen: Date.now(),
     };
+    if (existing && existing.userId !== access.userId) {
+      throw new Error("session-owned-by-another-user");
+    }
     if (existing) {
       await ctx.db.patch(existing._id, row);
     } else {
@@ -57,14 +60,14 @@ export const leave = mutation({
     if (doc?.kind !== "file") {
       return;
     }
-    await requireProjectAccess(ctx, doc.projectId);
+    const access = await requireProjectAccess(ctx, doc.projectId);
     const existing = await ctx.db
       .query("presence")
       .withIndex("by_document_session", (q) =>
         q.eq("documentId", args.documentId).eq("sessionId", args.sessionId),
       )
       .unique();
-    if (existing) {
+    if (existing && existing.userId === access.userId) {
       await ctx.db.delete(existing._id);
     }
   },

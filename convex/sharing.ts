@@ -26,15 +26,15 @@ function serviceSecretValid(provided: string): boolean {
   return secretMatches(provided, process.env.CONVEX_PURGE_SECRET);
 }
 
-async function hitRateLimit(ctx: MutationCtx, ipHash: string): Promise<boolean> {
+async function hitRateLimit(ctx: MutationCtx, rateKey: string): Promise<boolean> {
   const now = Date.now();
   const row = await ctx.db
     .query("shareAccessWindows")
-    .withIndex("by_ip", (q) => q.eq("ipHash", ipHash))
+    .withIndex("by_ip", (q) => q.eq("ipHash", rateKey))
     .first();
   if (!row) {
     await ctx.db.insert("shareAccessWindows", {
-      ipHash,
+      ipHash: rateKey,
       windowStart: now,
       count: 1,
       updatedAt: now,
@@ -408,7 +408,7 @@ export const redeemShare = mutation({
   args: {
     secret: v.string(),
     token: v.string(),
-    ipHash: v.string(),
+    rateKey: v.string(),
     viewerUserId: v.optional(v.string()),
     viewerOrgId: v.optional(v.string()),
     viewerOrgRole: v.optional(v.string()),
@@ -417,7 +417,7 @@ export const redeemShare = mutation({
     if (!serviceSecretValid(args.secret)) {
       throw new Error("Forbidden");
     }
-    if (await hitRateLimit(ctx, args.ipHash)) {
+    if (await hitRateLimit(ctx, args.rateKey)) {
       return { status: "rate-limited" as const };
     }
     const share = await ctx.db

@@ -169,9 +169,7 @@ export const search = query({
           q.search("content", term).eq("projectId", project._id).eq("kind", "file"),
         )
         .take(PAGE_LIMIT);
-      const exactHits = hits
-        .filter((doc) => doc.content.toLowerCase().includes(needle))
-        .slice(0, CONTENT_LIMIT);
+      const exactHits = hits.slice(0, CONTENT_LIMIT);
       for (const [index, doc] of exactHits.entries()) {
         if (inactive(doc)) {
           continue;
