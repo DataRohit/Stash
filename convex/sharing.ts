@@ -458,10 +458,13 @@ export const redeemShare = mutation({
         .withIndex("by_project", (q) => q.eq("projectId", share.projectId))
         .collect(),
     ]);
+    const now = Date.now();
+    const isShareLive = (row: Doc<"documentShares">): boolean =>
+      row.mode !== "private" &&
+      Boolean(row.token) &&
+      !(row.expiresAt !== undefined && row.expiresAt < now);
     const sharedByDocument = new Map(
-      shares
-        .filter((row) => row.mode !== "private" && row.token)
-        .map((row) => [row.documentId, row]),
+      shares.filter(isShareLive).map((row) => [row.documentId, row]),
     );
     const visible = visibleDocuments(docs);
     const visibleById = new Map(visible.map((node) => [node._id, node]));
@@ -501,8 +504,7 @@ export const redeemShare = mutation({
     const fileLinks = shares
       .filter(
         (row) =>
-          row.mode !== "private" &&
-          row.token &&
+          isShareLive(row) &&
           modeRank(row.mode) >= modeRank(effectiveMode) &&
           includeIds.has(row.documentId),
       )

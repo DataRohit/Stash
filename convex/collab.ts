@@ -81,6 +81,20 @@ async function latestSeq(ctx: QueryCtx, documentId: Id<"documents">): Promise<nu
   return latest?.seq ?? 0;
 }
 
+async function allocateSeq(ctx: MutationCtx, documentId: Id<"documents">): Promise<number> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const seq = (await latestSeq(ctx, documentId)) + 1;
+    const clash = await ctx.db
+      .query("yjsUpdates")
+      .withIndex("by_document", (q) => q.eq("documentId", documentId).eq("seq", seq))
+      .unique();
+    if (!clash) {
+      return seq;
+    }
+  }
+  throw new Error("seq-conflict");
+}
+
 async function baseSnapshot(ctx: QueryCtx, documentId: Id<"documents">) {
   const snapshots = await ctx.db
     .query("yjsSnapshots")
@@ -104,7 +118,7 @@ async function materializedContent(
   ctx: QueryCtx,
   doc: Doc<"documents">,
   pendingUpdate: ArrayBuffer,
-): Promise<{ content: string; state: ArrayBuffer }> {
+): Promise<{ content: string; state: ArrayBuffer; replayed: number }> {
   const ydoc = new Y.Doc();
   let baseSeq = doc.contentSeq ?? 0;
   if (doc.contentState) {
@@ -127,7 +141,7 @@ async function materializedContent(
   const content = docContent(ydoc, doc.fileType);
   const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
   ydoc.destroy();
-  return { content, state };
+  return { content, state, replayed: updates.length };
 }
 
 async function materializedState(ctx: QueryCtx, doc: Doc<"documents">): Promise<ArrayBuffer> {
@@ -359,8 +373,7 @@ export const pushUpdate = mutation({
     if (args.update.byteLength > MAX_COLLAB_UPDATE_BYTES) {
       throw new Error("update-too-large");
     }
-    const seq = (await latestSeq(ctx, args.documentId)) + 1;
-    const { content, state } = await materializedContent(ctx, doc, args.update);
+    const { content, state, replayed } = await materializedContent(ctx, doc, args.update);
     const newSize = byteLength(content);
     if (newSize > MAX_FILE_BYTES) {
       throw new Error("file-too-large");
@@ -370,6 +383,7 @@ export const pushUpdate = mutation({
     if (total - doc.size + newSize > max) {
       throw new Error("project-full");
     }
+    const seq = await allocateSeq(ctx, args.documentId);
     await ctx.db.insert("yjsUpdates", {
       documentId: args.documentId,
       seq,
@@ -384,7 +398,7 @@ export const pushUpdate = mutation({
       updatedAt: Date.now(),
     });
     await addProjectBytes(ctx, access.project, newSize - doc.size);
-    if (seq % COMPACT_THRESHOLD === 0) {
+    if (seq % COMPACT_THRESHOLD === 0 || replayed > COMPACT_THRESHOLD) {
       await ctx.scheduler.runAfter(0, internal.collab.compactDocument, {
         documentId: args.documentId,
       });
@@ -667,7 +681,7 @@ export const restoreHistory = mutation({
     const update = toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector));
     const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
     ydoc.destroy();
-    const seq = (await latestSeq(ctx, doc._id)) + 1;
+    const seq = await allocateSeq(ctx, doc._id);
     await ctx.db.insert("yjsUpdates", {
       documentId: doc._id,
       seq,

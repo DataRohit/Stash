@@ -1,9 +1,11 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { accessForProject, requireProjectAccess } from "./documents";
 
 const PRESENCE_TTL = 15 * 1000;
 const PRESENCE_SWEEP_TTL = 60 * 1000;
+const PRESENCE_SWEEP_BATCH = 500;
 const MAX_STATE_LENGTH = 16 * 1024;
 
 export const heartbeat = mutation({
@@ -114,11 +116,15 @@ export const sweepStale = internalMutation({
   args: {},
   handler: async (ctx) => {
     const cutoff = Date.now() - PRESENCE_SWEEP_TTL;
-    const rows = await ctx.db.query("presence").collect();
+    const rows = await ctx.db
+      .query("presence")
+      .withIndex("by_last_seen", (q) => q.lt("lastSeen", cutoff))
+      .take(PRESENCE_SWEEP_BATCH);
     for (const row of rows) {
-      if (row.lastSeen < cutoff) {
-        await ctx.db.delete(row._id);
-      }
+      await ctx.db.delete(row._id);
+    }
+    if (rows.length === PRESENCE_SWEEP_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.presence.sweepStale, {});
     }
   },
 });

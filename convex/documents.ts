@@ -5,13 +5,17 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
-import { clampInt, HARD_MAX_PROJECT_BYTES, MIN_PROJECT_BYTES } from "./limits";
+import {
+  clampInt,
+  DEFAULT_MAX_PROJECT_BYTES,
+  HARD_MAX_PROJECT_BYTES,
+  MIN_PROJECT_BYTES,
+} from "./limits";
 import { BUILTIN_TEMPLATES } from "./templateContent";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_ASSET_BYTES = 5 * 1024 * 1024;
-const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
 const MAX_NODES_PER_PROJECT = 2000;
 const MAX_DEPTH = 16;
 const PURGE_COLLAB_BATCH = 200;
@@ -1606,20 +1610,20 @@ export const search = query({
         q.search("content", term).eq("projectId", args.projectId).eq("kind", "file"),
       )
       .take(SEARCH_LIMIT);
-    const docs = await ctx.db
-      .query("documents")
-      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    const visibleIds = new Set(visibleDocuments(docs).map((doc) => doc._id));
-    return hits
-      .filter((doc) => visibleIds.has(doc._id) && !isInactive(doc))
-      .map((doc) => ({
+    const results = [];
+    for (const doc of hits) {
+      if (await isInactiveTree(ctx, doc)) {
+        continue;
+      }
+      results.push({
         id: doc._id,
         parentId: doc.parentId,
         name: doc.name,
         fileType: doc.fileType,
         snippet: buildSnippet(doc.content, term),
-      }));
+      });
+    }
+    return results;
   },
 });
 

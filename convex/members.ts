@@ -217,6 +217,7 @@ export const reconcile = mutation({
 
     const matched = new Set<string>();
     const acceptedUserIds = new Set(args.members.map((member) => member.memberUserId));
+    const acceptedEmails = new Set(args.members.map((member) => member.email));
 
     for (const member of args.members) {
       const isOwner = member.memberUserId === args.ownerUserId;
@@ -281,6 +282,9 @@ export const reconcile = mutation({
         continue;
       }
       if (row.memberUserId && acceptedUserIds.has(row.memberUserId)) {
+        continue;
+      }
+      if (acceptedEmails.has(row.email)) {
         continue;
       }
       if (row.memberUserId) {

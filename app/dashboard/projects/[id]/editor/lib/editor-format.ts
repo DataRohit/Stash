@@ -51,6 +51,9 @@ export function mapDocError(error: unknown): string {
   if (message.includes("unsupported-filetype")) {
     return "That action isn’t available for this document type.";
   }
+  if (message.includes("seq-conflict")) {
+    return "Syncing your latest edit. This will retry automatically.";
+  }
   return "Something went wrong. Please try again.";
 }
 

@@ -138,6 +138,9 @@ function mapSyncError(error: unknown): string {
   if (message.includes("update-too-large")) {
     return "That edit is too large to sync in one step. Split the paste into smaller chunks.";
   }
+  if (message.includes("seq-conflict")) {
+    return "Syncing your latest edit. This will retry automatically.";
+  }
   return "Your latest edit could not be synced. Please try again.";
 }
 

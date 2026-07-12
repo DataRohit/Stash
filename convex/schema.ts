@@ -158,7 +158,8 @@ const schema = defineSchema({
     lastSeen: v.number(),
   })
     .index("by_document", ["documentId"])
-    .index("by_document_session", ["documentId", "sessionId"]),
+    .index("by_document_session", ["documentId", "sessionId"])
+    .index("by_last_seen", ["lastSeen"]),
 
   comments: defineTable({
     documentId: v.id("documents"),

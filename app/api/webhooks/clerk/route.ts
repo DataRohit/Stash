@@ -72,6 +72,10 @@ export async function POST(req: NextRequest) {
           lastName: userData.last_name,
           imageUrl: userData.image_url,
         });
+      } else if (orgId && userId) {
+        console.warn(
+          `[clerk-webhook] skipped ${event.type} for user ${userId} in org ${orgId}: unresolved email; membership will self-heal on next dashboard reconcile`,
+        );
       }
       break;
     }
