@@ -54,6 +54,7 @@ const NODE_MIME = "application/x-stash-node";
 const ROOT_TARGET = "__root__";
 const INDENT = 12;
 const PAD_BASE = 8;
+const CONTAIN_ROWS_THRESHOLD = 500;
 const BARE_INPUT =
   "min-w-0 flex-1 bg-transparent p-0 text-foreground text-xs caret-accent outline-none placeholder:text-muted-foreground/45";
 
@@ -234,6 +235,7 @@ export function FileTree({
   };
   collectVisible(null);
   const visibleIds = visibleNodes.map((node) => node.id);
+  const containRows = visibleNodes.length > CONTAIN_ROWS_THRESHOLD;
 
   const openNode = nodes.find((node) => node.id === selectedId) ?? null;
   const activeParent =
@@ -450,7 +452,7 @@ export function FileTree({
           const isActiveFolder = node.kind === "folder" && node.id === activeFolderId;
           const isRenaming = renaming === node.id;
           return (
-            <li key={node.id}>
+            <li key={node.id} className={cn(containRows && "tree-row-contained")}>
               <div
                 className={cn(
                   "group relative flex h-7 items-center overflow-hidden rounded-md transition-colors",

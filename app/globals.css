@@ -221,6 +221,11 @@ samp {
 }
 
 @layer components {
+  .tree-row-contained {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 1.75rem;
+  }
+
   .glass {
     background: color-mix(in oklab, var(--surface) 60%, transparent);
     border: 1px solid var(--hairline);
