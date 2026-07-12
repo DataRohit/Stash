@@ -25,6 +25,12 @@ Stash is a multi-tenant document workspace built for teams that maintain Markdow
 
 The repository includes the complete application and local backend workflow. Production account provisioning, webhook configuration, deployment, and monitoring remain operator-controlled requirements.
 
+## Production hardening status
+
+Correctness hardening is complete as of July 12, 2026. Collaborative update sequences use bounded conflict detection with automatic client retry; large update replays trigger compaction; project-size defaults come from one server limit; stale presence cleanup is indexed and batched; project search checks inactive ancestors per result; member reconciliation preserves newly accepted memberships and grants; expired sibling shares cannot produce live links; and unresolved Clerk membership emails are skipped and recovered by dashboard reconciliation.
+
+Public deployment remains blocked until the outstanding security, authorization, data-integrity, and lifecycle acceptance checks in the internal hardening plan are completed and recorded.
+
 ## Key features
 
 ### Documents and files
@@ -235,6 +241,8 @@ CI installs from the frozen lockfile and executes `pnpm check` for every push to
 - HTML preview runs in a sandboxed iframe.
 - Upload type, file size, project size, tree depth, and node-count limits are enforced server-side.
 - Secretlint runs locally and in CI.
+
+The controls above describe the current repository and do not constitute public-launch approval. Deployment must remain private or limited to controlled internal evaluation until every outstanding launch gate is complete.
 
 ## Production deployment
 

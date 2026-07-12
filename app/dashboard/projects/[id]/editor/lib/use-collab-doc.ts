@@ -232,6 +232,7 @@ export function useCollabDoc(
     let pending: Uint8Array[] = [];
     let timer: ReturnType<typeof setTimeout> | null = null;
     let failureNotified = false;
+    let active = true;
     const flush = async () => {
       timer = null;
       if (pending.length === 0) {
@@ -240,6 +241,7 @@ export function useCollabDoc(
       }
       const merged = Y.mergeUpdates(pending);
       pending = [];
+      let retryable = false;
       setSyncing(true);
       try {
         await pushUpdate({
@@ -252,8 +254,12 @@ export function useCollabDoc(
       } catch (error) {
         pending = [merged, ...pending];
         const message = error instanceof Error ? error.message : "";
-        if (message.includes("project-full") || message.includes("file-too-large")) {
+        const blockedByLimit =
+          message.includes("project-full") || message.includes("file-too-large");
+        if (blockedByLimit) {
           setBlocked(mapSyncError(error));
+        } else {
+          retryable = true;
         }
         if (!failureNotified) {
           failureNotified = true;
@@ -263,6 +269,8 @@ export function useCollabDoc(
       } finally {
         if (pending.length === 0) {
           setSyncing(false);
+        } else if (retryable && active && timer === null) {
+          timer = setTimeout(() => void flush(), FLUSH_MS);
         }
       }
     };
@@ -287,6 +295,7 @@ export function useCollabDoc(
     window.addEventListener("pagehide", onPageHide);
     document.addEventListener("visibilitychange", onPageHide);
     return () => {
+      active = false;
       ydoc.off("update", onUpdate);
       window.removeEventListener("pagehide", onPageHide);
       document.removeEventListener("visibilitychange", onPageHide);
