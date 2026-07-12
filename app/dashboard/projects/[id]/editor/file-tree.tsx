@@ -22,6 +22,7 @@ import {
   type MouseEvent,
   type ReactNode,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -191,14 +192,25 @@ export function FileTree({
     }
   }, [renaming]);
 
-  const childrenByParent = new Map<string | null, TreeNode[]>();
-  const nodeById = new Map<string, TreeNode>();
-  for (const node of nodes) {
-    nodeById.set(node.id, node);
-    const list = childrenByParent.get(node.parentId) ?? [];
-    list.push(node);
-    childrenByParent.set(node.parentId, list);
-  }
+  const { childrenByParent, nodeById } = useMemo(() => {
+    const byParent = new Map<string | null, TreeNode[]>();
+    const byId = new Map<string, TreeNode>();
+    for (const node of nodes) {
+      byId.set(node.id, node);
+      const list = byParent.get(node.parentId) ?? [];
+      list.push(node);
+      byParent.set(node.parentId, list);
+    }
+    return { childrenByParent: byParent, nodeById: byId };
+  }, [nodes]);
+
+  const sortedChildrenByParent = useMemo(() => {
+    const map = new Map<string | null, TreeNode[]>();
+    for (const [parentId, list] of childrenByParent) {
+      map.set(parentId, sortNodes(list));
+    }
+    return map;
+  }, [childrenByParent]);
 
   const selectedAncestorIds = new Set<string>();
   let selectedNode = selectedId ? nodeById.get(selectedId) : undefined;
@@ -209,8 +221,7 @@ export function FileTree({
 
   const isExpanded = (id: string) => expanded.has(id) || selectedAncestorIds.has(id);
 
-  const sortedChildren = (parentId: string | null) =>
-    sortNodes(childrenByParent.get(parentId) ?? []);
+  const sortedChildren = (parentId: string | null) => sortedChildrenByParent.get(parentId) ?? [];
 
   const visibleNodes: TreeNode[] = [];
   const collectVisible = (parentId: string | null) => {

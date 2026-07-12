@@ -273,15 +273,38 @@ export function renderInner(
   return { inner: rewriteRefs(parsed, fileNode, nodes, fileLinkById, isMd), isMd, blocks };
 }
 
+let mermaidModule: typeof import("mermaid")["default"] | null = null;
+let mermaidTheme: "dark" | "default" | null = null;
+
+async function loadMermaid(theme: "dark" | "default") {
+  if (!mermaidModule) {
+    const mod = await import("mermaid");
+    mermaidModule = mod.default;
+  }
+  if (mermaidTheme !== theme) {
+    mermaidModule.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
+    mermaidTheme = theme;
+  }
+  return mermaidModule;
+}
+
 export async function renderMermaid(
   blocks: MermaidBlock[],
   theme: "dark" | "default" = "dark",
+  signal?: AbortSignal,
 ): Promise<Map<string, string>> {
-  const mod = await import("mermaid");
-  const mermaid = mod.default;
-  mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
   const results = new Map<string, string>();
+  if (signal?.aborted) {
+    return results;
+  }
+  const mermaid = await loadMermaid(theme);
+  if (signal?.aborted) {
+    return results;
+  }
   for (const block of blocks) {
+    if (signal?.aborted) {
+      break;
+    }
     try {
       const { svg } = await mermaid.render(`${block.id}-svg`, block.code);
       results.set(block.id, svg);

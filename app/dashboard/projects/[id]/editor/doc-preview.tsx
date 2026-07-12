@@ -43,17 +43,15 @@ export function DocPreview({
     if (base.blocks.length === 0) {
       return;
     }
-    let cancelled = false;
-    void renderMermaid(base.blocks).then((svgs) => {
-      if (cancelled || svgs.size === 0) {
+    const controller = new AbortController();
+    void renderMermaid(base.blocks, "dark", controller.signal).then((svgs) => {
+      if (controller.signal.aborted || svgs.size === 0) {
         return;
       }
       const inner = injectMermaid(base.inner, svgs);
       setRendered({ key: base.inner, doc: previewSrcDoc(inner, base.isMd) });
     });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, [base]);
 
   const srcDoc = rendered?.key === base.inner ? rendered.doc : base.doc;
