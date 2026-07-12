@@ -3,8 +3,7 @@ import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { purgeAccessForUser } from "./projects";
-
-const MIN_WEBHOOK_SECRET_LENGTH = 32;
+import { secretMatches } from "./secrets";
 
 const memberInput = v.object({
   memberUserId: v.string(),
@@ -22,13 +21,7 @@ const pendingInput = v.object({
 });
 
 function requireWebhookSecret(secret: string): void {
-  const expected = process.env.CONVEX_PURGE_SECRET;
-  if (
-    !expected ||
-    expected.length < MIN_WEBHOOK_SECRET_LENGTH ||
-    secret.length < MIN_WEBHOOK_SECRET_LENGTH ||
-    secret !== expected
-  ) {
+  if (!secretMatches(secret, process.env.CONVEX_PURGE_SECRET)) {
     throw new Error("Forbidden");
   }
 }

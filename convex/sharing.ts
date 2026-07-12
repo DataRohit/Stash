@@ -11,36 +11,19 @@ import {
   requireProjectAdmin,
   richDocumentHtml,
 } from "./documents";
+import { secretMatches } from "./secrets";
 
 type ShareMode = "private" | "org" | "public";
 
 const SHARE_EVENT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 const PRUNE_BATCH = 200;
 const MAX_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
-const SHARE_SECRET_MIN_LENGTH = 32;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_HITS = 60;
 const WINDOW_RETENTION_MS = 5 * 60 * 1000;
 
-function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-  let diff = 0;
-  for (let index = 0; index < a.length; index += 1) {
-    diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  }
-  return diff === 0;
-}
-
 function serviceSecretValid(provided: string): boolean {
-  const expected = process.env.CONVEX_PURGE_SECRET;
-  return Boolean(
-    expected &&
-      expected.length >= SHARE_SECRET_MIN_LENGTH &&
-      provided.length >= SHARE_SECRET_MIN_LENGTH &&
-      constantTimeEqual(provided, expected),
-  );
+  return secretMatches(provided, process.env.CONVEX_PURGE_SECRET);
 }
 
 async function hitRateLimit(ctx: MutationCtx, ipHash: string): Promise<boolean> {

@@ -19,6 +19,7 @@ import type * as navigation from "../navigation.js";
 import type * as organizations from "../organizations.js";
 import type * as presence from "../presence.js";
 import type * as projects from "../projects.js";
+import type * as secrets from "../secrets.js";
 import type * as sharing from "../sharing.js";
 import type * as templateContent from "../templateContent.js";
 import type * as templates from "../templates.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   organizations: typeof organizations;
   presence: typeof presence;
   projects: typeof projects;
+  secrets: typeof secrets;
   sharing: typeof sharing;
   templateContent: typeof templateContent;
   templates: typeof templates;

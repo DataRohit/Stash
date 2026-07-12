@@ -9,11 +9,11 @@ import {
   HARD_MAX_PROJECTS,
   MIN_PROJECT_BYTES,
 } from "./limits";
+import { secretMatches } from "./secrets";
 
 const MAX_TAGS = 8;
 const MAX_TAG_LENGTH = 24;
 const MAX_DESCRIPTION_LENGTH = 280;
-const MIN_PURGE_SECRET_LENGTH = 32;
 
 function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>();
@@ -181,13 +181,7 @@ export const claimReconcile = mutation({
 export const purgeDeletedOrg = mutation({
   args: { clerkOrgId: v.string(), secret: v.string() },
   handler: async (ctx, args) => {
-    const expected = process.env.CONVEX_PURGE_SECRET;
-    if (
-      !expected ||
-      expected.length < MIN_PURGE_SECRET_LENGTH ||
-      args.secret.length < MIN_PURGE_SECRET_LENGTH ||
-      args.secret !== expected
-    ) {
+    if (!secretMatches(args.secret, process.env.CONVEX_PURGE_SECRET)) {
       throw new Error("Forbidden");
     }
     const members = await ctx.db
