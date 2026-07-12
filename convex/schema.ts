@@ -288,6 +288,15 @@ const schema = defineSchema({
     .index("by_project", ["projectId"])
     .index("by_token", ["token"]),
 
+  shareAccessWindows: defineTable({
+    ipHash: v.string(),
+    windowStart: v.number(),
+    count: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_ip", ["ipHash"])
+    .index("by_updated", ["updatedAt"]),
+
   documentShareEvents: defineTable({
     documentId: v.id("documents"),
     projectId: v.id("projects"),

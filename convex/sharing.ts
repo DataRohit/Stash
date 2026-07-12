@@ -4,13 +4,94 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
-import { accessForProject, isInactive, isInactiveTree, requireProjectAdmin } from "./documents";
+import {
+  accessForProject,
+  isInactive,
+  isInactiveTree,
+  requireProjectAdmin,
+  richDocumentHtml,
+} from "./documents";
 
 type ShareMode = "private" | "org" | "public";
 
 const SHARE_EVENT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 const PRUNE_BATCH = 200;
 const MAX_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
+const SHARE_SECRET_MIN_LENGTH = 32;
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX_HITS = 60;
+const WINDOW_RETENTION_MS = 5 * 60 * 1000;
+
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  let diff = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    diff |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return diff === 0;
+}
+
+function serviceSecretValid(provided: string): boolean {
+  const expected = process.env.CONVEX_PURGE_SECRET;
+  return Boolean(
+    expected &&
+      expected.length >= SHARE_SECRET_MIN_LENGTH &&
+      provided.length >= SHARE_SECRET_MIN_LENGTH &&
+      constantTimeEqual(provided, expected),
+  );
+}
+
+async function hitRateLimit(ctx: MutationCtx, ipHash: string): Promise<boolean> {
+  const now = Date.now();
+  const row = await ctx.db
+    .query("shareAccessWindows")
+    .withIndex("by_ip", (q) => q.eq("ipHash", ipHash))
+    .first();
+  if (!row) {
+    await ctx.db.insert("shareAccessWindows", {
+      ipHash,
+      windowStart: now,
+      count: 1,
+      updatedAt: now,
+    });
+    return false;
+  }
+  if (now - row.windowStart >= RATE_WINDOW_MS) {
+    await ctx.db.patch(row._id, { windowStart: now, count: 1, updatedAt: now });
+    return false;
+  }
+  if (row.count >= RATE_MAX_HITS) {
+    await ctx.db.patch(row._id, { updatedAt: now });
+    return true;
+  }
+  await ctx.db.patch(row._id, { count: row.count + 1, updatedAt: now });
+  return false;
+}
+
+async function orgAccessForViewer(
+  ctx: QueryCtx,
+  clerkOrgId: string,
+  viewer: { userId?: string; orgId?: string; orgRole?: string },
+): Promise<"allowed" | "auth-required" | "forbidden"> {
+  if (!viewer.userId) {
+    return "auth-required";
+  }
+  if (viewer.orgId !== clerkOrgId) {
+    return "forbidden";
+  }
+  const member = await ctx.db
+    .query("members")
+    .withIndex("by_org_user", (q) =>
+      q.eq("clerkOrgId", clerkOrgId).eq("memberUserId", viewer.userId as string),
+    )
+    .first();
+  if (member?.status === "accepted" || viewer.orgRole === "org:admin") {
+    return "allowed";
+  }
+  return "forbidden";
+}
 
 type Actor = {
   userId: string;
@@ -177,26 +258,6 @@ async function publicSharingEnabled(ctx: QueryCtx, clerkOrgId: string): Promise<
   return org?.publicSharingEnabled !== false;
 }
 
-async function orgAccessState(ctx: QueryCtx, clerkOrgId: string) {
-  const identity = await ctx.auth.getUserIdentity();
-  if (!identity) {
-    return "auth-required" as const;
-  }
-  if (identity.org_id !== clerkOrgId) {
-    return "forbidden" as const;
-  }
-  const member = await ctx.db
-    .query("members")
-    .withIndex("by_org_user", (q) =>
-      q.eq("clerkOrgId", clerkOrgId).eq("memberUserId", identity.subject),
-    )
-    .first();
-  if (member?.status === "accepted" || identity.org_role === "org:admin") {
-    return "allowed" as const;
-  }
-  return "forbidden" as const;
-}
-
 export const getState = query({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
@@ -360,9 +421,22 @@ export const rotateShareToken = mutation({
   },
 });
 
-export const getSharedDocument = query({
-  args: { token: v.string() },
+export const redeemShare = mutation({
+  args: {
+    secret: v.string(),
+    token: v.string(),
+    ipHash: v.string(),
+    viewerUserId: v.optional(v.string()),
+    viewerOrgId: v.optional(v.string()),
+    viewerOrgRole: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
+    if (!serviceSecretValid(args.secret)) {
+      throw new Error("Forbidden");
+    }
+    if (await hitRateLimit(ctx, args.ipHash)) {
+      return { status: "rate-limited" as const };
+    }
     const share = await ctx.db
       .query("documentShares")
       .withIndex("by_token", (q) => q.eq("token", args.token))
@@ -382,7 +456,11 @@ export const getSharedDocument = query({
       share.mode !== "public" || (await publicSharingEnabled(ctx, share.clerkOrgId));
     const effectiveMode: ShareMode = share.mode === "public" && !publicAllowed ? "org" : share.mode;
     if (effectiveMode === "org") {
-      const access = await orgAccessState(ctx, share.clerkOrgId);
+      const access = await orgAccessForViewer(ctx, share.clerkOrgId, {
+        userId: args.viewerUserId,
+        orgId: args.viewerOrgId,
+        orgRole: args.viewerOrgRole,
+      });
       if (access !== "allowed") {
         return { status: access, mode: effectiveMode };
       }
@@ -454,7 +532,7 @@ export const getSharedDocument = query({
       documentName: doc.name,
       fileType: doc.fileType,
       content: doc.content,
-      contentState: doc.contentState ?? null,
+      docHtml: doc.fileType === "doc" ? richDocumentHtml(doc) : null,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,
@@ -475,6 +553,23 @@ export const pruneShareEvents = internalMutation({
     }
     if (rows.length === PRUNE_BATCH) {
       await ctx.scheduler.runAfter(0, internal.sharing.pruneShareEvents, {});
+    }
+  },
+});
+
+export const pruneShareWindows = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - WINDOW_RETENTION_MS;
+    const rows = await ctx.db
+      .query("shareAccessWindows")
+      .withIndex("by_updated", (q) => q.lt("updatedAt", cutoff))
+      .take(PRUNE_BATCH);
+    for (const row of rows) {
+      await ctx.db.delete(row._id);
+    }
+    if (rows.length === PRUNE_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.sharing.pruneShareWindows, {});
     }
   },
 });

@@ -1571,7 +1571,7 @@ function fallbackRichTextHtml(content: string): string {
   return paragraphs.map((part) => `<p>${escapeHtml(part).replace(/\n/g, "<br>")}</p>`).join("");
 }
 
-function richDocumentHtml(doc: Doc<"documents">): string {
+export function richDocumentHtml(doc: Doc<"documents">): string {
   let body = doc.content ? fallbackRichTextHtml(doc.content) : "<p><br></p>";
   if (doc.contentState) {
     const ydoc = new Y.Doc();

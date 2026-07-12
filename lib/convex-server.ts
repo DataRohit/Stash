@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
@@ -173,6 +174,30 @@ export async function createProjectDoc(
     tags,
     maxProjects,
   });
+}
+
+export async function fetchSharedDocument(token: string, ip: string) {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const secret = process.env.CONVEX_PURGE_SECRET;
+  const salt = process.env.SHARE_IP_SALT;
+  if (!url || !secret || !salt) {
+    return { status: "unconfigured" as const };
+  }
+  const ipHash = createHash("sha256").update(`${ip}${salt}`).digest("hex");
+  const { userId, orgId, orgRole } = await auth();
+  const client = new ConvexHttpClient(url);
+  try {
+    return await client.mutation(api.sharing.redeemShare, {
+      secret,
+      token,
+      ipHash,
+      viewerUserId: userId ?? undefined,
+      viewerOrgId: orgId ?? undefined,
+      viewerOrgRole: orgRole ?? undefined,
+    });
+  } catch {
+    return { status: "error" as const };
+  }
 }
 
 export async function fetchProject(projectId: string) {
