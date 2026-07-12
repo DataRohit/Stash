@@ -1,5 +1,4 @@
 import { AuthEntryButton } from "@/components/landing/auth-entry-button";
-import { GridBackground } from "@/components/landing/grid-background";
 import { Reveal } from "@/components/landing/reveal";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -8,9 +7,6 @@ import { cn } from "@/lib/utils";
 export function Hero() {
   return (
     <section className="relative overflow-hidden border-hairline border-b">
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
-        <GridBackground />
-      </div>
       <div className="mx-auto max-w-7xl px-6 pt-28 pb-24 sm:pt-36 sm:pb-32">
         <Reveal className="flex flex-col items-start gap-7">
           <Badge variant="surface">

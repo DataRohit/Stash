@@ -1,8 +1,9 @@
 "use client";
 
-import { FileCode, FileText, Folder, Image as ImageIcon } from "lucide-react";
+import { Folder } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type KeyboardEvent, useEffect, useRef } from "react";
+import { FileIcon } from "@/components/file-icon";
 import { cn } from "@/lib/utils";
 
 export type GlobalResult = {
@@ -25,14 +26,16 @@ export function resultHref(result: GlobalResult): string {
 }
 
 function ResultIcon({ result }: { result: GlobalResult }) {
-  if (result.kind === "project" || result.kind === "folder")
-    return <Folder className="size-4 text-warning" />;
-  if (result.kind === "asset") return <ImageIcon className="size-4 text-info" />;
-  return result.fileType === "html" ? (
-    <FileCode className="size-4 text-warning" />
-  ) : (
-    <FileText className="size-4 text-accent" />
-  );
+  if (result.kind === "project") {
+    return <Folder className="size-4 text-info" />;
+  }
+  if (result.kind === "folder") {
+    return <FileIcon kind="folder" />;
+  }
+  if (result.kind === "asset") {
+    return <FileIcon kind="asset" />;
+  }
+  return <FileIcon kind="file" fileType={result.fileType} />;
 }
 
 export function SearchResults({

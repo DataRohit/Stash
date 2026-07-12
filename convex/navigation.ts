@@ -236,10 +236,10 @@ export const recordOpened = mutation({
     if (!access) {
       return false;
     }
-    const existing = await ctx.db
+    const matches = await ctx.db
       .query("recentDocuments")
       .withIndex("by_user_document", (q) => q.eq("userId", access.userId).eq("documentId", doc._id))
-      .unique();
+      .collect();
     const value = {
       clerkOrgId: doc.clerkOrgId,
       userId: access.userId,
@@ -247,8 +247,12 @@ export const recordOpened = mutation({
       documentId: doc._id,
       lastOpenedAt: Date.now(),
     };
+    const [existing, ...duplicates] = matches;
     if (existing) {
       await ctx.db.patch(existing._id, value);
+      for (const duplicate of duplicates) {
+        await ctx.db.delete(duplicate._id);
+      }
     } else {
       await ctx.db.insert("recentDocuments", value);
     }
@@ -271,7 +275,12 @@ export const listRecent = query({
       .order("desc")
       .take(32);
     const output = [];
+    const seen = new Set<string>();
     for (const row of rows) {
+      if (seen.has(row.documentId)) {
+        continue;
+      }
+      seen.add(row.documentId);
       const [doc, project, access] = await Promise.all([
         ctx.db.get(row.documentId),
         ctx.db.get(row.projectId),

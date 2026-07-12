@@ -4,14 +4,9 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  FileCode,
   FilePlus,
-  FileText,
-  FileType,
-  Folder,
   FolderInput,
   FolderPlus,
-  Image as ImageIcon,
   Pencil,
   Trash2,
   Upload,
@@ -28,6 +23,7 @@ import {
 } from "react";
 import { MoveDialog } from "@/app/dashboard/projects/[id]/editor/move-dialog";
 import { sortNodes, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { FileIcon } from "@/components/file-icon";
 import { cn } from "@/lib/utils";
 
 type FileTreeProps = {
@@ -62,46 +58,26 @@ function rowPadding(depth: number) {
   return `${PAD_BASE + depth * INDENT}px`;
 }
 
-function fileGlyph(node: TreeNode) {
-  if (node.fileType === "html") {
-    return <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />;
-  }
-  if (node.fileType === "doc") {
-    return <FileType className="size-4 shrink-0 text-info" aria-hidden="true" />;
-  }
-  return <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />;
-}
-
 function NodeGlyph({ node }: { node: TreeNode }) {
-  const icon =
-    node.kind === "folder" ? (
-      <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-    ) : node.kind === "asset" ? (
-      <ImageIcon className="size-4 shrink-0 text-info" aria-hidden="true" />
-    ) : (
-      fileGlyph(node)
-    );
-  return <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>;
+  return (
+    <span className="flex size-4 shrink-0 items-center justify-center">
+      <FileIcon kind={node.kind} fileType={node.fileType} />
+    </span>
+  );
 }
 
 function StaticNodeGlyph({ node }: { node: TreeNode }) {
-  if (node.kind === "folder") {
-    return <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
-  }
-  if (node.kind === "asset") {
-    return <ImageIcon className="size-4 shrink-0 text-info" aria-hidden="true" />;
-  }
-  return fileGlyph(node);
+  return <FileIcon kind={node.kind} fileType={node.fileType} />;
 }
 
 function DraftGlyph({ kind }: { kind: DraftKind }) {
   if (kind === "folder") {
-    return <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
+    return <FileIcon kind="folder" />;
   }
   if (kind === "doc") {
-    return <FileType className="size-4 shrink-0 text-info" aria-hidden="true" />;
+    return <FileIcon kind="file" fileType="doc" />;
   }
-  return <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />;
+  return <FileIcon kind="file" fileType="md" />;
 }
 
 function IndentGuides({ depth }: { depth: number }) {
@@ -532,8 +508,13 @@ export function FileTree({
                     aria-expanded={node.kind === "folder" ? isOpen : undefined}
                     tabIndex={isSelected || (!selectedId && visibleIds[0] === node.id) ? 0 : -1}
                     className={cn(
-                      "flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent text-left",
-                      node.kind === "folder" ? "pr-40" : node.kind === "file" ? "pr-28" : "pr-20",
+                      "flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent pr-2 text-left transition-[padding] duration-150",
+                      canEdit &&
+                        (node.kind === "folder"
+                          ? "group-focus-within:pr-40 group-hover:pr-40"
+                          : node.kind === "file"
+                            ? "group-focus-within:pr-28 group-hover:pr-28"
+                            : "group-focus-within:pr-20 group-hover:pr-20"),
                       canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
                     )}
                     style={{ paddingLeft: rowPadding(depth) }}

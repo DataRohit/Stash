@@ -1,7 +1,8 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { FileCode, FileText, Loader2, NotebookPen, Pencil, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { FileIcon } from "@/components/file-icon";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -34,18 +35,12 @@ export function OrgTemplates({ clerkOrgId, isAdmin }: { clerkOrgId: string; isAd
         ) : (
           <ul className="grid gap-3 md:grid-cols-2">
             {templates.map((template) => {
-              const Icon =
-                template.fileType === "html"
-                  ? FileCode
-                  : template.fileType === "doc"
-                    ? NotebookPen
-                    : FileText;
               return (
                 <li
                   key={template.id}
                   className="flex min-w-0 gap-3 rounded-md border border-hairline bg-surface/30 p-4"
                 >
-                  <Icon className="mt-0.5 size-4 shrink-0 text-accent" />
+                  <FileIcon kind="file" fileType={template.fileType} className="mt-0.5" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <p className="truncate font-medium text-sm">{template.name}</p>

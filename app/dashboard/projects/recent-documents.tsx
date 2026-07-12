@@ -1,8 +1,9 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { Clock3, FileText, Image as ImageIcon } from "lucide-react";
+import { Clock3 } from "lucide-react";
 import Link from "next/link";
+import { FileIcon } from "@/components/file-icon";
 import { api } from "@/convex/_generated/api";
 
 function relative(timestamp: number) {
@@ -42,11 +43,7 @@ export function RecentDocuments({ clerkOrgId }: { clerkOrgId: string }) {
             className="min-w-56 snap-start rounded-md border border-hairline bg-surface/35 p-3 transition-colors hover:bg-foreground/[0.04] md:min-w-0"
           >
             <div className="flex items-center gap-2">
-              {item.kind === "asset" ? (
-                <ImageIcon className="size-4 shrink-0 text-info" />
-              ) : (
-                <FileText className="size-4 shrink-0 text-accent" />
-              )}
+              <FileIcon kind={item.kind} fileType={item.fileType} />
               <span className="truncate font-medium text-sm">{item.name}</span>
             </div>
             <p className="mt-2 truncate text-muted-foreground text-xs">

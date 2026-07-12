@@ -6,7 +6,6 @@ import { redirect } from "next/navigation";
 import { CreateOrgForm } from "@/app/onboarding/create-org-form";
 import { OrgList } from "@/app/onboarding/org-list";
 import { UpgradeButton } from "@/app/onboarding/upgrade-button";
-import { GridBackground } from "@/components/landing/grid-background";
 import { ThemeToggle } from "@/components/landing/theme-toggle";
 import { orgAvatarUrl } from "@/lib/org-avatar";
 import { limitsFromFeatures } from "@/lib/plan-limits";
@@ -42,10 +41,6 @@ export default async function OnboardingPage() {
 
   return (
     <main className="aurora isolate flex min-h-screen flex-col items-center justify-center overflow-hidden px-6 py-24">
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
-        <GridBackground ripples={false} />
-      </div>
-
       <header className="fixed top-3 right-0 left-0 z-50 w-full px-3 sm:px-6">
         <div className="glass mx-auto flex h-14 max-w-7xl items-center justify-between rounded-lg bg-surface/55 px-3 sm:px-4">
           <Link href="/dashboard" className="flex items-center gap-2.5">

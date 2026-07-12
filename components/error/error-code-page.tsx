@@ -2,7 +2,6 @@
 
 import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import Link from "next/link";
-import { GridBackground } from "@/components/landing/grid-background";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -24,9 +23,6 @@ export function ErrorCodePage({
 }: ErrorCodePageProps) {
   return (
     <main className="aurora isolate flex min-h-screen items-center justify-center overflow-hidden px-6 py-20">
-      <div className="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
-        <GridBackground ripples={false} />
-      </div>
       <section className="glass-strong w-full max-w-3xl overflow-hidden rounded-lg">
         <div className="border-hairline border-b bg-foreground/[0.025] px-5 py-3.5 sm:px-6">
           <span className="font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest">
