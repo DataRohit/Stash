@@ -7,5 +7,6 @@
     "MD041": false
   },
   "globs": ["**/*.md"],
+  "gitignore": true,
   "ignores": ["node_modules", ".next", "out", "build", "coverage"]
 }
