@@ -24,6 +24,7 @@ import {
 import { MoveDialog } from "@/app/dashboard/projects/[id]/editor/move-dialog";
 import { sortNodes, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { FileIcon } from "@/components/file-icon";
+import { RASTER_ASSET_ACCEPT } from "@/lib/asset-formats";
 import { cn } from "@/lib/utils";
 
 type FileTreeProps = {
@@ -45,12 +46,18 @@ type FileTreeProps = {
 
 type DraftKind = "folder" | "file" | "doc";
 type Draft = { kind: DraftKind; parentId: string | null };
+type VisibleRow = { node: TreeNode; depth: number };
+type VirtualEntry =
+  | { type: "node"; node: TreeNode; depth: number }
+  | { type: "draft"; depth: number };
 
 const NODE_MIME = "application/x-stash-node";
 const ROOT_TARGET = "__root__";
 const INDENT = 12;
 const PAD_BASE = 8;
-const CONTAIN_ROWS_THRESHOLD = 500;
+const VIRTUALIZE_ROWS_THRESHOLD = 500;
+const VIRTUAL_ROW_HEIGHT = 30;
+const VIRTUAL_OVERSCAN = 8;
 const BARE_INPUT =
   "min-w-0 flex-1 bg-transparent p-0 text-foreground text-xs caret-accent outline-none placeholder:text-muted-foreground/45";
 
@@ -151,7 +158,11 @@ export function FileTree({
   const [dragNodeId, setDragNodeId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [movingNode, setMovingNode] = useState<TreeNode | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const treeRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const pendingFocusRef = useRef<string | null>(null);
   const draftRef = useRef<HTMLInputElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -168,6 +179,21 @@ export function FileTree({
       renameRef.current?.select();
     }
   }, [renaming]);
+
+  useEffect(() => {
+    const viewport = scrollRef.current;
+    if (!viewport) {
+      return;
+    }
+    const update = () => setViewportHeight(viewport.clientHeight);
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    const frame = requestAnimationFrame(update);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, []);
 
   const { childrenByParent, nodeById } = useMemo(() => {
     const byParent = new Map<string | null, TreeNode[]>();
@@ -189,29 +215,73 @@ export function FileTree({
     return map;
   }, [childrenByParent]);
 
-  const selectedAncestorIds = new Set<string>();
-  let selectedNode = selectedId ? nodeById.get(selectedId) : undefined;
-  while (selectedNode?.parentId) {
-    selectedAncestorIds.add(selectedNode.parentId);
-    selectedNode = nodeById.get(selectedNode.parentId);
-  }
+  const selectedAncestorIds = useMemo(() => {
+    const ids = new Set<string>();
+    let selectedNode = selectedId ? nodeById.get(selectedId) : undefined;
+    while (selectedNode?.parentId) {
+      ids.add(selectedNode.parentId);
+      selectedNode = nodeById.get(selectedNode.parentId);
+    }
+    return ids;
+  }, [nodeById, selectedId]);
 
   const isExpanded = (id: string) => expanded.has(id) || selectedAncestorIds.has(id);
 
   const sortedChildren = (parentId: string | null) => sortedChildrenByParent.get(parentId) ?? [];
 
-  const visibleNodes: TreeNode[] = [];
-  const collectVisible = (parentId: string | null) => {
-    for (const node of sortedChildren(parentId)) {
-      visibleNodes.push(node);
-      if (node.kind === "folder" && isExpanded(node.id)) {
-        collectVisible(node.id);
+  const visibleRows = useMemo(() => {
+    const rows: VisibleRow[] = [];
+    const collect = (parentId: string | null, depth: number) => {
+      for (const node of sortedChildrenByParent.get(parentId) ?? []) {
+        rows.push({ node, depth });
+        if (node.kind === "folder" && (expanded.has(node.id) || selectedAncestorIds.has(node.id))) {
+          collect(node.id, depth + 1);
+        }
       }
+    };
+    collect(null, 0);
+    return rows;
+  }, [expanded, selectedAncestorIds, sortedChildrenByParent]);
+  const visibleIds = useMemo(() => visibleRows.map((row) => row.node.id), [visibleRows]);
+  const virtualEntries = useMemo<VirtualEntry[]>(() => {
+    const entries: VirtualEntry[] = visibleRows.map((row) => ({ type: "node", ...row }));
+    if (!draft) {
+      return entries;
     }
-  };
-  collectVisible(null);
-  const visibleIds = visibleNodes.map((node) => node.id);
-  const containRows = visibleNodes.length > CONTAIN_ROWS_THRESHOLD;
+    const parentIndex = draft.parentId
+      ? visibleRows.findIndex((row) => row.node.id === draft.parentId)
+      : -1;
+    const depth = parentIndex >= 0 ? (visibleRows[parentIndex]?.depth ?? -1) + 1 : 0;
+    entries.splice(parentIndex + 1, 0, { type: "draft", depth });
+    return entries;
+  }, [draft, visibleRows]);
+  const virtualized = virtualEntries.length > VIRTUALIZE_ROWS_THRESHOLD;
+  const containRows = visibleRows.length > VIRTUALIZE_ROWS_THRESHOLD;
+  const virtualStart = virtualized
+    ? Math.max(0, Math.floor(scrollTop / VIRTUAL_ROW_HEIGHT) - VIRTUAL_OVERSCAN)
+    : 0;
+  const visibleVirtualRows = Math.ceil(viewportHeight / VIRTUAL_ROW_HEIGHT);
+  const virtualEnd = virtualized
+    ? Math.min(
+        virtualEntries.length,
+        virtualStart + Math.max(visibleVirtualRows, 1) + VIRTUAL_OVERSCAN * 2,
+      )
+    : virtualEntries.length;
+  const virtualRows = virtualEntries.slice(virtualStart, virtualEnd);
+
+  useEffect(() => {
+    const pendingFocusId = pendingFocusRef.current;
+    if (!pendingFocusId) {
+      return;
+    }
+    const target = treeRef.current?.querySelector<HTMLButtonElement>(
+      `[data-tree-node-id="${pendingFocusId}"]`,
+    );
+    if (target) {
+      target.focus();
+      pendingFocusRef.current = null;
+    }
+  }, [virtualStart, virtualEnd]);
 
   const openNode = nodes.find((node) => node.id === selectedId) ?? null;
   const activeParent =
@@ -244,7 +314,20 @@ export function FileTree({
     if (!id) {
       return;
     }
-    treeRef.current?.querySelector<HTMLButtonElement>(`[data-tree-node-id="${id}"]`)?.focus();
+    const target = treeRef.current?.querySelector<HTMLButtonElement>(`[data-tree-node-id="${id}"]`);
+    if (target) {
+      target.focus();
+      return;
+    }
+    if (virtualized) {
+      const index = visibleIds.indexOf(id);
+      if (index >= 0 && scrollRef.current) {
+        const nextScrollTop = index * VIRTUAL_ROW_HEIGHT;
+        scrollRef.current.scrollTop = nextScrollTop;
+        setScrollTop(nextScrollTop);
+        pendingFocusRef.current = id;
+      }
+    }
   };
 
   const onNodeKey = (event: KeyboardEvent<HTMLButtonElement>, node: TreeNode) => {
@@ -345,6 +428,12 @@ export function FileTree({
     if (parentId) {
       setExpanded((prev) => new Set(prev).add(parentId));
     }
+    if (visibleRows.length >= VIRTUALIZE_ROWS_THRESHOLD && scrollRef.current) {
+      const parentIndex = parentId ? visibleIds.indexOf(parentId) : -1;
+      const nextScrollTop = (parentIndex + 1) * VIRTUAL_ROW_HEIGHT;
+      scrollRef.current.scrollTop = nextScrollTop;
+      setScrollTop(nextScrollTop);
+    }
     setDraft({ kind, parentId });
     setDraftName("");
   };
@@ -397,6 +486,7 @@ export function FileTree({
           <DraftGlyph kind={draft.kind} />
           <input
             ref={draftRef}
+            aria-label={`New ${draft.kind} name`}
             value={draftName}
             onChange={(event) => setDraftName(event.target.value)}
             onBlur={submitDraft}
@@ -414,14 +504,14 @@ export function FileTree({
       </li>
     ) : null;
 
-  const renderNodes = (parentId: string | null, depth: number) => {
-    const list = sortedChildren(parentId);
+  const renderNodes = (parentId: string | null, depth: number, onlyNode?: TreeNode) => {
+    const list = onlyNode ? [onlyNode] : sortedChildren(parentId);
     return (
       <ul
-        className={cn("flex flex-col gap-0.5", depth === 0 && "px-2")}
-        role={depth === 0 ? "presentation" : "group"}
+        className={cn("flex flex-col gap-0.5", (depth === 0 || onlyNode) && "px-2")}
+        role={depth === 0 || onlyNode ? "presentation" : "group"}
       >
-        {draft?.parentId === parentId ? renderDraft(depth) : null}
+        {!onlyNode && draft?.parentId === parentId ? renderDraft(depth) : null}
         {list.map((node) => {
           const isOpen = isExpanded(node.id);
           const isSelected = node.id === selectedId;
@@ -456,6 +546,7 @@ export function FileTree({
                     <StaticNodeGlyph node={node} />
                     <input
                       ref={renameRef}
+                      aria-label={`Rename ${node.name}`}
                       value={renameName}
                       onChange={(event) => setRenameName(event.target.value)}
                       onBlur={() => submitRename(node.id)}
@@ -585,7 +676,9 @@ export function FileTree({
                   </div>
                 ) : null}
               </div>
-              {node.kind === "folder" && isOpen ? renderNodes(node.id, depth + 1) : null}
+              {!onlyNode && node.kind === "folder" && isOpen
+                ? renderNodes(node.id, depth + 1)
+                : null}
             </li>
           );
         })}
@@ -636,7 +729,11 @@ export function FileTree({
           </div>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto py-1.5">
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-auto py-1.5"
+        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      >
         {nodes.length === 0 && !draft ? (
           <p className="px-3 py-4 text-muted-foreground/80 text-xs">
             {canEdit ? "No files yet — create one above." : "No files yet."}
@@ -658,14 +755,41 @@ export function FileTree({
               dropTargetId === ROOT_TARGET && "rounded-xs ring-1 ring-accent/40 ring-inset",
             )}
           >
-            {renderNodes(null, 0)}
+            {virtualized ? (
+              <div
+                className="relative"
+                style={{ height: `${virtualEntries.length * VIRTUAL_ROW_HEIGHT}px` }}
+              >
+                <div
+                  className="absolute inset-x-0 top-0"
+                  style={{ transform: `translateY(${virtualStart * VIRTUAL_ROW_HEIGHT}px)` }}
+                >
+                  {virtualRows.map((entry) => (
+                    <div
+                      key={entry.type === "node" ? entry.node.id : "draft"}
+                      style={{ height: `${VIRTUAL_ROW_HEIGHT}px` }}
+                    >
+                      {entry.type === "node" ? (
+                        renderNodes(null, entry.depth, entry.node)
+                      ) : (
+                        <ul className="px-2" role="presentation">
+                          {renderDraft(entry.depth)}
+                        </ul>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              renderNodes(null, 0)
+            )}
           </div>
         )}
       </div>
       <input
         ref={uploadRef}
         type="file"
-        accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml,.md,.markdown,.html,.htm,.txt,text/markdown,text/plain,text/html"
+        accept={`${RASTER_ASSET_ACCEPT},.md,.markdown,.html,.htm,.txt,text/markdown,text/plain,text/html`}
         multiple
         className="hidden"
         onChange={(event) => {

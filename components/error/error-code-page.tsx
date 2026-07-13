@@ -11,6 +11,7 @@ type ErrorCodePageProps = {
   title: string;
   description: string;
   onRetry?: () => void;
+  retryLabel?: string;
   showDashboard?: boolean;
 };
 
@@ -19,6 +20,7 @@ export function ErrorCodePage({
   title,
   description,
   onRetry,
+  retryLabel = "Try again",
   showDashboard = true,
 }: ErrorCodePageProps) {
   return (
@@ -61,7 +63,7 @@ export function ErrorCodePage({
                 className={cn(buttonVariants({ variant: "secondary", size: "lg" }))}
               >
                 <RotateCcw className="size-4" />
-                Try again
+                {retryLabel}
               </button>
             ) : null}
           </div>

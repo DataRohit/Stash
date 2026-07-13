@@ -29,7 +29,7 @@ export function PricingPlans({ plans }: PricingPlansProps) {
           type="button"
           onClick={() => setAnnual(false)}
           className={cn(
-            "cursor-pointer rounded-sm px-2.5 py-1 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
+            "h-9 cursor-pointer rounded-sm px-2.5 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
             annual
               ? "text-muted-foreground hover:text-foreground"
               : "bg-foreground/10 text-foreground",
@@ -41,7 +41,7 @@ export function PricingPlans({ plans }: PricingPlansProps) {
           type="button"
           onClick={() => setAnnual(true)}
           className={cn(
-            "cursor-pointer rounded-sm px-2.5 py-1 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
+            "h-9 cursor-pointer rounded-sm px-2.5 font-medium font-mono text-xs uppercase tracking-wider transition-colors",
             annual
               ? "bg-foreground/10 text-foreground"
               : "text-muted-foreground hover:text-foreground",

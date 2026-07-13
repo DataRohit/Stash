@@ -1,7 +1,8 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { accessForProject, isInactiveTree } from "./documents";
 
 const RECENT_LIMIT = 8;
@@ -9,6 +10,11 @@ const PALETTE_LIMIT = 16;
 const PAGE_LIMIT = 60;
 const CONTENT_LIMIT = 8;
 const MAX_QUERY_LENGTH = 120;
+const SEARCH_CANDIDATE_LIMIT = 240;
+const MAX_PATH_DEPTH = 32;
+const RECENT_CAP = 100;
+const RECENT_TRIM_BATCH = 25;
+const RECENT_WALK_BATCH = 8;
 
 type SearchResult = {
   id: string;
@@ -98,6 +104,85 @@ function snippet(content: string, term: string) {
   };
 }
 
+async function visiblePath(ctx: QueryCtx, doc: Doc<"documents">): Promise<string | null> {
+  const parts: string[] = [];
+  const seen = new Set<Id<"documents">>();
+  let current: Doc<"documents"> | null = doc;
+  while (current && parts.length < MAX_PATH_DEPTH && !seen.has(current._id)) {
+    if (current.deletingAt || current.trashedAt) {
+      return null;
+    }
+    seen.add(current._id);
+    parts.unshift(current.name);
+    current = current.parentId ? await ctx.db.get(current.parentId) : null;
+  }
+  if (current) {
+    return null;
+  }
+  return `/${parts.join("/")}`;
+}
+
+async function trimRecentGroup(ctx: MutationCtx, userId: string, clerkOrgId: string) {
+  const rows = await ctx.db
+    .query("recentDocuments")
+    .withIndex("by_user_org_time", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
+    .order("desc")
+    .take(RECENT_CAP + RECENT_TRIM_BATCH);
+  const stale = rows.slice(RECENT_CAP);
+  for (const row of stale) {
+    await ctx.db.delete(row._id);
+  }
+  return { deleted: stale.length, hasMore: stale.length === RECENT_TRIM_BATCH };
+}
+
+export const pruneRecentGroup = internalMutation({
+  args: { userId: v.string(), clerkOrgId: v.string() },
+  handler: async (ctx, args) => {
+    const result = await trimRecentGroup(ctx, args.userId, args.clerkOrgId);
+    if (result.hasMore) {
+      await ctx.scheduler.runAfter(0, internal.navigation.pruneRecentGroup, args);
+    }
+    return result;
+  },
+});
+
+export const pruneRecentDocuments = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("recentDocuments")
+      .withIndex("by_creation_time")
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: RECENT_WALK_BATCH,
+        maximumRowsRead: RECENT_WALK_BATCH,
+      });
+    const groups = new Map<string, { userId: string; clerkOrgId: string }>();
+    for (const row of page.page) {
+      groups.set(`${row.userId}\u0000${row.clerkOrgId}`, {
+        userId: row.userId,
+        clerkOrgId: row.clerkOrgId,
+      });
+    }
+    let deleted = 0;
+    for (const group of groups.values()) {
+      deleted += (await trimRecentGroup(ctx, group.userId, group.clerkOrgId)).deleted;
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.navigation.pruneRecentDocuments, {
+        cursor: page.continueCursor,
+      });
+    }
+    return {
+      scanned: page.page.length,
+      groups: groups.size,
+      deleted,
+      isDone: page.isDone,
+      nextCursor: page.isDone ? null : page.continueCursor,
+    };
+  },
+});
+
 export const search = query({
   args: {
     clerkOrgId: v.string(),
@@ -109,9 +194,13 @@ export const search = query({
     if (!term) {
       return [];
     }
-    const { projects } = await accessibleProjects(ctx, args.clerkOrgId);
+    const { actor, projects } = await accessibleProjects(ctx, args.clerkOrgId);
+    if (!actor || (!actor.isAdmin && projects.length === 0)) {
+      return [];
+    }
     const needle = term.toLowerCase();
     const results: SearchResult[] = [];
+    const projectById = new Map(projects.map((project) => [project._id, project]));
     for (const project of projects) {
       const projectName = project.title.toLowerCase();
       if (projectName.includes(needle)) {
@@ -128,57 +217,66 @@ export const search = query({
           rank: projectName === needle ? 0 : projectName.startsWith(needle) ? 1 : 2,
         });
       }
-      const docs = await ctx.db
+    }
+    const [nameHits, contentHits] = await Promise.all([
+      ctx.db
         .query("documents")
-        .withIndex("by_project", (q) => q.eq("projectId", project._id))
-        .collect();
-      const byIdAll = new Map(docs.map((doc) => [doc._id, doc]));
-      const inactive = (doc: Doc<"documents">) => {
-        let current: Doc<"documents"> | undefined = doc;
-        const seen = new Set<Id<"documents">>();
-        while (current && !seen.has(current._id)) {
-          seen.add(current._id);
-          if (current.deletingAt || current.trashedAt) return true;
-          current = current.parentId ? byIdAll.get(current.parentId) : undefined;
-        }
-        return false;
-      };
-      const visible = docs.filter((doc) => !inactive(doc));
-      const { path } = pathsFor(visible);
-      for (const doc of visible) {
-        const fullPath = path(doc);
-        const name = doc.name.toLowerCase();
-        if (name.includes(needle) || fullPath.toLowerCase().includes(needle)) {
-          results.push({
-            id: `node:${doc._id}`,
-            projectId: project._id,
-            projectTitle: project.title,
-            documentId: doc._id,
-            kind: doc.kind,
-            name: doc.name,
-            path: fullPath,
-            fileType: doc.fileType,
-            snippet: null,
-            rank: name === needle ? 0 : name.startsWith(needle) ? 1 : 3,
-          });
-        }
-      }
-      const hits = await ctx.db
+        .withSearchIndex("search_name", (q) =>
+          q.search("name", term).eq("clerkOrgId", args.clerkOrgId),
+        )
+        .take(SEARCH_CANDIDATE_LIMIT),
+      ctx.db
         .query("documents")
         .withSearchIndex("search_content", (q) =>
-          q.search("content", term).eq("projectId", project._id).eq("kind", "file"),
+          q.search("content", term).eq("clerkOrgId", args.clerkOrgId).eq("kind", "file"),
         )
-        .take(PAGE_LIMIT);
-      const exactHits = hits.slice(0, CONTENT_LIMIT);
-      for (const [index, doc] of exactHits.entries()) {
-        if (inactive(doc)) {
-          continue;
-        }
-        const existing = results.find((result) => result.documentId === doc._id);
-        if (existing) {
-          existing.snippet = snippet(doc.content, term);
-          continue;
-        }
+        .take(SEARCH_CANDIDATE_LIMIT),
+    ]);
+    let nameRanked = 0;
+    for (const doc of nameHits) {
+      if (nameRanked >= PAGE_LIMIT) {
+        break;
+      }
+      const project = projectById.get(doc.projectId);
+      if (!project) {
+        continue;
+      }
+      const path = await visiblePath(ctx, doc);
+      if (!path) {
+        continue;
+      }
+      const name = doc.name.toLowerCase();
+      results.push({
+        id: `node:${doc._id}`,
+        projectId: project._id,
+        projectTitle: project.title,
+        documentId: doc._id,
+        kind: doc.kind,
+        name: doc.name,
+        path,
+        fileType: doc.fileType,
+        snippet: null,
+        rank: name === needle ? 0 : name.startsWith(needle) ? 1 : 3,
+      });
+      nameRanked += 1;
+    }
+    let contentRank = 0;
+    for (const doc of contentHits) {
+      if (contentRank >= CONTENT_LIMIT) {
+        break;
+      }
+      const project = projectById.get(doc.projectId);
+      if (!project) {
+        continue;
+      }
+      const path = await visiblePath(ctx, doc);
+      if (!path) {
+        continue;
+      }
+      const existing = results.find((result) => result.documentId === doc._id);
+      if (existing) {
+        existing.snippet = snippet(doc.content, term);
+      } else {
         results.push({
           id: `content:${doc._id}`,
           projectId: project._id,
@@ -186,12 +284,13 @@ export const search = query({
           documentId: doc._id,
           kind: "content",
           name: doc.name,
-          path: path(doc),
+          path,
           fileType: doc.fileType,
           snippet: snippet(doc.content, term),
-          rank: 10 + index,
+          rank: 10 + contentRank,
         });
       }
+      contentRank += 1;
     }
     return results
       .sort(
@@ -239,7 +338,7 @@ export const recordOpened = mutation({
     const matches = await ctx.db
       .query("recentDocuments")
       .withIndex("by_user_document", (q) => q.eq("userId", access.userId).eq("documentId", doc._id))
-      .collect();
+      .take(RECENT_CAP + 1);
     const value = {
       clerkOrgId: doc.clerkOrgId,
       userId: access.userId,
@@ -255,6 +354,13 @@ export const recordOpened = mutation({
       }
     } else {
       await ctx.db.insert("recentDocuments", value);
+    }
+    const trimmed = await trimRecentGroup(ctx, access.userId, doc.clerkOrgId);
+    if (trimmed.hasMore) {
+      await ctx.scheduler.runAfter(0, internal.navigation.pruneRecentGroup, {
+        userId: access.userId,
+        clerkOrgId: doc.clerkOrgId,
+      });
     }
     return true;
   },

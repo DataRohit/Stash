@@ -1,13 +1,17 @@
 "use client";
 
-import { type RefObject, useEffect, useMemo, useState } from "react";
+import { useQuery } from "convex/react";
+import { type RefObject, useEffect, useId, useMemo, useState } from "react";
 import {
   injectMermaid,
   previewSrcDoc,
+  referencedAssetIds,
   renderInner,
   renderMermaid,
 } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 
 type DocPreviewProps = {
   fileNode: TreeNode;
@@ -26,6 +30,7 @@ export function DocPreview({
   iframeRef,
   fileLinkById = EMPTY_FILE_LINKS,
 }: DocPreviewProps) {
+  const noteId = useId();
   const [debounced, setDebounced] = useState(content);
   const [rendered, setRendered] = useState<{ key: string; doc: string } | null>(null);
 
@@ -34,10 +39,29 @@ export function DocPreview({
     return () => clearTimeout(timer);
   }, [content]);
 
+  const assetIds = useMemo(
+    () => referencedAssetIds(fileNode, debounced, nodes),
+    [debounced, fileNode, nodes],
+  );
+  const assetUrls = useQuery(
+    api.documents.getAssetUrls,
+    assetIds.length > 0 ? { documentIds: assetIds as Id<"documents">[] } : "skip",
+  );
+  const resolvedNodes = useMemo(() => {
+    if (!assetUrls) {
+      return nodes;
+    }
+    const urlById = new Map<string, string>(assetUrls.map((asset) => [asset.id, asset.url]));
+    return nodes.map((node) => {
+      const assetUrl = urlById.get(node.id);
+      return assetUrl ? { ...node, assetUrl } : node;
+    });
+  }, [assetUrls, nodes]);
+
   const base = useMemo(() => {
-    const { inner, isMd, blocks } = renderInner(fileNode, debounced, nodes, fileLinkById);
+    const { inner, isMd, blocks } = renderInner(fileNode, debounced, resolvedNodes, fileLinkById);
     return { inner, isMd, blocks, doc: previewSrcDoc(inner, isMd) };
-  }, [debounced, fileLinkById, fileNode, nodes]);
+  }, [debounced, fileLinkById, fileNode, resolvedNodes]);
 
   useEffect(() => {
     if (base.blocks.length === 0) {
@@ -57,12 +81,22 @@ export function DocPreview({
   const srcDoc = rendered?.key === base.inner ? rendered.doc : base.doc;
 
   return (
-    <iframe
-      ref={iframeRef}
-      title="Document preview"
-      srcDoc={srcDoc}
-      sandbox="allow-scripts allow-popups allow-top-navigation-by-user-activation"
-      className="size-full border-0 bg-white"
-    />
+    <div className="flex size-full flex-col">
+      <p
+        id={noteId}
+        className="shrink-0 border-hairline border-b bg-foreground/[0.025] px-3 py-2 text-muted-foreground text-xs"
+      >
+        Read-only preview. Use the file tree or editor controls to navigate.
+      </p>
+      <iframe
+        ref={iframeRef}
+        title="Document preview"
+        aria-describedby={noteId}
+        tabIndex={-1}
+        srcDoc={srcDoc}
+        sandbox="allow-scripts allow-popups allow-top-navigation-by-user-activation"
+        className="min-h-0 w-full flex-1 border-0 bg-white"
+      />
+    </div>
   );
 }

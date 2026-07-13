@@ -7,14 +7,14 @@ import { cn } from "@/lib/utils";
 export function Hero() {
   return (
     <section className="relative overflow-hidden border-hairline border-b">
-      <div className="mx-auto max-w-7xl px-6 pt-28 pb-24 sm:pt-36 sm:pb-32">
+      <div className="mx-auto max-w-7xl px-4 pt-28 pb-20 sm:px-6 sm:pt-36 sm:pb-32">
         <Reveal className="flex flex-col items-start gap-7">
           <Badge variant="surface">
             <span className="live-dot size-1.5" aria-hidden="true" />
             v0.1 • Early Access Open
           </Badge>
 
-          <h1 className="max-w-3xl font-serif text-5xl leading-[0.98] tracking-display sm:text-6xl md:text-7xl">
+          <h1 className="max-w-3xl font-serif text-4xl leading-[0.98] tracking-display sm:text-6xl md:text-7xl">
             A workspace for
             <br />
             Markdown &amp; HTML docs.
@@ -32,11 +32,18 @@ export function Hero() {
             together in real time.
           </p>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <AuthEntryButton signedOutLabel="Get started" signedInLabel="Open dashboard" />
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
+            <AuthEntryButton
+              signedOutLabel="Get started"
+              signedInLabel="Open dashboard"
+              className="w-full sm:w-auto"
+            />
             <a
               href="#workflow"
-              className={cn(buttonVariants({ variant: "secondary", size: "lg" }))}
+              className={cn(
+                buttonVariants({ variant: "secondary", size: "lg" }),
+                "w-full sm:w-auto",
+              )}
             >
               See how it works
             </a>

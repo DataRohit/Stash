@@ -27,7 +27,7 @@ export function FinalCta() {
                   href={site.repo}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={cn(buttonVariants({ size: "lg" }), "group")}
+                  className={cn(buttonVariants({ size: "lg" }), "group w-full sm:w-auto")}
                 >
                   View on GitHub
                   <ArrowRight className="cta-arrow size-4" />
@@ -36,7 +36,10 @@ export function FinalCta() {
                   href={site.readme}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={cn(buttonVariants({ variant: "secondary", size: "lg" }))}
+                  className={cn(
+                    buttonVariants({ variant: "secondary", size: "lg" }),
+                    "w-full sm:w-auto",
+                  )}
                 >
                   Read the docs
                 </a>

@@ -43,7 +43,7 @@ export function ProjectCard({
     <Link
       href={`/dashboard/projects/${id}`}
       aria-disabled={cloneState !== "ready"}
-      className={`glass flex flex-col gap-4 rounded-lg p-6 transition-colors hover:border-foreground/20 ${cloneState !== "ready" ? "pointer-events-none opacity-75" : ""}`}
+      className={`glass flex min-w-0 flex-col gap-4 rounded-lg p-4 transition-colors hover:border-foreground/20 sm:p-6 ${cloneState !== "ready" ? "pointer-events-none opacity-75" : ""}`}
     >
       <div className="flex items-start gap-4">
         <Image

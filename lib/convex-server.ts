@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { logServerError } from "@/lib/server-log";
 
 export type OrgDetails = {
   description: string;
@@ -11,6 +12,8 @@ export type OrgDetails = {
 };
 
 const EMPTY_DETAILS: OrgDetails = { description: "", tags: [], publicSharingEnabled: true };
+const SHARE_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+const MAX_SHARE_RATE_ID_LENGTH = 128;
 
 async function authedClient(): Promise<ConvexHttpClient | null> {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -53,7 +56,8 @@ export async function fetchOrgDetails(clerkOrgId: string): Promise<OrgDetails> {
     }
     const result = await client.query(api.organizations.get, { clerkOrgId });
     return result ?? EMPTY_DETAILS;
-  } catch {
+  } catch (error) {
+    logServerError("convex.fetch_org_details", error, { clerkOrgId });
     return EMPTY_DETAILS;
   }
 }
@@ -101,7 +105,7 @@ export async function reconcileOrgMembers(
 ): Promise<void> {
   const client = await authedClient();
   if (!client) {
-    return;
+    throw new Error("Convex is not configured");
   }
   await client.mutation(api.members.reconcile, {
     clerkOrgId,
@@ -119,7 +123,7 @@ export async function mirrorUpsertPending(
 ): Promise<void> {
   const client = await authedClient();
   if (!client) {
-    return;
+    throw new Error("Convex is not configured");
   }
   await client.mutation(api.members.upsertPending, {
     clerkOrgId,
@@ -135,7 +139,7 @@ export async function mirrorDeleteInvitation(
 ): Promise<void> {
   const client = await authedClient();
   if (!client) {
-    return;
+    throw new Error("Convex is not configured");
   }
   await client.mutation(api.members.deleteByInvitationId, { clerkOrgId, clerkInvitationId });
 }
@@ -143,7 +147,7 @@ export async function mirrorDeleteInvitation(
 export async function mirrorDeleteMember(clerkOrgId: string, memberUserId: string): Promise<void> {
   const client = await authedClient();
   if (!client) {
-    return;
+    throw new Error("Convex is not configured");
   }
   await client.mutation(api.members.deleteByUserId, { clerkOrgId, memberUserId });
 }
@@ -177,13 +181,17 @@ export async function createProjectDoc(
 }
 
 export async function fetchSharedDocument(token: string, ip: string) {
+  if (!SHARE_TOKEN_PATTERN.test(token)) {
+    return null;
+  }
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
   const secret = process.env.CONVEX_PURGE_SECRET;
   const salt = process.env.SHARE_IP_SALT;
   if (!url || !secret || !salt) {
     return { status: "unconfigured" as const };
   }
-  const rateKey = createHash("sha256").update(`${token}\0${ip}\0${salt}`).digest("hex");
+  const rateId = ip.slice(0, MAX_SHARE_RATE_ID_LENGTH);
+  const rateKey = createHash("sha256").update(`${token}\0${rateId}\0${salt}`).digest("hex");
   const { userId, orgId, orgRole } = await auth();
   const client = new ConvexHttpClient(url);
   try {
@@ -195,7 +203,8 @@ export async function fetchSharedDocument(token: string, ip: string) {
       viewerOrgId: orgId ?? undefined,
       viewerOrgRole: orgRole ?? undefined,
     });
-  } catch {
+  } catch (error) {
+    logServerError("convex.fetch_shared_document", error);
     return { status: "error" as const };
   }
 }
@@ -225,20 +234,16 @@ export async function setOrgPlanLimits(
     maxSizeBytes: number;
   },
 ): Promise<void> {
-  try {
-    const client = await authedClient();
-    if (!client) {
-      return;
-    }
-    await client.mutation(api.organizations.setPlanLimits, {
-      clerkOrgId,
-      maxProjects: limits.maxProjects,
-      maxCollaborators: limits.maxCollaborators,
-      maxSizeBytes: limits.maxSizeBytes,
-    });
-  } catch {
-    return;
+  const client = await authedClient();
+  if (!client) {
+    throw new Error("Convex is not configured");
   }
+  await client.mutation(api.organizations.setPlanLimits, {
+    clerkOrgId,
+    maxProjects: limits.maxProjects,
+    maxCollaborators: limits.maxCollaborators,
+    maxSizeBytes: limits.maxSizeBytes,
+  });
 }
 
 export async function purgeDeletedOrganization(clerkOrgId: string): Promise<void> {
@@ -310,7 +315,8 @@ export async function claimReconcile(clerkOrgId: string, staleMs: number): Promi
       return false;
     }
     return await client.mutation(api.organizations.claimReconcile, { clerkOrgId, staleMs });
-  } catch {
+  } catch (error) {
+    logServerError("convex.claim_reconcile", error, { clerkOrgId });
     return false;
   }
 }
@@ -321,40 +327,32 @@ export async function revokeAllProjectAccessForUser(
 ): Promise<void> {
   const client = await authedClient();
   if (!client) {
-    return;
+    throw new Error("Convex is not configured");
   }
   await client.mutation(api.projects.revokeAllAccessForUser, { clerkOrgId, userId });
 }
 
 export async function setProjectMaxSize(projectId: string, maxSizeBytes: number): Promise<void> {
-  try {
-    const client = await authedClient();
-    if (!client) {
-      return;
-    }
-    await client.mutation(api.documents.setMaxSize, {
-      projectId: projectId as Id<"projects">,
-      maxSizeBytes,
-    });
-  } catch {
-    return;
+  const client = await authedClient();
+  if (!client) {
+    throw new Error("Convex is not configured");
   }
+  await client.mutation(api.documents.setMaxSize, {
+    projectId: projectId as Id<"projects">,
+    maxSizeBytes,
+  });
 }
 
 export async function setProjectMaxCollaborators(
   projectId: string,
   maxCollaborators: number,
 ): Promise<void> {
-  try {
-    const client = await authedClient();
-    if (!client) {
-      return;
-    }
-    await client.mutation(api.projects.setMaxCollaborators, {
-      projectId: projectId as Id<"projects">,
-      maxCollaborators,
-    });
-  } catch {
-    return;
+  const client = await authedClient();
+  if (!client) {
+    throw new Error("Convex is not configured");
   }
+  await client.mutation(api.projects.setMaxCollaborators, {
+    projectId: projectId as Id<"projects">,
+    maxCollaborators,
+  });
 }

@@ -2,7 +2,7 @@
 
 import { useOrganization } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
@@ -11,6 +11,7 @@ import {
   SearchResults,
   searchKey,
 } from "@/components/dashboard/search-ui";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 
 export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
@@ -70,17 +71,14 @@ export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
         </div>
         <div className="min-h-72">
           {!debounced ? (
-            <div className="px-6 py-14 text-center">
-              <Search className="mx-auto size-8 text-muted-foreground/50" />
-              <p className="mt-3 text-muted-foreground text-sm">
-                Search every project you can access.
-              </p>
-            </div>
+            <DataState
+              title="Search your workspace"
+              description="Find projects, files, paths, and document contents across every project you can access."
+              icon={<Search className="size-6" aria-hidden="true" />}
+              className="m-5"
+            />
           ) : results === undefined ? (
-            <p className="flex items-center justify-center gap-2 px-6 py-14 text-muted-foreground text-sm">
-              <Loader2 className="size-4 animate-spin" />
-              Searching…
-            </p>
+            <DataSkeleton label="Searching workspace" rows={4} />
           ) : (
             <>
               <div className="flex items-center justify-between gap-4 border-hairline border-b bg-surface/30 px-5 py-3">

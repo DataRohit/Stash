@@ -2,11 +2,13 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { accessForProject, requireProjectAccess } from "./documents";
+import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const PRESENCE_TTL = 15 * 1000;
 const PRESENCE_SWEEP_TTL = 60 * 1000;
 const PRESENCE_SWEEP_BATCH = 500;
 const MAX_STATE_LENGTH = 16 * 1024;
+const PRESENCE_WRITE_LIMIT = { capacity: 60, refillPerSecond: 12 };
 
 export const heartbeat = mutation({
   args: {
@@ -24,6 +26,16 @@ export const heartbeat = mutation({
       return;
     }
     const access = await requireProjectAccess(ctx, doc.projectId);
+    const allowed = await enforceWriteRateLimit(
+      ctx,
+      "presence",
+      args.documentId,
+      access.userId,
+      PRESENCE_WRITE_LIMIT,
+    );
+    if (!allowed) {
+      return { ok: false as const, error: "rate-limited" as const };
+    }
     const existing = await ctx.db
       .query("presence")
       .withIndex("by_document_session", (q) =>
@@ -42,13 +54,14 @@ export const heartbeat = mutation({
       lastSeen: Date.now(),
     };
     if (existing && existing.userId !== access.userId) {
-      throw new Error("session-owned-by-another-user");
+      return { ok: false as const, error: "session-owned-by-another-user" as const };
     }
     if (existing) {
       await ctx.db.patch(existing._id, row);
     } else {
       await ctx.db.insert("presence", row);
     }
+    return { ok: true as const };
   },
 });
 

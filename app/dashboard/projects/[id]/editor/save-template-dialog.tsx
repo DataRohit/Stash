@@ -2,6 +2,7 @@
 
 import { BookmarkPlus, Loader2 } from "lucide-react";
 import { useRef, useState } from "react";
+import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { fieldClass } from "@/lib/ui";
@@ -36,14 +37,7 @@ export function SaveTemplateDialog({
       await onSave(name.trim());
       close();
     } catch (value) {
-      const message = value instanceof Error ? value.message : "";
-      setError(
-        message.includes("template-name-taken")
-          ? "A template with this name already exists."
-          : message.includes("template-limit")
-            ? "This organization already has 50 templates."
-            : "Couldn’t save this template. Please try again.",
-      );
+      setError(mapDocError(value, "Couldn’t save this template. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -93,7 +87,11 @@ export function SaveTemplateDialog({
           placeholder="Team project brief"
           className={`mt-2 h-10 w-full ${fieldClass}`}
         />
-        {error ? <p className="mt-2 text-destructive text-sm">{error}</p> : null}
+        {error ? (
+          <p role="alert" aria-live="assertive" className="mt-2 text-destructive text-sm">
+            {error}
+          </p>
+        ) : null}
       </div>
     </Dialog>
   );

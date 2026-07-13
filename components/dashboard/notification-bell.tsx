@@ -4,18 +4,11 @@ import { useMutation, useQuery } from "convex/react";
 import { Bell, CheckCheck, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-
-function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleString([], {
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "short",
-  });
-}
 
 export function NotificationBell() {
   const router = useRouter();
@@ -97,12 +90,14 @@ export function NotificationBell() {
             </button>
           </div>
           {notifications === undefined ? (
-            <div className="flex items-center justify-center gap-2 px-4 py-8 text-muted-foreground text-xs">
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              Loading
-            </div>
+            <DataSkeleton label="Loading notifications" rows={3} compact />
           ) : notifications.length === 0 ? (
-            <p className="px-4 py-8 text-center text-muted-foreground text-xs">No notifications.</p>
+            <DataState
+              title="No notifications"
+              description="Mentions, replies, and thread updates will appear here."
+              compact
+              className="m-2"
+            />
           ) : (
             <ul className="thin-scrollbar max-h-96 overflow-auto">
               {notifications.map((notification) => (
@@ -123,9 +118,13 @@ export function NotificationBell() {
                               ? "reopened a thread"
                               : "mentioned you"}
                       </span>
-                      <span className="shrink-0 text-[10px] text-muted-foreground">
-                        {formatTime(notification.createdAt)}
-                      </span>
+                      <time
+                        dateTime={new Date(notification.createdAt).toISOString()}
+                        title={formatDateTime(notification.createdAt)}
+                        className="shrink-0 text-[10px] text-muted-foreground"
+                      >
+                        {formatRelativeTime(notification.createdAt)}
+                      </time>
                     </span>
                     <span className="truncate text-[11px] text-muted-foreground">
                       {notification.projectTitle} / {notification.documentName}

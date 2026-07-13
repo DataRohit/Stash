@@ -79,7 +79,7 @@ export function OrgInvitations() {
   return (
     <section className="glass w-full max-w-7xl rounded-lg border-signal/30 p-6 sm:p-8">
       <div className="flex items-center gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-signal/40 bg-signal/10 text-signal">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-signal/40 bg-signal/10 text-foreground">
           <MailPlus className="size-4" aria-hidden="true" />
         </span>
         <div className="flex flex-col gap-0.5">
@@ -95,7 +95,10 @@ export function OrgInvitations() {
           const acceptBusy = busy?.id === invitation.id && busy.action === "accept";
           const rejectBusy = busy?.id === invitation.id && busy.action === "reject";
           return (
-            <li key={invitation.id} className="flex items-center gap-3 py-3">
+            <li
+              key={invitation.id}
+              className="flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap"
+            >
               <Image
                 src={org.imageUrl}
                 alt=""
@@ -108,11 +111,11 @@ export function OrgInvitations() {
                 <p className="truncate font-medium text-sm">{org.name}</p>
                 <p className="truncate text-muted-foreground text-xs">Invited as {roleLabel}</p>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
                 <RoleBadge role={invitation.role} className="hidden sm:inline-flex" />
                 <Button
                   variant="success"
-                  className="w-24"
+                  className="flex-1 sm:w-24 sm:flex-none"
                   onClick={() => accept(invitation)}
                   disabled={pending}
                 >
@@ -127,7 +130,7 @@ export function OrgInvitations() {
                 </Button>
                 <Button
                   variant="destructive"
-                  className="w-24"
+                  className="flex-1 sm:w-24 sm:flex-none"
                   onClick={() => reject(invitation)}
                   disabled={pending}
                 >

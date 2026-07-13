@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { FolderPlus, Loader2, Plus, X } from "lucide-react";
+import { FolderPlus, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type FormEvent, type KeyboardEvent, useState, useTransition } from "react";
 import { ProjectCard } from "@/app/dashboard/projects/project-card";
@@ -9,6 +9,7 @@ import { RecentDocuments } from "@/app/dashboard/projects/recent-documents";
 import { createProject } from "@/app/dashboard/projects-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import { MAX_TAG_LENGTH, MAX_TAGS } from "@/lib/org";
@@ -93,13 +94,13 @@ export function ProjectsBoard({
           <h1 className="font-serif text-3xl tracking-display">Projects</h1>
         </div>
         {isAdmin ? (
-          <div className="flex items-center gap-3">
+          <div className="flex w-full flex-wrap items-center justify-between gap-3 sm:w-auto sm:justify-start">
             <span className="font-mono text-muted-foreground text-xs tabular-nums">
               {used} of {maxProjects}
             </span>
             <Button
               variant="secondary"
-              className="w-44"
+              className="w-full sm:w-44"
               onClick={() => {
                 setCreateOpen((open) => !open);
                 setError(null);
@@ -207,7 +208,11 @@ export function ProjectsBoard({
             </div>
           </div>
 
-          {error ? <p className="text-destructive text-sm">{error}</p> : null}
+          {error ? (
+            <p role="alert" aria-live="assertive" className="text-destructive text-sm">
+              {error}
+            </p>
+          ) : null}
 
           <div className="flex justify-end">
             <Button type="submit" className="w-40" disabled={creating || title.trim().length < 2}>
@@ -220,18 +225,18 @@ export function ProjectsBoard({
       <div className="mt-6 border-hairline border-t pt-6">
         <RecentDocuments clerkOrgId={clerkOrgId} />
         {projects === undefined ? (
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            Loading projects…
-          </div>
+          <DataSkeleton label="Loading projects" rows={3} compact />
         ) : projects.length === 0 ? (
-          <p className="text-muted-foreground text-sm">
-            {isAdmin
-              ? "No projects yet. Create your first one."
-              : "You don’t have access to any projects yet."}
-          </p>
+          <DataState
+            title={isAdmin ? "No projects yet" : "No accessible projects"}
+            description={
+              isAdmin
+                ? "Create your first project to start organizing documents."
+                : "Ask an organization administrator to grant you project access."
+            }
+          />
         ) : (
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {projects.map((project) => (
               <ProjectCard
                 key={project.id}

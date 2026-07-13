@@ -9,31 +9,31 @@ import {
   removeAwarenessStates,
 } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
 const CURSOR_COLORS = [
-  { color: "#ef4444", light: "#ef444433" },
-  { color: "#2563eb", light: "#2563eb33" },
-  { color: "#16a34a", light: "#16a34a33" },
-  { color: "#9333ea", light: "#9333ea33" },
-  { color: "#db2777", light: "#db277733" },
-  { color: "#0891b2", light: "#0891b233" },
-  { color: "#ca8a04", light: "#ca8a0433" },
-  { color: "#dc2626", light: "#dc262633" },
-  { color: "#4f46e5", light: "#4f46e533" },
-  { color: "#059669", light: "#05966933" },
-  { color: "#c026d3", light: "#c026d333" },
-  { color: "#ea580c", light: "#ea580c33" },
-  { color: "#0284c7", light: "#0284c733" },
-  { color: "#65a30d", light: "#65a30d33" },
-  { color: "#7c3aed", light: "#7c3aed33" },
-  { color: "#be123c", light: "#be123c33" },
-  { color: "#0d9488", light: "#0d948833" },
+  { color: "#b91c1c", light: "#b91c1c33" },
+  { color: "#1d4ed8", light: "#1d4ed833" },
+  { color: "#15803d", light: "#15803d33" },
+  { color: "#7e22ce", light: "#7e22ce33" },
+  { color: "#be185d", light: "#be185d33" },
+  { color: "#0e7490", light: "#0e749033" },
   { color: "#a16207", light: "#a1620733" },
+  { color: "#c2410c", light: "#c2410c33" },
+  { color: "#4338ca", light: "#4338ca33" },
+  { color: "#047857", light: "#04785733" },
+  { color: "#a21caf", light: "#a21caf33" },
+  { color: "#0369a1", light: "#0369a133" },
+  { color: "#4d7c0f", light: "#4d7c0f33" },
+  { color: "#6d28d9", light: "#6d28d933" },
+  { color: "#9f1239", light: "#9f123933" },
+  { color: "#0f766e", light: "#0f766e33" },
+  { color: "#854d0e", light: "#854d0e33" },
 ];
-const DEFAULT_CURSOR_COLOR = { color: "#2563eb", light: "#2563eb33" };
+const DEFAULT_CURSOR_COLOR = { color: "#1d4ed8", light: "#1d4ed833" };
 
 const FLUSH_MS = 200;
 const HEARTBEAT_MS = 5_000;
@@ -60,6 +60,7 @@ type CollabDoc = {
   ready: boolean;
   syncing: boolean;
   blocked: string | null;
+  pendingEdits: number;
   lastSyncedAt: Date | null;
   viewers: CollabViewer[];
   sessionId: string | null;
@@ -127,23 +128,6 @@ function beaconLeave(documentId: string, sessionId: string): void {
   }).catch(reportAsync);
 }
 
-function mapSyncError(error: unknown): string {
-  const message = error instanceof Error ? error.message : "";
-  if (message.includes("project-full")) {
-    return "This project has reached its size limit. Upgrade or remove files.";
-  }
-  if (message.includes("file-too-large")) {
-    return "This file is too large (max 512 KB per file).";
-  }
-  if (message.includes("update-too-large")) {
-    return "That edit is too large to sync in one step. Split the paste into smaller chunks.";
-  }
-  if (message.includes("seq-conflict")) {
-    return "Syncing your latest edit. This will retry automatically.";
-  }
-  return "Your latest edit could not be synced. Please try again.";
-}
-
 export function useCollabDoc(
   documentId: string | null,
   canEdit: boolean,
@@ -153,6 +137,7 @@ export function useCollabDoc(
   const [ready, setReady] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
+  const [pendingEdits, setPendingEdits] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pullCursor, setPullCursor] = useState<{ documentId: string | null; afterSeq: number }>({
@@ -170,7 +155,7 @@ export function useCollabDoc(
     api.presence.list,
     documentId ? { documentId: documentId as Id<"documents"> } : "skip",
   );
-  const pushUpdate = useMutation(api.collab.pushUpdate);
+  const pushUpdateV2 = useMutation(api.collab.pushUpdateV2);
   const ensureSeed = useMutation(api.collab.ensureSeed);
   const heartbeat = useMutation(api.presence.heartbeat);
   const leavePresence = useMutation(api.presence.leave);
@@ -192,6 +177,7 @@ export function useCollabDoc(
       setEngine(null);
       setReady(false);
       setSyncing(false);
+      setPendingEdits(0);
       setLastSyncedAt(null);
       return;
     }
@@ -204,6 +190,7 @@ export function useCollabDoc(
     setReady(false);
     setSyncing(false);
     setBlocked(null);
+    setPendingEdits(0);
     setLastSyncedAt(null);
     setEngine({ ydoc, ytext, awareness });
     return () => {
@@ -230,8 +217,10 @@ export function useCollabDoc(
     }
     const { ydoc } = engine;
     let pending: Uint8Array[] = [];
+    let pendingEditCount = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let failureNotified = false;
+    let reconnecting = false;
     let active = true;
     const flush = async () => {
       timer = null;
@@ -240,30 +229,46 @@ export function useCollabDoc(
         return;
       }
       const merged = Y.mergeUpdates(pending);
+      const mergedEditCount = pendingEditCount;
       pending = [];
+      pendingEditCount = 0;
       let retryable = false;
       setSyncing(true);
       try {
-        await pushUpdate({
+        const result = await pushUpdateV2({
           documentId: documentId as Id<"documents">,
           update: toArrayBuffer(merged),
         });
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
         failureNotified = false;
+        reconnecting = false;
         setBlocked(null);
+        setPendingEdits(0);
         setLastSyncedAt(new Date());
       } catch (error) {
         pending = [merged, ...pending];
+        pendingEditCount += mergedEditCount;
         const message = error instanceof Error ? error.message : "";
         const blockedByLimit =
           message.includes("project-full") || message.includes("file-too-large");
         if (blockedByLimit) {
-          setBlocked(mapSyncError(error));
+          setBlocked(mapDocError(error, "Your latest edit could not be synced. Please try again."));
+          setPendingEdits(0);
         } else {
           retryable = true;
+          reconnecting = true;
+          setPendingEdits(pendingEditCount);
         }
         if (!failureNotified) {
           failureNotified = true;
-          notify.error("Couldn’t sync changes", { description: mapSyncError(error) });
+          notify.error("Couldn’t sync changes", {
+            description: mapDocError(
+              error,
+              "Your latest edit could not be synced. Please try again.",
+            ),
+          });
         }
         reportAsync(error);
       } finally {
@@ -279,6 +284,10 @@ export function useCollabDoc(
         return;
       }
       pending.push(update);
+      pendingEditCount += 1;
+      if (reconnecting) {
+        setPendingEdits(pendingEditCount);
+      }
       setSyncing(true);
       if (timer === null) {
         timer = setTimeout(() => void flush(), FLUSH_MS);
@@ -304,7 +313,7 @@ export function useCollabDoc(
       }
       void flush();
     };
-  }, [engine, documentId, canEdit, pushUpdate]);
+  }, [engine, documentId, canEdit, pushUpdateV2]);
 
   useEffect(() => {
     if (!engine || !documentId || pullResult === undefined) {
@@ -387,7 +396,13 @@ export function useCollabDoc(
         color: userColor.color,
         image: user.image,
         state: bytesToBase64(state),
-      }).catch(reportAsync);
+      })
+        .then((result) => {
+          if (result && !result.ok && result.error !== "rate-limited") {
+            reportAsync(new Error(result.error));
+          }
+        })
+        .catch(reportAsync);
     };
     const onChange = () => send();
     const onPageHide = () => beaconLeave(documentId, sessionId);
@@ -446,6 +461,7 @@ export function useCollabDoc(
     ready,
     syncing,
     blocked,
+    pendingEdits,
     lastSyncedAt,
     viewers,
     sessionId,

@@ -13,7 +13,9 @@ import type * as collab from "../collab.js";
 import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
 import type * as documents from "../documents.js";
+import type * as health from "../health.js";
 import type * as limits from "../limits.js";
+import type * as maintenance from "../maintenance.js";
 import type * as members from "../members.js";
 import type * as navigation from "../navigation.js";
 import type * as organizations from "../organizations.js";
@@ -23,6 +25,7 @@ import type * as secrets from "../secrets.js";
 import type * as sharing from "../sharing.js";
 import type * as templateContent from "../templateContent.js";
 import type * as templates from "../templates.js";
+import type * as writeRateLimit from "../writeRateLimit.js";
 
 import type {
   ApiFromModules,
@@ -36,7 +39,9 @@ declare const fullApi: ApiFromModules<{
   comments: typeof comments;
   crons: typeof crons;
   documents: typeof documents;
+  health: typeof health;
   limits: typeof limits;
+  maintenance: typeof maintenance;
   members: typeof members;
   navigation: typeof navigation;
   organizations: typeof organizations;
@@ -46,6 +51,7 @@ declare const fullApi: ApiFromModules<{
   sharing: typeof sharing;
   templateContent: typeof templateContent;
   templates: typeof templates;
+  writeRateLimit: typeof writeRateLimit;
 }>;
 
 /**

@@ -3,7 +3,9 @@
 import { useQuery } from "convex/react";
 import { FileCode, FileText, Loader2, NotebookPen } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
+import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import { Button } from "@/components/ui/button";
+import { DataSkeleton } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -83,14 +85,7 @@ export function NewDocumentDialog({
       });
       close();
     } catch (value) {
-      const message = value instanceof Error ? value.message : "";
-      setError(
-        message.includes("name-taken")
-          ? "A document with this name already exists here."
-          : message.includes("project-full")
-            ? "This project has reached its storage limit."
-            : "Couldn’t create the document. Please try again.",
-      );
+      setError(mapDocError(value, "Couldn’t create the document. Please try again."));
     } finally {
       setBusy(false);
     }
@@ -180,13 +175,14 @@ export function NewDocumentDialog({
             ))}
           </div>
           {templates === undefined ? (
-            <p className="mt-2 flex items-center gap-2 text-muted-foreground text-xs">
-              <Loader2 className="size-3.5 animate-spin" />
-              Loading organization templates…
-            </p>
+            <DataSkeleton label="Loading organization templates" rows={2} compact />
           ) : null}
         </div>
-        {error ? <p className="text-destructive text-sm">{error}</p> : null}
+        {error ? (
+          <p role="alert" aria-live="assertive" className="text-destructive text-sm">
+            {error}
+          </p>
+        ) : null}
       </div>
     </Dialog>
   );

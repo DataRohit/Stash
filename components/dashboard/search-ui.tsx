@@ -4,6 +4,7 @@ import { Folder } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type KeyboardEvent, useEffect, useRef } from "react";
 import { FileIcon } from "@/components/file-icon";
+import { DataState } from "@/components/ui/data-state";
 import { cn } from "@/lib/utils";
 
 export type GlobalResult = {
@@ -58,8 +59,7 @@ export function SearchResults({
   useEffect(() => {
     refs.current[active]?.scrollIntoView({ block: "nearest" });
   }, [active]);
-  if (!results.length)
-    return <p className="px-4 py-8 text-center text-muted-foreground text-sm">{emptyText}</p>;
+  if (!results.length) return <DataState title={emptyText} compact className="m-3" />;
   return (
     <div
       role="listbox"

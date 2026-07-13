@@ -1,8 +1,9 @@
 "use client";
 
 import { X } from "lucide-react";
-import { type ReactNode, type RefObject, useEffect, useId, useRef } from "react";
+import { type ReactNode, type RefObject, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { cn } from "@/lib/utils";
 
 type DialogProps = {
@@ -15,10 +16,8 @@ type DialogProps = {
   footer?: ReactNode;
   className?: string;
   initialFocusRef?: RefObject<HTMLElement | null>;
+  mobileSheet?: boolean;
 };
-
-const FOCUSABLE =
-  'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 export function Dialog({
   open,
@@ -30,62 +29,31 @@ export function Dialog({
   footer,
   className,
   initialFocusRef,
+  mobileSheet = false,
 }: DialogProps) {
   const titleId = useId();
   const descriptionId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const previous = document.activeElement as HTMLElement | null;
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const timer = window.setTimeout(
-      () => (initialFocusRef?.current ?? closeRef.current)?.focus(),
-      0,
-    );
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== "Tab" || !panelRef.current) {
-        return;
-      }
-      const focusable = [...panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)];
-      if (focusable.length === 0) {
-        event.preventDefault();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable.at(-1);
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.clearTimeout(timer);
-      document.body.style.overflow = originalOverflow;
-      document.removeEventListener("keydown", onKeyDown);
-      previous?.focus();
-    };
-  }, [initialFocusRef, onClose, open]);
+  useDialogA11y({
+    open,
+    onClose,
+    containerRef: panelRef,
+    initialFocusRef: initialFocusRef ?? closeRef,
+  });
 
   if (!open || typeof document === "undefined") {
     return null;
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[120] flex items-center justify-center p-3 sm:p-4">
+    <div
+      className={cn(
+        "fixed inset-0 z-[120] flex justify-center",
+        mobileSheet ? "items-end p-0 sm:items-center sm:p-4" : "items-center p-3 sm:p-4",
+      )}
+    >
       <button
         type="button"
         aria-label={`Close ${title}`}
@@ -94,15 +62,25 @@ export function Dialog({
       />
       <div
         ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined}
         className={cn(
-          "glass-strong relative flex max-h-[min(88dvh,760px)] w-full max-w-lg flex-col overflow-hidden rounded-lg border border-hairline shadow-[var(--shadow-glass)]",
+          "glass-strong relative flex max-h-[min(88dvh,760px)] w-full max-w-lg flex-col overflow-hidden border border-hairline shadow-[var(--shadow-glass)]",
+          mobileSheet ? "h-[min(82dvh,760px)] rounded-t-lg sm:h-auto sm:rounded-lg" : "rounded-lg",
           className,
         )}
       >
+        {mobileSheet ? (
+          <div
+            className="flex h-5 shrink-0 items-center justify-center sm:hidden"
+            aria-hidden="true"
+          >
+            <span className="h-1 w-10 rounded-full bg-foreground/20" />
+          </div>
+        ) : null}
         <div className="flex min-h-11 shrink-0 items-center justify-between gap-3 border-hairline border-b px-3 py-2">
           <h2
             id={titleId}
@@ -116,7 +94,7 @@ export function Dialog({
             type="button"
             onClick={onClose}
             aria-label={`Close ${title}`}
-            className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive sm:size-7"
           >
             <X className="size-4" aria-hidden="true" />
           </button>

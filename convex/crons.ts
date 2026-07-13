@@ -11,7 +11,31 @@ crons.interval("purge expired trash", { hours: 6 }, internal.documents.purgeExpi
 crons.interval("prune old notifications", { hours: 6 }, internal.comments.pruneNotifications, {});
 crons.interval("prune old share events", { hours: 12 }, internal.sharing.pruneShareEvents, {});
 crons.interval("prune share rate windows", { minutes: 30 }, internal.sharing.pruneShareWindows, {});
+crons.interval(
+  "prune authenticated write windows",
+  { minutes: 30 },
+  internal.writeRateLimit.pruneWriteWindows,
+  {},
+);
 crons.interval("prune project activity", { hours: 12 }, internal.activity.pruneProjectEvents, {});
 crons.interval("reap stuck project clones", { minutes: 30 }, internal.projects.reapStuckClones, {});
+crons.daily(
+  "reconcile project bytes",
+  { hourUTC: 2, minuteUTC: 0 },
+  internal.maintenance.walkProjectBytes,
+  {},
+);
+crons.weekly(
+  "sweep orphan storage",
+  { dayOfWeek: "sunday", hourUTC: 3, minuteUTC: 0 },
+  internal.maintenance.sweepOrphanStorage,
+  { dryRun: false },
+);
+crons.daily(
+  "prune recent documents",
+  { hourUTC: 4, minuteUTC: 0 },
+  internal.navigation.pruneRecentDocuments,
+  {},
+);
 
 export default crons;

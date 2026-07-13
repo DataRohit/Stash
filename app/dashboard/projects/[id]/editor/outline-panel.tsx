@@ -2,6 +2,7 @@
 
 import { List } from "lucide-react";
 import type { OutlineItem } from "@/app/dashboard/projects/[id]/editor/lib/outline";
+import { DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
@@ -21,12 +22,16 @@ export function OutlinePanel({ open, items, onSelect, onClose }: OutlinePanelPro
       icon={<List className="size-3.5" aria-hidden="true" />}
       description="Jump to a heading in the editor and preview."
       className="max-w-md"
+      mobileSheet
     >
       <div className="py-2">
         {items.length === 0 ? (
-          <p className="px-3 py-4 text-muted-foreground/80 text-xs leading-relaxed">
-            No headings yet. Add headings to build an outline.
-          </p>
+          <DataState
+            title="No headings yet"
+            description="Add headings to this document to build an outline."
+            compact
+            className="m-2"
+          />
         ) : (
           <ul className="flex flex-col gap-1 px-2">
             {items.map((item) => (

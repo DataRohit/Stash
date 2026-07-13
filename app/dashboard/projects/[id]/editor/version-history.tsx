@@ -14,21 +14,19 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DiffView } from "@/app/dashboard/projects/[id]/editor/diff-view";
 import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
-import {
-  formatBytes,
-  formatHistoryTime,
-  historyEmail,
-  mapDocError,
-} from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
+import { historyEmail, mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
+import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type VersionHistoryModalProps = {
@@ -131,7 +129,12 @@ function VersionSelect({
             <span className="truncate text-xs">
               v{current.versionNumber}
               <span className="text-muted-foreground/70"> · </span>
-              {formatHistoryTime(current.createdAt)}
+              <time
+                dateTime={new Date(current.createdAt).toISOString()}
+                title={formatDateTime(current.createdAt)}
+              >
+                {formatRelativeTime(current.createdAt)}
+              </time>
               <span className="text-muted-foreground/70"> · </span>
               {current.authorName}
             </span>
@@ -176,7 +179,12 @@ function VersionSelect({
                     >
                       v{snapshot.versionNumber}
                       <span className="text-muted-foreground/70"> · </span>
-                      {formatHistoryTime(snapshot.createdAt)}
+                      <time
+                        dateTime={new Date(snapshot.createdAt).toISOString()}
+                        title={formatDateTime(snapshot.createdAt)}
+                      >
+                        {formatRelativeTime(snapshot.createdAt)}
+                      </time>
                       <span className="text-muted-foreground/70"> · </span>
                       {snapshot.authorName}
                     </span>
@@ -198,12 +206,7 @@ function VersionSelect({
 }
 
 function LoadingPane({ label }: { label: string }) {
-  return (
-    <div className="flex h-full items-center justify-center gap-2 text-muted-foreground/80 text-xs">
-      <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-      {label}
-    </div>
-  );
+  return <DataSkeleton label={label} rows={4} className="h-full" />;
 }
 
 export function VersionHistoryModal({
@@ -231,17 +234,16 @@ export function VersionHistoryModal({
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
   const isRichText = language === "doc";
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  useDialogA11y({
+    open: true,
+    onClose,
+    containerRef: panelRef,
+    initialFocusRef: closeRef,
+  });
 
   const selected =
     snapshots?.find((snapshot) => snapshot.id === selectedSnapshotId)?.id ??
@@ -329,7 +331,7 @@ export function VersionHistoryModal({
 
   const overlay = (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm sm:p-6"
+      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-0 backdrop-blur-sm sm:items-center sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-label="Version history"
@@ -339,7 +341,14 @@ export function VersionHistoryModal({
         }
       }}
     >
-      <div className="glass-strong relative flex h-[92dvh] w-full max-w-[1400px] flex-col overflow-hidden rounded-lg border border-hairline shadow-[var(--shadow-glass)]">
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        className="glass-strong relative flex h-[92dvh] w-full max-w-[1400px] flex-col overflow-hidden rounded-t-lg border border-hairline shadow-[var(--shadow-glass)] sm:rounded-lg"
+      >
+        <div className="flex h-5 shrink-0 items-center justify-center sm:hidden" aria-hidden="true">
+          <span className="h-1 w-10 rounded-full bg-foreground/20" />
+        </div>
         <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-hairline border-b pr-2 pl-3">
           <div className="flex min-w-0 items-center gap-2">
             <History className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -367,10 +376,11 @@ export function VersionHistoryModal({
               Checkpoint
             </button>
             <button
+              ref={closeRef}
               type="button"
               onClick={onClose}
               aria-label="Close history"
-              className="flex size-7 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+              className="flex size-9 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive sm:size-7"
             >
               <X className="size-4" aria-hidden="true" />
             </button>
@@ -380,22 +390,19 @@ export function VersionHistoryModal({
         {snapshots === undefined ? (
           <LoadingPane label="Loading history..." />
         ) : snapshots.length === 0 ? (
-          <div className="flex flex-1 items-center justify-center px-8 text-center">
-            <div className="flex max-w-[280px] flex-col items-center gap-2">
-              <span className="flex size-9 items-center justify-center rounded-full bg-foreground/[0.06]">
-                <Clock3 className="size-4 text-muted-foreground" aria-hidden="true" />
-              </span>
-              <p className="font-medium text-sm">No versions yet</p>
-              <p className="text-muted-foreground text-xs leading-relaxed">
-                {canCheckpoint
-                  ? "Create a checkpoint to preserve the current version. You can preview, diff, and restore it anytime."
-                  : "Checkpoints saved for this file will appear here."}
-              </p>
-            </div>
-          </div>
+          <DataState
+            title="No versions yet"
+            description={
+              canCheckpoint
+                ? "Create a checkpoint to preserve the current version. You can preview, compare, and restore it anytime."
+                : "Checkpoints saved for this file will appear here."
+            }
+            icon={<Clock3 className="size-5" aria-hidden="true" />}
+            className="m-4 flex-1"
+          />
         ) : (
-          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-            <aside className="flex max-h-52 w-full shrink-0 flex-col border-hairline border-b lg:max-h-none lg:w-72 lg:border-r lg:border-b-0">
+          <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+            <aside className="flex max-h-44 w-full shrink-0 flex-col border-hairline border-b md:max-h-none md:w-72 md:border-r md:border-b-0">
               <div className="flex h-9 shrink-0 items-center justify-between gap-2 border-hairline border-b px-3">
                 <span className="font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                   {snapshots.length} version{snapshots.length === 1 ? "" : "s"}
@@ -435,7 +442,12 @@ export function VersionHistoryModal({
                         <span className="block truncate text-[11px] text-muted-foreground leading-snug">
                           {snapshot.authorName}
                           <span className="text-muted-foreground/70"> · </span>
-                          {formatHistoryTime(snapshot.createdAt)}
+                          <time
+                            dateTime={new Date(snapshot.createdAt).toISOString()}
+                            title={formatDateTime(snapshot.createdAt)}
+                          >
+                            {formatRelativeTime(snapshot.createdAt)}
+                          </time>
                         </span>
                       </span>
                     </button>
@@ -446,7 +458,7 @@ export function VersionHistoryModal({
                         disabled={deletingId === snapshot.id}
                         aria-label={`Delete checkpoint ${snapshot.versionNumber}`}
                         title="Delete checkpoint"
-                        className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-60 group-hover/row:opacity-100"
+                        className="absolute top-1/2 right-1.5 flex size-9 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-muted-foreground opacity-100 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 disabled:cursor-not-allowed disabled:opacity-60 md:size-7 md:opacity-0 md:group-hover/row:opacity-100"
                       >
                         {deletingId === snapshot.id ? (
                           <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />

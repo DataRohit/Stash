@@ -38,10 +38,12 @@ import { ProjectAccessManager } from "@/app/dashboard/projects/[id]/project-acce
 import { ProjectActivity } from "@/app/dashboard/projects/[id]/project-activity";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { DataSkeleton } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { MAX_DESCRIPTION_LENGTH, MAX_IMAGE_BYTES, MAX_TAG_LENGTH, MAX_TAGS } from "@/lib/org";
 import { orgAvatarUrl } from "@/lib/org-avatar";
 import { fieldClass, labelClass } from "@/lib/ui";
@@ -53,16 +55,8 @@ type ProjectDetailProps = {
 };
 
 const dateFormatter = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: "UTC" });
-const dateTimeFormatter = new Intl.DateTimeFormat("en-US", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
-
-function formatMb(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(1);
-}
 
 function AccessLostState({ reason }: { reason: "org" | "access" }) {
   return (
@@ -131,9 +125,8 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
 
   if (project === undefined) {
     return (
-      <section className="glass flex items-center gap-2 rounded-lg p-6 text-muted-foreground text-sm sm:p-8">
-        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-        Loading project…
+      <section className="glass rounded-lg">
+        <DataSkeleton label="Loading project" rows={6} />
       </section>
     );
   }
@@ -454,7 +447,12 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                     {project.lastSavedAt === null ? (
                       <span className="text-muted-foreground">No saves yet</span>
                     ) : (
-                      dateTimeFormatter.format(new Date(project.lastSavedAt))
+                      <time
+                        dateTime={new Date(project.lastSavedAt).toISOString()}
+                        title={formatDateTime(project.lastSavedAt)}
+                      >
+                        {formatRelativeTime(project.lastSavedAt)}
+                      </time>
                     )}
                   </span>
                 </div>
@@ -482,7 +480,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                           />
                         </div>
                         <span className="shrink-0 font-mono text-muted-foreground text-xs tabular-nums">
-                          {formatMb(usedBytes)}/{formatMb(maxBytes)} MB
+                          {formatBytes(usedBytes)} / {formatBytes(maxBytes)}
                         </span>
                       </div>
                       <span className="text-muted-foreground text-xs sm:text-right">
@@ -540,6 +538,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                 </div>
                 <input
                   type="text"
+                  aria-label={`Type ${project.title} to confirm deletion`}
                   value={confirmTitle}
                   onChange={(event) => setConfirmTitle(event.target.value)}
                   disabled={deleting}
@@ -714,7 +713,11 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
               </div>
             </div>
 
-            {error ? <p className="text-destructive text-sm">{error}</p> : null}
+            {error ? (
+              <p role="alert" aria-live="assertive" className="text-destructive text-sm">
+                {error}
+              </p>
+            ) : null}
           </form>
         )}
       </section>

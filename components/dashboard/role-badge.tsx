@@ -12,7 +12,7 @@ export function RoleBadge({ role, isOwner = false, className }: RoleBadgeProps) 
     return (
       <Badge
         variant="outline"
-        className={`border-signal/40 bg-signal/10 text-signal ${className ?? ""}`}
+        className={`border-signal/40 bg-signal/10 text-foreground ${className ?? ""}`}
       >
         <Crown className="size-3 shrink-0" aria-hidden="true" />
         Owner
@@ -23,7 +23,7 @@ export function RoleBadge({ role, isOwner = false, className }: RoleBadgeProps) 
     return (
       <Badge
         variant="outline"
-        className={`border-accent/40 bg-accent/10 text-accent ${className ?? ""}`}
+        className={`border-accent/40 bg-accent/10 text-foreground ${className ?? ""}`}
       >
         <ShieldCheck className="size-3 shrink-0" aria-hidden="true" />
         Admin

@@ -10,6 +10,7 @@ import {
   revokeAllProjectAccessForUser,
 } from "@/lib/convex-server";
 import { getUserPlanLimits } from "@/lib/plan-limits";
+import { logServerError } from "@/lib/server-log";
 
 type ClerkClient = Awaited<ReturnType<typeof clerkClient>>;
 
@@ -84,10 +85,11 @@ async function fetchAllPending(
 async function revokeUserSessions(client: ClerkClient, userId: string): Promise<void> {
   try {
     const sessions = await client.sessions.getSessionList({ userId, status: "active" });
-    await Promise.all(
-      sessions.data.map((session) => client.sessions.revokeSession(session.id).catch(() => null)),
-    );
-  } catch {}
+    await Promise.all(sessions.data.map((session) => client.sessions.revokeSession(session.id)));
+  } catch (error) {
+    logServerError("dashboard.revoke_member_sessions_failed", error, { userId });
+    throw error;
+  }
 }
 
 function toReconcileMembers(members: ClerkMember[]) {
@@ -145,7 +147,8 @@ export async function reconcileMembers(): Promise<MemberActionResult> {
       })),
     );
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.reconcile_members_failed", error, { clerkOrgId: orgId, userId });
     return { error: "failed" };
   }
 }
@@ -207,14 +210,19 @@ export async function inviteMember(input: {
     const duplicatePending =
       latestPending.filter((invite) => invite.emailAddress.toLowerCase() === email).length > 1;
     if (isOverLimit || isNowMember || duplicatePending) {
-      await client.organizations
-        .revokeOrganizationInvitation({
+      try {
+        await client.organizations.revokeOrganizationInvitation({
           organizationId: orgId,
           invitationId: invitation.id,
           requestingUserId: userId,
-        })
-        .catch(() => null);
-      await mirrorDeleteInvitation(orgId, invitation.id).catch(() => null);
+        });
+        await mirrorDeleteInvitation(orgId, invitation.id);
+      } catch (error) {
+        logServerError("dashboard.invitation_rollback_failed", error, {
+          clerkOrgId: orgId,
+          userId,
+        });
+      }
       if (isNowMember) {
         return { error: "already-member" };
       }
@@ -225,7 +233,8 @@ export async function inviteMember(input: {
     }
     await mirrorUpsertPending(orgId, email, role, invitation.id);
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.invite_member_failed", error, { clerkOrgId: orgId, userId });
     return { error: "failed" };
   }
 }
@@ -250,7 +259,11 @@ export async function cancelInvitation(input: {
     });
     await mirrorDeleteInvitation(orgId, input.invitationId);
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.cancel_invitation_failed", error, {
+      clerkOrgId: orgId,
+      userId,
+    });
     return { error: "failed" };
   }
 }
@@ -284,7 +297,8 @@ export async function declineInvitation(input: {
     });
     await mirrorDeleteInvitation(invitation.organizationId, invitation.id);
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.decline_invitation_failed", error, { userId });
     return { error: "failed" };
   }
 }
@@ -315,7 +329,8 @@ export async function removeMember(input: { memberUserId: string }): Promise<Mem
     await revokeAllProjectAccessForUser(orgId, input.memberUserId);
     await revokeUserSessions(client, input.memberUserId);
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.remove_member_failed", error, { clerkOrgId: orgId, userId });
     return { error: "failed" };
   }
 }

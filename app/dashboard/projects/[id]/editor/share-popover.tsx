@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { Dialog } from "@/components/ui/dialog";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export type ShareMode = "private" | "org" | "public";
@@ -71,15 +72,6 @@ const MODES = [
     description: "Anyone with the link can view a read-only preview.",
   },
 ];
-
-function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleString([], {
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "short",
-  });
-}
 
 function modeLabel(mode: ShareMode): string {
   if (mode === "public") {
@@ -232,6 +224,7 @@ export function SharePopover({
             <div className="flex gap-1.5">
               <input
                 readOnly
+                aria-label="Share link"
                 value={shareUrl}
                 className="h-8 min-w-0 flex-1 rounded-sm border border-hairline bg-[var(--editor-control)] px-2 font-mono text-[11px] text-muted-foreground outline-none"
               />
@@ -357,7 +350,13 @@ export function SharePopover({
                   {event.previousMode === event.nextMode
                     ? `rotated the ${modeLabel(event.nextMode)} link`
                     : `changed ${modeLabel(event.previousMode)} to ${modeLabel(event.nextMode)}`}{" "}
-                  / {formatTime(event.createdAt)}
+                  /{" "}
+                  <time
+                    dateTime={new Date(event.createdAt).toISOString()}
+                    title={formatDateTime(event.createdAt)}
+                  >
+                    {formatRelativeTime(event.createdAt)}
+                  </time>
                 </li>
               ))}
             </ul>

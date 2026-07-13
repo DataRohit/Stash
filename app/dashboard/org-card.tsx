@@ -276,7 +276,7 @@ export function OrgCard(props: OrgCardProps) {
   return (
     <section className="glass w-full max-w-7xl rounded-lg p-6 sm:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-4">
+        <div className="flex min-w-0 items-center gap-4">
           {mode === "view" ? (
             <Image
               src={iconUrl}
@@ -287,25 +287,25 @@ export function OrgCard(props: OrgCardProps) {
               className="size-14 shrink-0 rounded-lg border border-hairline bg-surface/60 object-cover"
             />
           ) : null}
-          <div className="flex flex-col gap-1">
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
             <span className={labelClass}>— Organization</span>
-            <h1 className="font-serif text-3xl tracking-display">
+            <h1 className="break-words font-serif text-3xl tracking-display">
               {mode === "view" ? name : "Edit details"}
             </h1>
           </div>
         </div>
 
         {isAdmin && !deleteOpen ? (
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
             {mode === "view" ? (
               <>
-                <Button variant="secondary" className="w-52" onClick={beginEdit}>
+                <Button variant="secondary" className="w-full sm:w-52" onClick={beginEdit}>
                   <Pencil className="size-4" aria-hidden="true" />
                   Edit details
                 </Button>
                 <Button
                   variant="destructive"
-                  className="w-52"
+                  className="w-full sm:w-52"
                   onClick={() => setDeleteOpen(true)}
                   disabled={!canDelete}
                 >
@@ -318,7 +318,7 @@ export function OrgCard(props: OrgCardProps) {
                 <Button
                   type="button"
                   variant="secondary"
-                  className="w-52"
+                  className="w-full sm:w-52"
                   onClick={cancelEdit}
                   disabled={saving}
                 >
@@ -327,7 +327,7 @@ export function OrgCard(props: OrgCardProps) {
                 <Button
                   type="submit"
                   form="org-edit-form"
-                  className="w-52"
+                  className="w-full sm:w-52"
                   disabled={saving || draftName.trim().length < 2}
                 >
                   <Check className="size-4" aria-hidden="true" />
@@ -384,7 +384,7 @@ export function OrgCard(props: OrgCardProps) {
           {isAdmin ? (
             <div className="flex flex-col gap-3 border-hairline border-t pt-6">
               <span className={labelClass}>Sharing</span>
-              <div className="flex items-start justify-between gap-4 rounded-md border border-hairline bg-surface/45 p-4">
+              <div className="flex items-start justify-between gap-3 rounded-md border border-hairline bg-surface/45 p-4">
                 <div className="flex items-start gap-3">
                   <Globe
                     className="mt-0.5 size-4 shrink-0 text-muted-foreground"
@@ -407,14 +407,14 @@ export function OrgCard(props: OrgCardProps) {
                   onClick={togglePublicSharing}
                   disabled={togglingShare}
                   className={cn(
-                    "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border border-hairline transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                    "relative inline-flex h-9 w-12 shrink-0 cursor-pointer items-center rounded-full border border-hairline transition-colors disabled:cursor-not-allowed disabled:opacity-60",
                     publicSharing ? "bg-accent" : "bg-foreground/15",
                   )}
                 >
                   <span
                     className={cn(
                       "inline-block size-4 rounded-full bg-background shadow-sm transition-transform",
-                      publicSharing ? "translate-x-6" : "translate-x-1",
+                      publicSharing ? "translate-x-7" : "translate-x-1",
                     )}
                   />
                 </button>
@@ -433,6 +433,7 @@ export function OrgCard(props: OrgCardProps) {
               </div>
               <input
                 type="text"
+                aria-label={`Type ${name} to confirm deletion`}
                 value={confirmName}
                 onChange={(event) => setConfirmName(event.target.value)}
                 disabled={deleting}
@@ -618,7 +619,11 @@ export function OrgCard(props: OrgCardProps) {
             </div>
           </div>
 
-          {error ? <p className="text-destructive text-sm">{error}</p> : null}
+          {error ? (
+            <p role="alert" aria-live="assertive" className="text-destructive text-sm">
+              {error}
+            </p>
+          ) : null}
         </form>
       )}
     </section>

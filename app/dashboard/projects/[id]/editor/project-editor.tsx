@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   BookmarkPlus,
   Check,
+  CircleHelp,
   Code2,
   Columns2,
   Eye,
@@ -25,6 +26,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -72,10 +74,15 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/share-popover";
 import { TrashPanel } from "@/app/dashboard/projects/[id]/editor/trash-panel";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
-import { VersionHistoryModal } from "@/app/dashboard/projects/[id]/editor/version-history";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
+import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
+import { useMediaQuery } from "@/components/ui/use-media-query";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { isRasterAssetMimeType, RASTER_ASSET_FORMATS } from "@/lib/asset-formats";
+import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type ProjectEditorProps = {
@@ -92,13 +99,16 @@ const RichDocEditor = dynamic(
   () => import("@/app/dashboard/projects/[id]/editor/rich-doc-editor"),
   {
     ssr: false,
-    loading: () => (
-      <div className="flex flex-1 items-center justify-center gap-2 text-muted-foreground text-sm">
-        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-        Loading editor…
-      </div>
-    ),
+    loading: () => <DataSkeleton label="Loading rich-text editor" rows={6} className="flex-1" />,
   },
+);
+
+const VersionHistoryModal = dynamic(
+  () =>
+    import("@/app/dashboard/projects/[id]/editor/version-history").then(
+      (module) => module.VersionHistoryModal,
+    ),
+  { ssr: false },
 );
 
 const MAX_ASSET_BYTES = 5 * 1024 * 1024;
@@ -108,18 +118,22 @@ function sidebarStorageKey(projectId: string): string {
   return `stash:editor:sidebar:${projectId}`;
 }
 
-function formatMb(bytes: number): string {
-  return (bytes / (1024 * 1024)).toFixed(1);
-}
-
-function formatSaveTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}
-
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
   return copy.buffer;
+}
+
+function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  return (
+    target.isContentEditable ||
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement
+  );
 }
 
 function initialsOf(name: string): string {
@@ -182,14 +196,25 @@ function ViewerStack({ viewers }: { viewers: CollabViewer[] }) {
 
 function ViewerPresence({ viewers, canOpen }: { viewers: CollabViewer[]; canOpen: boolean }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const titleId = useId();
+
+  useDialogA11y({
+    open: open && canOpen,
+    onClose: () => setOpen(false),
+    containerRef: panelRef,
+    initialFocusRef: closeRef,
+    lockBody: false,
+  });
 
   useEffect(() => {
     if (!open) {
       return;
     }
     const onPointer = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
@@ -210,20 +235,43 @@ function ViewerPresence({ viewers, canOpen }: { viewers: CollabViewer[]; canOpen
   }
 
   return (
-    <div ref={ref} className="relative z-[70] hidden sm:block">
+    <div ref={wrapperRef} className="relative z-[70] hidden sm:block">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-label={`${viewers.length} viewing this file`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className="flex cursor-pointer items-center rounded-full transition-opacity hover:opacity-90"
       >
         <ViewerStack viewers={viewers} />
       </button>
       {open ? (
-        <div className="absolute top-9 right-0 z-[80] w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-hairline bg-surface p-1 shadow-xl">
-          <p className="px-2 py-1.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
-            {viewers.length} {viewers.length === 1 ? "person here" : "people here"}
-          </p>
+        <div
+          ref={panelRef}
+          tabIndex={-1}
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby={titleId}
+          className="absolute top-9 right-0 z-[80] w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-hairline bg-surface p-1 shadow-xl"
+        >
+          <div className="flex min-h-9 items-center justify-between gap-2 px-2 py-1">
+            <p
+              id={titleId}
+              className="font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest"
+            >
+              {viewers.length} {viewers.length === 1 ? "person here" : "people here"}
+            </p>
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={() => setOpen(false)}
+              aria-label="Close presence details"
+              className="flex size-7 items-center justify-center rounded-xs text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+            >
+              <X className="size-3.5" aria-hidden="true" />
+            </button>
+          </div>
           <ul className="flex max-h-64 flex-col overflow-auto">
             {viewers.map((viewer) => (
               <li
@@ -284,8 +332,8 @@ export function ProjectEditor({
   projectId,
   projectTitle,
   clerkOrgId,
-  canEdit,
-  isAdmin,
+  canEdit: initialCanEdit,
+  isAdmin: initialIsAdmin,
 }: ProjectEditorProps) {
   const pid = projectId as Id<"projects">;
   const router = useRouter();
@@ -294,6 +342,12 @@ export function ProjectEditor({
   const orgChanged = authLoaded && orgId !== clerkOrgId;
   const project = useQuery(api.projects.get, orgChanged ? "skip" : { projectId: pid });
   const accessLost = orgChanged ? "org" : project === null ? "access" : null;
+  const canEdit =
+    project === undefined
+      ? initialCanEdit
+      : Boolean(project?.isAdmin || project?.viewerLevel === "editor");
+  const isAdmin = project === undefined ? initialIsAdmin : Boolean(project?.isAdmin);
+  const editAccessRevoked = project !== undefined && initialCanEdit && !canEdit;
   const nodesData = useQuery(api.documents.listByProject, accessLost ? "skip" : { projectId: pid });
   const nodes = useMemo(() => (nodesData ?? []) as TreeNode[], [nodesData]);
   const usage = useQuery(api.documents.usage, accessLost ? "skip" : { projectId: pid });
@@ -319,6 +373,7 @@ export function ProjectEditor({
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("split");
+  const [mobileViewMode, setMobileViewMode] = useState<Exclude<ViewMode, "split">>("editor");
   const [buffer, setBuffer] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -337,6 +392,7 @@ export function ProjectEditor({
   const [focusRequest, setFocusRequest] = useState<CommentFocusRequest | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [origin] = useState(() => (typeof window === "undefined" ? "" : window.location.origin));
   const [historyState, setHistoryState] = useState<{ documentId: string | null; open: boolean }>({
     documentId: null,
@@ -347,7 +403,40 @@ export function ProjectEditor({
   const editorRef = useRef<DocEditorHandle | null>(null);
   const handledDeepLinkRef = useRef<string | null>(null);
   const mobileCloseRef = useRef<HTMLButtonElement>(null);
+  const mobileDrawerRef = useRef<HTMLElement>(null);
   const moreRef = useRef<HTMLDivElement>(null);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const moreFirstRef = useRef<HTMLButtonElement>(null);
+  const compactView = useMediaQuery("(max-width: 767px)");
+  const compactActions = useMediaQuery("(max-width: 1023px)");
+  const effectiveViewMode = compactView ? mobileViewMode : viewMode;
+
+  useDialogA11y({
+    open: mobileFilesOpen,
+    onClose: () => setMobileFilesOpen(false),
+    containerRef: mobileDrawerRef,
+    initialFocusRef: mobileCloseRef,
+  });
+
+  useDialogA11y({
+    open: moreOpen,
+    onClose: () => setMoreOpen(false),
+    containerRef: moreMenuRef,
+    initialFocusRef: moreFirstRef,
+    lockBody: false,
+  });
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!compactView) {
+        setMobileFilesOpen(false);
+      }
+      if (!compactActions) {
+        setMoreOpen(false);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [compactActions, compactView]);
 
   const startResize = (event: ReactPointerEvent) => {
     event.preventDefault();
@@ -374,6 +463,12 @@ export function ProjectEditor({
       : null;
   const selectedNode = nodes.find((node) => node.id === effectiveSelectedId) ?? null;
   const selectedFileId = selectedNode?.kind === "file" ? (effectiveSelectedId as string) : null;
+  const selectedAssetId = selectedNode?.kind === "asset" ? selectedNode.id : null;
+  const selectedAssetUrls = useQuery(
+    api.documents.getAssetUrls,
+    selectedAssetId ? { documentIds: [selectedAssetId as Id<"documents">] } : "skip",
+  );
+  const selectedAssetUrl = selectedAssetUrls?.[0]?.url ?? null;
   const isDoc = selectedNode?.kind === "file" && selectedNode.fileType === "doc";
   const historyOpen = Boolean(
     selectedFileId && historyState.open && historyState.documentId === selectedFileId,
@@ -400,11 +495,11 @@ export function ProjectEditor({
   );
   const mentionCandidatesData = useQuery(
     api.comments.mentionCandidates,
-    accessLost ? "skip" : { projectId: pid },
+    commentsOpen && selectedFileId && !accessLost ? { projectId: pid } : "skip",
   );
   const shareStateData = useQuery(
     api.sharing.getState,
-    selectedFileId && isAdmin && !accessLost
+    selectedFileId && isAdmin && shareOpen && !accessLost
       ? { documentId: selectedFileId as Id<"documents"> }
       : "skip",
   );
@@ -420,22 +515,24 @@ export function ProjectEditor({
     () => shareStateData as ShareState | null | undefined,
     [shareStateData],
   );
+  const collabYdoc = collab?.ydoc;
+  const collabYtext = collab?.ytext;
   const resolvedCommentRanges = useMemo(() => {
     const ranges = new Map<string, ResolvedCommentRange>();
-    if (isDoc || !collab?.ydoc || !collab.ytext) {
+    if (isDoc || !collabYdoc || !collabYtext) {
       return ranges;
     }
     for (const thread of commentThreads) {
       try {
         const start = Y.createAbsolutePositionFromRelativePosition(
           Y.decodeRelativePosition(new Uint8Array(thread.startRel)),
-          collab.ydoc,
+          collabYdoc,
         );
         const end = Y.createAbsolutePositionFromRelativePosition(
           Y.decodeRelativePosition(new Uint8Array(thread.endRel)),
-          collab.ydoc,
+          collabYdoc,
         );
-        if (!start || !end || start.type !== collab.ytext || end.type !== collab.ytext) {
+        if (!start || !end || start.type !== collabYtext || end.type !== collabYtext) {
           continue;
         }
         const from = Math.min(start.index, end.index);
@@ -450,7 +547,7 @@ export function ProjectEditor({
       }
     }
     return ranges;
-  }, [collab, commentThreads, isDoc]);
+  }, [collabYdoc, collabYtext, commentThreads, isDoc]);
   const commentRanges = useMemo<CommentRange[]>(
     () => [...resolvedCommentRanges.values()],
     [resolvedCommentRanges],
@@ -468,7 +565,7 @@ export function ProjectEditor({
     [commentThreads, isDoc],
   );
   const unresolvedCommentCount = commentThreads.filter((thread) => thread.status === "open").length;
-  const commentSelection = viewMode === "preview" ? null : editorSelection;
+  const commentSelection = effectiveViewMode === "preview" ? null : editorSelection;
   const outlineItems = useMemo<OutlineItem[]>(() => {
     if (!outlineOpen || !selectedFileId || selectedNode?.kind !== "file") {
       return [];
@@ -550,25 +647,6 @@ export function ProjectEditor({
   }, [sidebarCollapsed, projectId]);
 
   useEffect(() => {
-    if (!mobileFilesOpen) {
-      return;
-    }
-    const previousOverflow = document.body.style.overflow;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setMobileFilesOpen(false);
-      }
-    };
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKeyDown);
-    window.setTimeout(() => mobileCloseRef.current?.focus(), 0);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [mobileFilesOpen]);
-
-  useEffect(() => {
     if (!moreOpen) {
       return;
     }
@@ -577,16 +655,9 @@ export function ProjectEditor({
         setMoreOpen(false);
       }
     };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setMoreOpen(false);
-      }
-    };
     window.addEventListener("mousedown", onPointer);
-    window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("mousedown", onPointer);
-      window.removeEventListener("keydown", onKeyDown);
     };
   }, [moreOpen]);
 
@@ -604,6 +675,19 @@ export function ProjectEditor({
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         notify.success("Changes sync automatically");
+        return;
+      }
+      if (
+        event.key === "?" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.repeat &&
+        !event.isComposing &&
+        !isEditableShortcutTarget(event.target)
+      ) {
+        event.preventDefault();
+        setShortcutsOpen(true);
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -670,10 +754,10 @@ export function ProjectEditor({
 
   const handleUpload = async (parentId: string | null, files: File[]) => {
     const imports = files.filter((file) => /\.(?:md|markdown|html?|txt)$/i.test(file.name));
-    const assets = files.filter((file) => file.type.startsWith("image/"));
+    const assets = files.filter((file) => isRasterAssetMimeType(file.type));
     if (imports.length + assets.length !== files.length) {
       notify.error("Unsupported file", {
-        description: "Upload images, Markdown, HTML, or plain-text files.",
+        description: `Upload ${RASTER_ASSET_FORMATS} images, Markdown, HTML, or plain-text files.`,
       });
     }
     if (imports.length > 0) {
@@ -717,6 +801,12 @@ export function ProjectEditor({
     if (selectedNode?.kind !== "file") {
       return null;
     }
+    if (!isRasterAssetMimeType(file.type)) {
+      notify.error("Unsupported image", {
+        description: `Images must be ${RASTER_ASSET_FORMATS}.`,
+      });
+      return null;
+    }
     if (file.size > MAX_ASSET_BYTES) {
       notify.error("File too large", { description: "Each image can be up to 5 MB." });
       return null;
@@ -753,12 +843,12 @@ export function ProjectEditor({
       !selectedFileId ||
       !collab?.ready ||
       !editorSelection ||
-      (!isDoc && (!collab.ytext || viewMode === "preview")) ||
+      (!isDoc && (!collab.ytext || effectiveViewMode === "preview")) ||
       editorSelection.from >= editorSelection.to
     ) {
       notify.error("Select text first", {
         description:
-          viewMode === "preview"
+          effectiveViewMode === "preview"
             ? "Switch to editor or split view before starting a thread."
             : "Comments need a highlighted range in the editor.",
       });
@@ -959,11 +1049,13 @@ export function ProjectEditor({
   );
 
   const saveStatus = selectedFileId
-    ? collab?.syncing
-      ? "Syncing..."
-      : collab?.lastSyncedAt
-        ? `Live ${formatSaveTime(collab.lastSyncedAt)}`
-        : "Live"
+    ? collab?.pendingEdits
+      ? "Reconnecting..."
+      : collab?.syncing
+        ? "Syncing..."
+        : collab?.lastSyncedAt
+          ? `Live ${formatRelativeTime(collab.lastSyncedAt)}`
+          : "Live"
     : "";
   const usedBytes = usage?.usedBytes ?? 0;
   const maxBytes = usage?.maxSizeBytes ?? 8 * 1024 * 1024;
@@ -978,8 +1070,8 @@ export function ProjectEditor({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="glass relative z-[60] flex h-14 shrink-0 items-center justify-between gap-3 rounded-lg px-4">
-        <div className="flex min-w-0 items-center gap-3">
+      <div className="glass relative z-[60] flex h-14 shrink-0 items-center justify-between gap-2 overflow-hidden rounded-lg px-3 sm:gap-3 sm:px-4">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           <button
             type="button"
             onClick={() => setMobileFilesOpen(true)}
@@ -1004,13 +1096,13 @@ export function ProjectEditor({
           </button>
           <Link
             href={`/dashboard/projects/${projectId}`}
-            className="flex shrink-0 items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest transition-colors hover:text-foreground"
+            className="flex min-w-0 shrink items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest transition-colors hover:text-foreground sm:max-w-48"
           >
             <ArrowLeft className="size-3.5" aria-hidden="true" />
-            <span className="hidden sm:inline">{projectTitle}</span>
+            <span className="hidden truncate sm:inline">{projectTitle}</span>
           </Link>
           {selectedNode ? (
-            <span className="truncate font-mono text-muted-foreground text-xs">
+            <span className="min-w-0 truncate font-mono text-muted-foreground text-xs">
               {selectedNode.name}
             </span>
           ) : null}
@@ -1034,7 +1126,7 @@ export function ProjectEditor({
             {saveStatus ? `Save state: ${saveStatus}` : "No document selected"}
           </span>
         </div>
-        <div className="flex min-w-0 shrink items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
           {selectedFileId && collab ? (
             <>
               <ViewerPresence viewers={collab.viewers} canOpen={isAdmin} />
@@ -1062,9 +1154,12 @@ export function ProjectEditor({
               />
             </div>
             <span className="font-mono text-muted-foreground text-xs tabular-nums">
-              {formatMb(usedBytes)}/{formatMb(maxBytes)} MB
+              {formatBytes(usedBytes)} / {formatBytes(maxBytes)}
             </span>
           </div>
+          <span className="hidden rounded-sm border border-hairline px-2 py-1 font-mono text-[10px] text-muted-foreground tabular-nums lg:inline-flex xl:hidden">
+            {usedPercent}%
+          </span>
           {selectedFileId ? (
             <div className="flex items-center gap-1.5">
               {isAdmin ? (
@@ -1105,6 +1200,8 @@ export function ProjectEditor({
                 type="button"
                 onClick={() => setCommentsOpen((value) => !value)}
                 aria-label={`Comments, ${unresolvedCommentCount} open`}
+                aria-haspopup="dialog"
+                aria-expanded={commentsOpen}
                 aria-pressed={commentsOpen}
                 className={cn(
                   "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
@@ -1170,10 +1267,13 @@ export function ProjectEditor({
                 </button>
                 {moreOpen ? (
                   <div
+                    ref={moreMenuRef}
+                    tabIndex={-1}
                     className="absolute top-10 right-0 z-[80] w-48 rounded-lg border border-hairline bg-surface p-1 shadow-xl"
                     role="menu"
                   >
                     <button
+                      ref={moreFirstRef}
                       type="button"
                       role="menuitem"
                       onClick={() => {
@@ -1197,9 +1297,29 @@ export function ProjectEditor({
                       <History className="size-4" aria-hidden="true" />
                       Version history
                     </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMoreOpen(false);
+                        setShortcutsOpen(true);
+                      }}
+                      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                    >
+                      <CircleHelp className="size-4" aria-hidden="true" />
+                      Keyboard shortcuts
+                    </button>
                   </div>
                 ) : null}
               </div>
+              <button
+                type="button"
+                onClick={() => setShortcutsOpen(true)}
+                aria-label="Keyboard shortcuts"
+                className="hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground lg:flex"
+              >
+                <CircleHelp className="size-4" aria-hidden="true" />
+              </button>
               {!isDoc ? (
                 <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                   <legend className="sr-only">View mode</legend>
@@ -1213,12 +1333,21 @@ export function ProjectEditor({
                     <button
                       key={mode}
                       type="button"
-                      onClick={() => setViewMode(mode)}
+                      onClick={() => {
+                        if (compactView) {
+                          if (mode !== "split") {
+                            setMobileViewMode(mode);
+                          }
+                        } else {
+                          setViewMode(mode);
+                        }
+                      }}
                       aria-label={label}
-                      aria-pressed={viewMode === mode}
+                      aria-pressed={effectiveViewMode === mode}
                       className={cn(
                         "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
-                        viewMode === mode
+                        mode === "split" && "hidden md:flex",
+                        effectiveViewMode === mode
                           ? "bg-foreground/[0.08] text-foreground"
                           : "text-muted-foreground hover:text-foreground",
                       )}
@@ -1264,7 +1393,9 @@ export function ProjectEditor({
               onClick={() => setMobileFilesOpen(false)}
             />
             <section
+              ref={mobileDrawerRef}
               id="mobile-file-drawer"
+              tabIndex={-1}
               role="dialog"
               aria-modal="true"
               aria-label="Project files"
@@ -1313,9 +1444,28 @@ export function ProjectEditor({
         <div className="editor-surface flex min-w-0 flex-1 overflow-hidden rounded-lg">
           {selectedNode?.kind === "file" && doc && doc.id === selectedFileId ? (
             <div className="flex min-w-0 flex-1 flex-col">
+              {editAccessRevoked ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="shrink-0 border-warning/30 border-b bg-warning/8 px-4 py-2 text-warning text-xs"
+                >
+                  Your edit access changed. This document is now read-only.
+                </div>
+              ) : null}
               {collab?.blocked ? (
                 <div className="shrink-0 border-destructive/30 border-b bg-destructive/8 px-4 py-2 text-destructive text-xs">
                   {collab.blocked} Editing is paused until this file can sync again.
+                </div>
+              ) : null}
+              {!collab?.blocked && collab?.pendingEdits ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="shrink-0 border-info/30 border-b bg-info/8 px-4 py-2 text-info text-xs"
+                >
+                  Reconnecting — {collab.pendingEdits}{" "}
+                  {collab.pendingEdits === 1 ? "edit" : "edits"} pending.
                 </div>
               ) : null}
               {isDoc ? (
@@ -1338,18 +1488,17 @@ export function ProjectEditor({
                     }}
                   />
                 ) : (
-                  <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-muted-foreground text-sm">
-                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                    Loading document…
-                  </div>
+                  <DataSkeleton label="Loading document" rows={6} className="min-h-0 flex-1" />
                 )
               ) : (
                 <div className="flex min-h-0 flex-1">
-                  {viewMode !== "preview" ? (
+                  {effectiveViewMode !== "preview" ? (
                     <div
                       className={cn(
                         "min-w-0 overflow-auto",
-                        viewMode === "split" ? "flex-1 border-hairline border-r" : "flex-1",
+                        effectiveViewMode === "split"
+                          ? "flex-1 border-hairline border-r"
+                          : "flex-1",
                       )}
                     >
                       <DocEditor
@@ -1381,7 +1530,7 @@ export function ProjectEditor({
                       />
                     </div>
                   ) : null}
-                  {viewMode !== "editor" ? (
+                  {effectiveViewMode !== "editor" ? (
                     <div className="min-w-0 flex-1">
                       <DocPreview
                         fileNode={selectedNode}
@@ -1394,10 +1543,14 @@ export function ProjectEditor({
                 </div>
               )}
             </div>
-          ) : selectedNode?.kind === "asset" && selectedNode.assetUrl ? (
+          ) : selectedFileId && doc === undefined ? (
+            <div className="editor-panel flex min-w-0 flex-1 overflow-hidden">
+              <DataSkeleton label="Loading document" rows={6} className="w-full" />
+            </div>
+          ) : selectedNode?.kind === "asset" && selectedAssetUrl ? (
             <div className="editor-panel flex min-w-0 flex-1 items-center justify-center overflow-auto p-6">
               <Image
-                src={selectedNode.assetUrl}
+                src={selectedAssetUrl}
                 alt={selectedNode.name}
                 width={1600}
                 height={1200}
@@ -1405,13 +1558,34 @@ export function ProjectEditor({
                 className="max-h-full max-w-full rounded-md border border-hairline object-contain"
               />
             </div>
+          ) : selectedNode?.kind === "asset" ? (
+            <div className="editor-panel flex flex-1 items-center justify-center p-6 text-center">
+              {selectedAssetUrls === undefined ? (
+                <DataSkeleton label="Loading asset" rows={3} className="w-full max-w-lg" />
+              ) : (
+                <DataState
+                  kind="error"
+                  title="Asset unavailable"
+                  description="The stored asset could not be loaded. Refresh the project and try again."
+                />
+              )}
+            </div>
           ) : (
-            <div className="editor-panel flex flex-1 items-center justify-center p-6 text-center text-muted-foreground text-sm">
-              {nodes.length === 0
-                ? canEdit
-                  ? "Create a file or document to start writing."
-                  : "This project has no documents yet."
-                : "Select a file to open it."}
+            <div className="editor-panel flex flex-1 items-center justify-center p-6 text-center">
+              {nodesData === undefined ? (
+                <DataSkeleton label="Loading project files" rows={5} className="w-full max-w-lg" />
+              ) : (
+                <DataState
+                  title={nodes.length === 0 ? "No documents yet" : "Select a file"}
+                  description={
+                    nodes.length === 0
+                      ? canEdit
+                        ? "Create a file or document to start writing."
+                        : "This project does not contain any documents."
+                      : "Choose a file from the project tree to open it."
+                  }
+                />
+              )}
             </div>
           )}
         </div>
@@ -1426,6 +1600,7 @@ export function ProjectEditor({
         {commentsOpen && selectedFileId ? (
           <CommentsRail
             threads={commentThreads}
+            loading={commentThreadsData === undefined}
             candidates={mentionCandidates}
             ranges={resolvedCommentRanges}
             activeThreadId={activeCommentId}
@@ -1453,6 +1628,7 @@ export function ProjectEditor({
             setSelectedId(documentId);
             setHistoryState({ documentId, open: false });
             setViewMode("split");
+            setMobileViewMode("editor");
           }}
         />
       ) : null}
@@ -1462,6 +1638,32 @@ export function ProjectEditor({
         isAdmin={isAdmin}
         onClose={() => setTrashOpen(false)}
       />
+      <Dialog
+        open={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+        title="Keyboard shortcuts"
+        icon={<CircleHelp className="size-4" aria-hidden="true" />}
+        description="Use these shortcuts from anywhere in the editor unless you are typing in a field."
+        className="max-w-md"
+      >
+        <dl className="divide-y divide-hairline px-3 py-2">
+          {[
+            ["Quick open", "Ctrl / ⌘ K"],
+            ["Confirm automatic sync", "Ctrl / ⌘ S"],
+            ["Open this reference", "?"],
+            ["Close a dialog", "Esc"],
+          ].map(([label, keys]) => (
+            <div key={label} className="flex items-center justify-between gap-4 py-3">
+              <dt className="text-sm">{label}</dt>
+              <dd>
+                <kbd className="rounded-xs border border-hairline bg-surface/60 px-2 py-1 font-mono text-[10px] text-muted-foreground">
+                  {keys}
+                </kbd>
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </Dialog>
       <NewDocumentDialog
         open={newDocumentParent !== undefined}
         projectId={pid}

@@ -6,6 +6,7 @@ export type TreeNode = {
   fileType: "md" | "html" | "doc" | null;
   size: number;
   mimeType: string | null;
+  hasAsset?: boolean;
   assetUrl: string | null;
 };
 

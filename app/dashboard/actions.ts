@@ -4,6 +4,7 @@ import { auth, clerkClient } from "@clerk/nextjs/server";
 import { saveOrgDetails, setOrgPublicSharing } from "@/lib/convex-server";
 import { MAX_IMAGE_BYTES, MAX_TAGS, MIN_ORG_NAME_LENGTH, sanitizeTags } from "@/lib/org";
 import { fetchOrgAvatarFile } from "@/lib/org-avatar-server";
+import { logServerError } from "@/lib/server-log";
 
 export type UpdateOrganizationInput = {
   name: string;
@@ -51,7 +52,8 @@ export async function updateOrganization(
     await client.organizations.updateOrganization(orgId, { name });
     await saveOrgDetails(orgId, input.description, tags);
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.update_organization_failed", error, { clerkOrgId: orgId, userId });
     return { error: "failed" };
   }
 }
@@ -69,7 +71,11 @@ export async function setOrganizationPublicSharing(
   try {
     await setOrgPublicSharing(orgId, enabled);
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.set_public_sharing_failed", error, {
+      clerkOrgId: orgId,
+      userId,
+    });
     return { error: "failed" };
   }
 }
@@ -105,7 +111,11 @@ export async function deleteOrganization(): Promise<DeleteOrganizationResult> {
   try {
     await client.organizations.deleteOrganization(orgId);
     return { nextOrgId: next.organization.id };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.delete_organization_failed", error, {
+      clerkOrgId: orgId,
+      userId,
+    });
     return { error: "failed" };
   }
 }
@@ -134,7 +144,11 @@ export async function updateOrganizationLogo(formData: FormData): Promise<LogoRe
     const client = await clerkClient();
     await client.organizations.updateOrganizationLogo(orgId, { file, uploaderUserId: userId });
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.update_organization_logo_failed", error, {
+      clerkOrgId: orgId,
+      userId,
+    });
     return { error: "failed" };
   }
 }
@@ -153,7 +167,11 @@ export async function resetOrganizationLogo(): Promise<LogoResult> {
     const file = await fetchOrgAvatarFile(orgId);
     await client.organizations.updateOrganizationLogo(orgId, { file, uploaderUserId: userId });
     return { ok: true };
-  } catch {
+  } catch (error) {
+    logServerError("dashboard.reset_organization_logo_failed", error, {
+      clerkOrgId: orgId,
+      userId,
+    });
     return { error: "failed" };
   }
 }

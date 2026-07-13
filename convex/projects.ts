@@ -4,7 +4,12 @@ import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { action, internalMutation, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
-import { isInactive, purgeDocCollabBatch } from "./documents";
+import {
+  addProjectBytes,
+  isInactive,
+  purgeDocCollabBatch,
+  purgeRecentDocumentBatch,
+} from "./documents";
 import {
   clampInt,
   DEFAULT_MAX_COLLABORATORS,
@@ -171,14 +176,45 @@ export const purgeBatch = internalMutation({
       await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
       return;
     }
+    const recentDocuments = await ctx.db
+      .query("recentDocuments")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const recentDocument of recentDocuments) {
+      await ctx.db.delete(recentDocument._id);
+    }
+    if (recentDocuments.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
     const documents = await ctx.db
       .query("documents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .take(PURGE_DOC_BATCH);
+    let freed = 0;
+    const accountFreed = async () => {
+      if (freed === 0) {
+        return;
+      }
+      const project = await ctx.db.get(args.projectId);
+      if (project) {
+        await addProjectBytes(ctx, project, -freed);
+      }
+      freed = 0;
+    };
     for (const document of documents) {
+      const hasMoreRecent = await purgeRecentDocumentBatch(ctx, document._id);
+      if (hasMoreRecent) {
+        await accountFreed();
+        await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, {
+          projectId: args.projectId,
+        });
+        return;
+      }
       if (document.kind === "file") {
         const hasMoreCollab = await purgeDocCollabBatch(ctx, document._id);
         if (hasMoreCollab) {
+          await accountFreed();
           await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, {
             projectId: args.projectId,
           });
@@ -188,15 +224,24 @@ export const purgeBatch = internalMutation({
       if (document.storageId) {
         await ctx.storage.delete(document.storageId);
       }
+      freed += document.size;
       await ctx.db.delete(document._id);
     }
     if (documents.length > 0) {
+      await accountFreed();
       await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
       return;
     }
     const project = await ctx.db.get(args.projectId);
     if (project?.imageStorageId) {
       await ctx.storage.delete(project.imageStorageId);
+    }
+    const reconciliation = await ctx.db
+      .query("projectByteReconciliations")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .unique();
+    if (reconciliation) {
+      await ctx.db.delete(reconciliation._id);
     }
     await ctx.db.delete(args.projectId);
   },
@@ -398,6 +443,7 @@ export const create = mutation({
       tags: normalizeTags(args.tags),
       imageStorageId: null,
       totalBytes: 0,
+      byteVersion: 0,
       createdBy: userId,
       createdAt: now,
       updatedAt: now,
@@ -450,6 +496,7 @@ export const prepareDuplicate = internalMutation({
       maxSizeBytes: source.maxSizeBytes,
       maxCollaborators: source.maxCollaborators,
       totalBytes: 0,
+      byteVersion: 0,
       cloneState: "copying",
       cloneCopied: 0,
       cloneTotal: visible.length,
@@ -518,9 +565,9 @@ export const insertDuplicateNode = internalMutation({
       });
     await ctx.db.patch(project._id, {
       cloneCopied: (project.cloneCopied ?? 0) + 1,
-      totalBytes: (project.totalBytes ?? 0) + args.size,
       updatedAt: now,
     });
+    await addProjectBytes(ctx, project, args.size);
     return id;
   },
 });

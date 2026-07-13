@@ -187,11 +187,20 @@ async function fileForAccess(ctx: MutationCtx, documentId: Id<"documents">) {
   return { doc, access };
 }
 
-async function visibleNotificationTarget(ctx: QueryCtx, row: Doc<"notifications">) {
+async function visibleNotificationTarget(
+  ctx: QueryCtx,
+  row: Doc<"notifications">,
+  projectAccess: Map<Id<"projects">, boolean>,
+) {
   const project = await ctx.db.get(row.projectId);
   const doc = await ctx.db.get(row.documentId);
   const thread = await ctx.db.get(row.commentId);
   const message = row.messageId ? await ctx.db.get(row.messageId) : null;
+  let canAccessProject = projectAccess.get(row.projectId);
+  if (canAccessProject === undefined) {
+    canAccessProject = Boolean(await accessForProject(ctx, row.projectId));
+    projectAccess.set(row.projectId, canAccessProject);
+  }
   if (
     !project ||
     project.deletedAt ||
@@ -201,7 +210,7 @@ async function visibleNotificationTarget(ctx: QueryCtx, row: Doc<"notifications"
     thread.documentId !== row.documentId ||
     thread.projectId !== row.projectId ||
     (row.messageId && (!message || message.commentId !== row.commentId)) ||
-    !(await accessForProject(ctx, row.projectId))
+    !canAccessProject
   ) {
     return null;
   }
@@ -488,8 +497,9 @@ export const unreadCount = query({
       .order("desc")
       .take(UNREAD_SCAN_LIMIT);
     let count = 0;
+    const projectAccess = new Map<Id<"projects">, boolean>();
     for (const row of rows) {
-      if (await visibleNotificationTarget(ctx, row)) {
+      if (await visibleNotificationTarget(ctx, row, projectAccess)) {
         count += 1;
       }
       if (count >= UNREAD_DISPLAY_CAP) {
@@ -515,8 +525,9 @@ export const listMine = query({
       .order("desc")
       .take(40);
     const visible = [];
+    const projectAccess = new Map<Id<"projects">, boolean>();
     for (const row of rows) {
-      const target = await visibleNotificationTarget(ctx, row);
+      const target = await visibleNotificationTarget(ctx, row, projectAccess);
       if (!target) {
         continue;
       }

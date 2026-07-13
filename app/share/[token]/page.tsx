@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
@@ -10,15 +11,42 @@ export const metadata: Metadata = {
   title: "Shared document",
 };
 
-function clientIp(headerList: Headers): string {
-  const forwarded = headerList.get("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) {
-      return first;
-    }
+const MAX_IP_LENGTH = 128;
+const MAX_FORWARDED_LENGTH = 1024;
+
+function canonicalIp(value: string | null): string | null {
+  const candidate = value?.trim();
+  if (!candidate || candidate.length > MAX_IP_LENGTH) {
+    return null;
   }
-  return headerList.get("x-real-ip")?.trim() || "0.0.0.0";
+  if (isIP(candidate) === 4) {
+    return candidate;
+  }
+  if (isIP(candidate) === 6) {
+    const hostname = new URL(`http://[${candidate}]/`).hostname;
+    return hostname.slice(1, -1).toLowerCase();
+  }
+  return null;
+}
+
+function firstForwardedIp(value: string | null): string | null {
+  if (!value || value.length > MAX_FORWARDED_LENGTH) {
+    return null;
+  }
+  return canonicalIp(value.split(",", 1)[0] ?? null);
+}
+
+function clientIp(headerList: Headers): string {
+  const realIp = canonicalIp(headerList.get("x-real-ip"));
+  if (process.env.SHARE_TRUST_FORWARDED !== "1") {
+    return realIp ?? "unknown";
+  }
+  return (
+    firstForwardedIp(headerList.get("x-vercel-forwarded-for")) ??
+    firstForwardedIp(headerList.get("x-forwarded-for")) ??
+    realIp ??
+    "unknown"
+  );
 }
 
 export default async function SharedDocumentPage({

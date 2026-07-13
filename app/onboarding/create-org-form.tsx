@@ -80,7 +80,11 @@ export function CreateOrgForm({ used, max }: CreateOrgFormProps) {
         />
       </div>
 
-      {error ? <p className="text-destructive text-sm">{error}</p> : null}
+      {error ? (
+        <p role="alert" aria-live="assertive" className="text-destructive text-sm">
+          {error}
+        </p>
+      ) : null}
 
       <Button type="submit" disabled={pending || name.trim().length < 2}>
         {pending ? "Creating…" : "Create organization"}

@@ -21,6 +21,8 @@ const MAX_EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX_HITS = 60;
 const WINDOW_RETENTION_MS = 5 * 60 * 1000;
+const SHARE_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+const RATE_KEY_PATTERN = /^[a-f0-9]{64}$/;
 
 function serviceSecretValid(provided: string): boolean {
   return secretMatches(provided, process.env.CONVEX_PURGE_SECRET);
@@ -416,6 +418,9 @@ export const redeemShare = mutation({
   handler: async (ctx, args) => {
     if (!serviceSecretValid(args.secret)) {
       throw new Error("Forbidden");
+    }
+    if (!SHARE_TOKEN_PATTERN.test(args.token) || !RATE_KEY_PATTERN.test(args.rateKey)) {
+      return null;
     }
     if (await hitRateLimit(ctx, args.rateKey)) {
       return { status: "rate-limited" as const };

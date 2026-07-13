@@ -6,6 +6,7 @@ import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { notify } from "@/components/ui/toast";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 export type SharedDocument = {
   mode: "org" | "public";
@@ -19,13 +20,6 @@ export type SharedDocument = {
   nodes: TreeNode[];
   fileLinks: { documentId: string; href: string }[];
 };
-
-function formatTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleString([], {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
 
 export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -65,7 +59,14 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
           <div className="min-w-0">
             <h1 className="truncate font-medium text-sm">{shared.documentName}</h1>
             <p className="truncate text-muted-foreground text-xs">
-              {shared.projectTitle} / Updated {formatTime(shared.updatedAt)}
+              {shared.projectTitle} / Updated{" "}
+              <time
+                dateTime={new Date(shared.updatedAt).toISOString()}
+                title={formatDateTime(shared.updatedAt)}
+                suppressHydrationWarning
+              >
+                {formatRelativeTime(shared.updatedAt)}
+              </time>
             </p>
           </div>
         </div>

@@ -42,6 +42,7 @@ const schema = defineSchema({
     maxSizeBytes: v.optional(v.number()),
     maxCollaborators: v.optional(v.number()),
     totalBytes: v.optional(v.number()),
+    byteVersion: v.optional(v.number()),
     cloneState: v.optional(v.union(v.literal("copying"), v.literal("ready"), v.literal("failed"))),
     cloneCopied: v.optional(v.number()),
     cloneTotal: v.optional(v.number()),
@@ -53,7 +54,19 @@ const schema = defineSchema({
   })
     .index("by_clerk_org", ["clerkOrgId"])
     .index("by_deleted", ["deletedAt"])
-    .index("by_clone_state", ["cloneState"]),
+    .index("by_clone_state", ["cloneState"])
+    .index("by_image_storage", ["imageStorageId"])
+    .index("by_created", ["createdAt"]),
+
+  projectByteReconciliations: defineTable({
+    projectId: v.id("projects"),
+    generation: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    totalBytes: v.number(),
+    startVersion: v.number(),
+    scanned: v.number(),
+    updatedAt: v.number(),
+  }).index("by_project", ["projectId"]),
 
   orgTemplates: defineTable({
     clerkOrgId: v.string(),
@@ -90,11 +103,16 @@ const schema = defineSchema({
   })
     .index("by_project", ["projectId"])
     .index("by_parent", ["projectId", "parentId"])
+    .index("by_storage", ["storageId"])
     .index("by_deleting", ["deletingAt"])
     .index("by_trashed", ["trashedAt"])
     .searchIndex("search_content", {
       searchField: "content",
-      filterFields: ["projectId", "kind"],
+      filterFields: ["projectId", "clerkOrgId", "kind"],
+    })
+    .searchIndex("search_name", {
+      searchField: "name",
+      filterFields: ["clerkOrgId"],
     }),
 
   projectAccess: defineTable({
@@ -144,6 +162,7 @@ const schema = defineSchema({
   })
     .index("by_document", ["documentId"])
     .index("by_document_purpose", ["documentId", "purpose"])
+    .index("by_document_purpose_created", ["documentId", "purpose", "createdAt"])
     .index("by_purpose_created", ["purpose", "createdAt"]),
 
   presence: defineTable({
@@ -160,6 +179,14 @@ const schema = defineSchema({
     .index("by_document", ["documentId"])
     .index("by_document_session", ["documentId", "sessionId"])
     .index("by_last_seen", ["lastSeen"]),
+
+  writeWindows: defineTable({
+    keyHash: v.string(),
+    tokens: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_key", ["keyHash"])
+    .index("by_updated", ["updatedAt"]),
 
   comments: defineTable({
     documentId: v.id("documents"),

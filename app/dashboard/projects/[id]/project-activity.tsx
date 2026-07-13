@@ -14,9 +14,11 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 type EventRow = NonNullable<
   ReturnType<typeof useQuery<typeof api.activity.listProjectEvents>>
@@ -127,15 +129,14 @@ export function ProjectActivity({ projectId }: { projectId: Id<"projects"> }) {
         activity remain visible.
       </p>
       {events === undefined ? (
-        <div className="flex items-center justify-center gap-2 py-16 text-muted-foreground text-sm">
-          <Loader2 className="size-4 animate-spin" />
-          Loading activity…
-        </div>
+        <DataSkeleton label="Loading project activity" rows={4} />
       ) : events.length === 0 ? (
-        <div className="py-16 text-center">
-          <FileClock className="mx-auto size-8 text-muted-foreground/50" />
-          <p className="mt-3 text-muted-foreground text-sm">No project activity yet.</p>
-        </div>
+        <DataState
+          title="No project activity yet"
+          description="Document, sharing, access, and history changes will appear here."
+          icon={<FileClock className="size-6" aria-hidden="true" />}
+          className="mt-5"
+        />
       ) : (
         <div className="mt-5 flex flex-col gap-6">
           {[...groups.entries()].map(([day, rows]) => (
@@ -173,13 +174,11 @@ export function ProjectActivity({ projectId }: { projectId: Id<"projects"> }) {
                         ) : null}
                       </div>
                       <time
-                        title={new Date(event.createdAt).toLocaleString()}
+                        dateTime={new Date(event.createdAt).toISOString()}
+                        title={formatDateTime(event.createdAt)}
                         className="shrink-0 text-[10px] text-muted-foreground"
                       >
-                        {new Date(event.createdAt).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {formatRelativeTime(event.createdAt)}
                       </time>
                     </li>
                   );

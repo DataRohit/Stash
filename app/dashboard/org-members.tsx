@@ -14,6 +14,7 @@ import {
 import { RoleBadge } from "@/components/dashboard/role-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataSkeleton } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 
@@ -204,13 +205,13 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
           <h2 className="font-serif text-2xl tracking-display">People</h2>
         </div>
         {isAdmin ? (
-          <div className="flex items-center gap-3">
+          <div className="flex w-full flex-wrap items-center justify-between gap-3 sm:w-auto sm:justify-start">
             <span className="font-mono text-muted-foreground text-xs tabular-nums">
               {used} of {maxMembers} seats
             </span>
             <Button
               variant="secondary"
-              className="w-44"
+              className="w-full sm:w-44"
               onClick={() => {
                 setInviteOpen((open) => !open);
                 setError(null);
@@ -255,14 +256,15 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
         </form>
       ) : null}
 
-      {error ? <p className="mt-3 text-destructive text-sm">{error}</p> : null}
+      {error ? (
+        <p role="alert" aria-live="assertive" className="mt-3 text-destructive text-sm">
+          {error}
+        </p>
+      ) : null}
 
       <div className="mt-6 border-hairline border-t pt-6">
         {people === undefined ? (
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            Loading members…
-          </div>
+          <DataSkeleton label="Loading organization members" rows={4} compact />
         ) : (
           <ul className="flex flex-col divide-y divide-hairline">
             {people.map((person) => {
@@ -272,7 +274,7 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
               const isSelf = person.memberUserId === currentUserId;
               const busy = acting && pendingId === key;
               return (
-                <li key={key} className="flex items-center gap-3 py-3">
+                <li key={key} className="flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap">
                   {person.imageUrl ? (
                     <Image
                       src={person.imageUrl}
@@ -291,7 +293,7 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
                     <p className="truncate font-medium text-sm">{name}</p>
                     <p className="truncate text-muted-foreground text-xs">{person.email}</p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="flex w-full shrink-0 flex-wrap items-center justify-end gap-2 sm:w-auto sm:flex-nowrap">
                     <RoleBadge role={person.role} isOwner={person.isOwner} />
                     {isPending ? (
                       <Badge variant="surface" className="text-warning">

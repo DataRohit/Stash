@@ -1,11 +1,13 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { Loader2, Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2 } from "lucide-react";
 import { FileIcon } from "@/components/file-icon";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 export function OrgTemplates({ clerkOrgId, isAdmin }: { clerkOrgId: string; isAdmin: boolean }) {
   const templates = useQuery(api.templates.listForOrg, { clerkOrgId });
@@ -24,14 +26,13 @@ export function OrgTemplates({ clerkOrgId, isAdmin }: { clerkOrgId: string; isAd
       </div>
       <div className="mt-6 border-hairline border-t pt-5">
         {templates === undefined ? (
-          <p className="flex items-center gap-2 text-muted-foreground text-sm">
-            <Loader2 className="size-4 animate-spin" />
-            Loading templates…
-          </p>
+          <DataSkeleton label="Loading organization templates" rows={3} compact />
         ) : templates.length === 0 ? (
-          <p className="text-muted-foreground text-sm">
-            No organization templates yet. Admins can save one from an open document.
-          </p>
+          <DataState
+            title="No organization templates"
+            description="Admins can save a reusable template from an open document."
+            compact
+          />
         ) : (
           <ul className="grid gap-3 md:grid-cols-2">
             {templates.map((template) => {
@@ -53,7 +54,12 @@ export function OrgTemplates({ clerkOrgId, isAdmin }: { clerkOrgId: string; isAd
                     </p>
                     <p className="mt-2 text-[10px] text-muted-foreground/70">
                       Saved by {template.creatorName} ·{" "}
-                      {new Date(template.updatedAt).toLocaleDateString()}
+                      <time
+                        dateTime={new Date(template.updatedAt).toISOString()}
+                        title={formatDateTime(template.updatedAt)}
+                      >
+                        {formatRelativeTime(template.updatedAt)}
+                      </time>
                     </p>
                   </div>
                   {isAdmin ? (
@@ -69,7 +75,7 @@ export function OrgTemplates({ clerkOrgId, isAdmin }: { clerkOrgId: string; isAd
                               name,
                             }).catch(() => notify.error("Couldn’t rename template"));
                         }}
-                        className="flex size-8 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+                        className="flex size-9 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
                       >
                         <Pencil className="size-3.5" />
                       </button>
@@ -86,7 +92,7 @@ export function OrgTemplates({ clerkOrgId, isAdmin }: { clerkOrgId: string; isAd
                               .then(() => notify.success("Template deleted"))
                               .catch(() => notify.error("Couldn’t delete template"));
                         }}
-                        className="flex size-8 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        className="flex size-9 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                       >
                         <Trash2 className="size-3.5" />
                       </button>

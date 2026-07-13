@@ -12,6 +12,7 @@ export function Toaster() {
       position="bottom-right"
       offset={20}
       gap={10}
+      containerAriaLabel="Notifications"
       toastOptions={{ unstyled: true }}
     />
   );

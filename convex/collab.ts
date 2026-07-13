@@ -15,14 +15,17 @@ import {
   requireProjectAdmin,
   requireProjectEditor,
 } from "./documents";
+import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const COMPACT_THRESHOLD = 200;
 const COMPACT_OVERLAP = 64;
 const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const HISTORY_MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 const MAX_HISTORY_PER_DOC = 50;
+const HISTORY_PRUNE_BATCH = 50;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_COLLAB_UPDATE_BYTES = 768 * 1024;
+const COLLAB_WRITE_LIMIT = { capacity: 30, refillPerSecond: 5 };
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
@@ -96,29 +99,44 @@ async function allocateSeq(ctx: MutationCtx, documentId: Id<"documents">): Promi
 }
 
 async function baseSnapshot(ctx: QueryCtx, documentId: Id<"documents">) {
-  const snapshots = await ctx.db
-    .query("yjsSnapshots")
-    .withIndex("by_document", (q) => q.eq("documentId", documentId))
-    .collect();
-  const baseRows = snapshots.filter((row) => row.purpose !== "history");
-  return baseRows.sort((a, b) => b.throughSeq - a.throughSeq)[0] ?? null;
+  const [base, legacy] = await Promise.all([
+    ctx.db
+      .query("yjsSnapshots")
+      .withIndex("by_document_purpose", (q) => q.eq("documentId", documentId).eq("purpose", "base"))
+      .order("desc")
+      .first(),
+    ctx.db
+      .query("yjsSnapshots")
+      .withIndex("by_document_purpose", (q) =>
+        q.eq("documentId", documentId).eq("purpose", undefined),
+      )
+      .order("desc")
+      .first(),
+  ]);
+  if (!base) {
+    return legacy;
+  }
+  if (!legacy) {
+    return base;
+  }
+  return base.throughSeq >= legacy.throughSeq ? base : legacy;
 }
 
 async function historyRows(ctx: QueryCtx, documentId: Id<"documents">) {
-  const rows = await ctx.db
+  return await ctx.db
     .query("yjsSnapshots")
-    .withIndex("by_document_purpose", (q) =>
+    .withIndex("by_document_purpose_created", (q) =>
       q.eq("documentId", documentId).eq("purpose", "history"),
     )
-    .collect();
-  return rows.sort((a, b) => (b.createdAt ?? b.updatedAt) - (a.createdAt ?? a.updatedAt));
+    .order("desc")
+    .take(MAX_HISTORY_PER_DOC + HISTORY_PRUNE_BATCH);
 }
 
 async function materializedContent(
   ctx: QueryCtx,
   doc: Doc<"documents">,
   pendingUpdate: ArrayBuffer,
-): Promise<{ content: string; state: ArrayBuffer; replayed: number }> {
+): Promise<{ content: string; state: ArrayBuffer; replayed: number } | null> {
   const ydoc = new Y.Doc();
   let baseSeq = doc.contentSeq ?? 0;
   if (doc.contentState) {
@@ -137,7 +155,12 @@ async function materializedContent(
   for (const row of updates) {
     Y.applyUpdate(ydoc, new Uint8Array(row.update));
   }
-  Y.applyUpdate(ydoc, new Uint8Array(pendingUpdate));
+  try {
+    Y.applyUpdate(ydoc, new Uint8Array(pendingUpdate));
+  } catch {
+    ydoc.destroy();
+    return null;
+  }
   const content = docContent(ydoc, doc.fileType);
   const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
   ydoc.destroy();
@@ -233,11 +256,7 @@ async function snapshotAuthorEmail(
   return member?.email;
 }
 
-async function pruneDocumentHistory(
-  ctx: MutationCtx,
-  doc: Doc<"documents">,
-  project: Doc<"projects">,
-) {
+async function pruneDocumentHistory(ctx: MutationCtx, doc: Doc<"documents">) {
   const allRows = await historyRows(ctx, doc._id);
   const now = Date.now();
   const newestId = allRows[0]?._id;
@@ -250,9 +269,7 @@ async function pruneDocumentHistory(
   }
   const rows = allRows.slice(0, MAX_HISTORY_PER_DOC);
   let total = rows.reduce((sum, row) => sum + (row.sizeBytes ?? row.snapshot.byteLength), 0);
-  const used = await cachedProjectBytes(ctx, project);
-  const max = await maxProjectBytes(ctx, project);
-  const budget = Math.max(0, Math.min(HISTORY_MAX_DOCUMENT_BYTES, max - used));
+  const budget = HISTORY_MAX_DOCUMENT_BYTES;
   for (const row of rows.slice().reverse()) {
     if (row._id === newestId) {
       break;
@@ -266,12 +283,16 @@ async function pruneDocumentHistory(
     total -= row.sizeBytes ?? row.snapshot.byteLength;
     await ctx.db.delete(row._id);
   }
+  if (allRows.length === MAX_HISTORY_PER_DOC + HISTORY_PRUNE_BATCH) {
+    await ctx.scheduler.runAfter(0, internal.collab.pruneHistoryForDocument, {
+      documentId: doc._id,
+    });
+  }
 }
 
 async function persistHistoryCheckpoint(
   ctx: MutationCtx,
   doc: Doc<"documents">,
-  project: Doc<"projects">,
   seq: number,
   state: ArrayBuffer,
   authorUserId: string,
@@ -281,10 +302,8 @@ async function persistHistoryCheckpoint(
 ) {
   const previewText = contentFromState(state, doc.fileType);
   const snapshotBytes = state.byteLength + byteLength(previewText);
-  const used = await cachedProjectBytes(ctx, project);
-  const max = await maxProjectBytes(ctx, project);
-  if (snapshotBytes > Math.max(0, max - used)) {
-    throw new Error("project-full");
+  if (snapshotBytes > HISTORY_MAX_DOCUMENT_BYTES) {
+    throw new Error("history-too-large");
   }
   const snapshotId = await ctx.db.insert("yjsSnapshots", {
     documentId: doc._id,
@@ -301,14 +320,13 @@ async function persistHistoryCheckpoint(
     sizeBytes: snapshotBytes,
     updatedAt: Date.now(),
   });
-  await pruneDocumentHistory(ctx, doc, project);
+  await pruneDocumentHistory(ctx, doc);
   return snapshotId;
 }
 
 async function tryAutoCheckpoint(
   ctx: MutationCtx,
   doc: Doc<"documents">,
-  project: Doc<"projects">,
   seq: number,
   state: ArrayBuffer,
   authorUserId: string,
@@ -326,7 +344,6 @@ async function tryAutoCheckpoint(
     await persistHistoryCheckpoint(
       ctx,
       doc,
-      project,
       seq,
       state,
       authorUserId,
@@ -335,7 +352,7 @@ async function tryAutoCheckpoint(
       "Auto-saved before restore",
     );
   } catch (error) {
-    if (!(error instanceof Error) || !error.message.includes("project-full")) {
+    if (!(error instanceof Error) || !error.message.includes("history-too-large")) {
       throw error;
     }
   }
@@ -362,7 +379,7 @@ export const pullUpdates = query({
   },
 });
 
-export const pushUpdate = mutation({
+export const pushUpdateV2 = mutation({
   args: { documentId: v.id("documents"), update: v.bytes() },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
@@ -370,20 +387,42 @@ export const pushUpdate = mutation({
       throw new Error("not-found");
     }
     const access = await requireProjectEditor(ctx, doc.projectId);
-    if (args.update.byteLength > MAX_COLLAB_UPDATE_BYTES) {
-      throw new Error("update-too-large");
+    const allowed = await enforceWriteRateLimit(
+      ctx,
+      "collab",
+      args.documentId,
+      access.userId,
+      COLLAB_WRITE_LIMIT,
+    );
+    if (!allowed) {
+      return { ok: false as const, error: "rate-limited" as const };
     }
-    const { content, state, replayed } = await materializedContent(ctx, doc, args.update);
+    if (args.update.byteLength > MAX_COLLAB_UPDATE_BYTES) {
+      return { ok: false as const, error: "update-too-large" as const };
+    }
+    const materialized = await materializedContent(ctx, doc, args.update);
+    if (!materialized) {
+      return { ok: false as const, error: "invalid-update" as const };
+    }
+    const { content, state, replayed } = materialized;
     const newSize = byteLength(content);
     if (newSize > MAX_FILE_BYTES) {
-      throw new Error("file-too-large");
+      return { ok: false as const, error: "file-too-large" as const };
     }
     const total = await cachedProjectBytes(ctx, access.project);
     const max = await maxProjectBytes(ctx, access.project);
     if (total - doc.size + newSize > max) {
-      throw new Error("project-full");
+      return { ok: false as const, error: "project-full" as const };
     }
-    const seq = await allocateSeq(ctx, args.documentId);
+    let seq: number;
+    try {
+      seq = await allocateSeq(ctx, args.documentId);
+    } catch (error) {
+      if (error instanceof Error && error.message === "seq-conflict") {
+        return { ok: false as const, error: "seq-conflict" as const };
+      }
+      throw error;
+    }
     await ctx.db.insert("yjsUpdates", {
       documentId: args.documentId,
       seq,
@@ -403,7 +442,7 @@ export const pushUpdate = mutation({
         documentId: args.documentId,
       });
     }
-    return { seq };
+    return { ok: true as const, seq };
   },
 });
 
@@ -549,7 +588,6 @@ export const createHistoryCheckpoint = mutation({
     const snapshotId = await persistHistoryCheckpoint(
       ctx,
       doc,
-      access.project,
       seq,
       state,
       access.userId,
@@ -583,6 +621,18 @@ export const deleteHistoryBatch = internalMutation({
       await ctx.db.delete(row._id);
     }
     return { deleted: rows.length, hasMore: rows.length === 200 };
+  },
+});
+
+export const pruneHistoryForDocument = internalMutation({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file") {
+      return { found: false };
+    }
+    await pruneDocumentHistory(ctx, doc);
+    return { found: true };
   },
 });
 
@@ -661,7 +711,6 @@ export const restoreHistory = mutation({
     await tryAutoCheckpoint(
       ctx,
       doc,
-      access.project,
       currentSeq,
       currentState,
       access.userId,
@@ -696,7 +745,7 @@ export const restoreHistory = mutation({
       updatedAt: Date.now(),
     });
     await addProjectBytes(ctx, access.project, newSize - doc.size);
-    await pruneDocumentHistory(ctx, doc, access.project);
+    await pruneDocumentHistory(ctx, doc);
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -723,11 +772,7 @@ export const pruneHistory = internalMutation({
       if (doc?.kind !== "file") {
         continue;
       }
-      const project = await ctx.db.get(doc.projectId);
-      if (!project) {
-        continue;
-      }
-      await pruneDocumentHistory(ctx, doc, project);
+      await pruneDocumentHistory(ctx, doc);
     }
   },
 });

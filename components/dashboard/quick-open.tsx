@@ -2,9 +2,10 @@
 
 import { useOrganization } from "@clerk/nextjs";
 import { useQuery } from "convex/react";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { DataSkeleton } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/_generated/api";
 import { type GlobalResult, resultHref, SearchResults, searchKey } from "./search-ui";
@@ -93,6 +94,9 @@ export function QuickOpen() {
         })),
       ];
   const results = query.trim() ? ((search ?? []) as GlobalResult[]) : idleResults;
+  const loading = query.trim()
+    ? search === undefined
+    : recent === undefined || projects === undefined;
   const choose = (result: GlobalResult) => {
     close();
     router.push(resultHref(result));
@@ -110,6 +114,7 @@ export function QuickOpen() {
         <Search className="size-4 text-muted-foreground" />
         <input
           ref={inputRef}
+          aria-label="Search projects, files, and contents"
           role="combobox"
           aria-expanded="true"
           aria-controls="quick-results"
@@ -142,11 +147,12 @@ export function QuickOpen() {
         </kbd>
       </div>
       <div id="quick-results" className="max-h-[60dvh] min-h-48 overflow-auto">
-        {query.trim() && search === undefined ? (
-          <p className="flex items-center justify-center gap-2 px-4 py-8 text-muted-foreground text-sm">
-            <Loader2 className="size-4 animate-spin" />
-            Searching…
-          </p>
+        {loading ? (
+          <DataSkeleton
+            label={query.trim() ? "Searching workspace" : "Loading recent workspace items"}
+            rows={3}
+            compact
+          />
         ) : (
           <SearchResults
             results={results}

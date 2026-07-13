@@ -3,6 +3,7 @@
 import { useConvex } from "convex/react";
 import { Download, FileText, Globe, Loader2, Package, Printer } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { referencedAssetIds } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import {
   type BundleNode,
   exportHtml,
@@ -83,6 +84,19 @@ export function ExportMenu({
       await exportProjectZip(bundle.projectTitle, bundle.nodes as BundleNode[]);
     });
 
+  const nodesWithRenderedAssets = async () => {
+    const documentIds = referencedAssetIds(fileNode, content, nodes) as Id<"documents">[];
+    if (documentIds.length === 0) {
+      return nodes;
+    }
+    const assetUrls = await convex.query(api.documents.getAssetUrls, { documentIds });
+    const urlById = new Map<string, string>(assetUrls.map((asset) => [asset.id, asset.url]));
+    return nodes.map((node) => {
+      const assetUrl = urlById.get(node.id);
+      return assetUrl ? { ...node, assetUrl } : node;
+    });
+  };
+
   const isMd = fileNode.fileType === "md";
 
   return (
@@ -127,7 +141,9 @@ export function ExportMenu({
             loading={busy === "html"}
             disabled={Boolean(busy)}
             onClick={() =>
-              run("html", () => exportHtml(fileNode, content, nodes, richContentState))
+              run("html", async () =>
+                exportHtml(fileNode, content, await nodesWithRenderedAssets(), richContentState),
+              )
             }
           />
           <ExportItem
@@ -136,7 +152,11 @@ export function ExportMenu({
             hint="print"
             loading={busy === "pdf"}
             disabled={Boolean(busy)}
-            onClick={() => run("pdf", () => exportPdf(fileNode, content, nodes, richContentState))}
+            onClick={() =>
+              run("pdf", async () =>
+                exportPdf(fileNode, content, await nodesWithRenderedAssets(), richContentState),
+              )
+            }
           />
           <div className="my-1 h-px bg-hairline" />
           <p className="px-2 py-1.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">

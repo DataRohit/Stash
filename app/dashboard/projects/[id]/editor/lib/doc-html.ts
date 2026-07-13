@@ -200,6 +200,25 @@ function createMarked(onMermaid: (source: string) => string): Marked {
   return instance;
 }
 
+export function referencedAssetIds(
+  fileNode: TreeNode,
+  content: string,
+  nodes: TreeNode[],
+): string[] {
+  const rawHtml =
+    fileNode.fileType === "md" ? (createMarked(() => "").parse(content) as string) : content;
+  const doc = new DOMParser().parseFromString(rawHtml, "text/html");
+  const ids = new Set<string>();
+  for (const element of doc.querySelectorAll("img[src], source[src], a[href]")) {
+    const ref = element.getAttribute(element.tagName === "A" ? "href" : "src") ?? "";
+    const target = resolveRef(fileNode, ref, nodes);
+    if (target?.kind === "asset" && target.hasAsset !== false && !target.assetUrl) {
+      ids.add(target.id);
+    }
+  }
+  return [...ids].slice(0, 100);
+}
+
 function rewriteRefs(
   rawHtml: string,
   fromNode: TreeNode,

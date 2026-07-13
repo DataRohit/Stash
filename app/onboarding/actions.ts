@@ -3,6 +3,7 @@
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import { fetchOrgAvatarFile } from "@/lib/org-avatar-server";
 import { getUserPlanLimits } from "@/lib/plan-limits";
+import { logServerError } from "@/lib/server-log";
 
 export type CreateOrganizationResult =
   | { id: string }
@@ -54,17 +55,32 @@ export async function createOrganization(name: string): Promise<CreateOrganizati
         membership.organization.name.trim().toLowerCase() === normalizedName,
     );
     if (latestOwned.length > maxOrganizations || duplicateAfterCreate) {
-      await client.organizations.deleteOrganization(organization.id).catch(() => null);
+      try {
+        await client.organizations.deleteOrganization(organization.id);
+      } catch (error) {
+        logServerError("onboarding.organization_rollback_failed", error, { userId });
+      }
       return { error: duplicateAfterCreate ? "duplicate" : "limit" };
     }
-    const file = await fetchOrgAvatarFile(organization.id).catch(() => null);
+    let file: File | null = null;
+    try {
+      file = await fetchOrgAvatarFile(organization.id);
+    } catch (error) {
+      logServerError("onboarding.organization_avatar_failed", error, { userId });
+    }
     if (file) {
-      await client.organizations
-        .updateOrganizationLogo(organization.id, { file, uploaderUserId: userId })
-        .catch(() => null);
+      try {
+        await client.organizations.updateOrganizationLogo(organization.id, {
+          file,
+          uploaderUserId: userId,
+        });
+      } catch (error) {
+        logServerError("onboarding.organization_logo_failed", error, { userId });
+      }
     }
     return { id: organization.id };
-  } catch {
+  } catch (error) {
+    logServerError("onboarding.create_organization_failed", error, { userId });
     return { error: "failed" };
   }
 }

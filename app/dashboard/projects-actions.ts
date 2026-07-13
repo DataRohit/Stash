@@ -3,6 +3,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { countOrgProjects, createProjectDoc, setOrgPlanLimits } from "@/lib/convex-server";
 import { getUserPlanLimits } from "@/lib/plan-limits";
+import { logServerError } from "@/lib/server-log";
 
 export type CreateProjectResult = { id: string } | { error: string };
 
@@ -46,6 +47,7 @@ export async function createProject(input: {
     if (error instanceof Error && error.message.includes("too-many-projects")) {
       return { error: "limit-reached" };
     }
+    logServerError("dashboard.create_project_failed", error, { clerkOrgId: orgId, userId });
     return { error: "failed" };
   }
 }

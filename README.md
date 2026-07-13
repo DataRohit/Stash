@@ -25,17 +25,102 @@ Stash is a multi-tenant document workspace built for teams that maintain Markdow
 
 The repository includes the complete application and local backend workflow. Production account provisioning, webhook configuration, deployment, and monitoring remain operator-controlled requirements.
 
-## Production hardening status
+## Security and data-integrity hardening
 
-Correctness hardening is complete as of July 12, 2026. Collaborative update sequences use bounded conflict detection with automatic client retry; large update replays trigger compaction; project-size defaults come from one server limit; stale presence cleanup is indexed and batched; project search checks inactive ancestors per result; member reconciliation preserves newly accepted memberships and grants; expired sibling shares cannot produce live links; and unresolved Clerk membership emails are skipped and recovered by dashboard reconciliation.
+Stash includes safeguards for authenticated write abuse, share-boundary validation,
+storage accuracy, and bounded data cleanup. Collaboration updates and presence
+heartbeats are throttled per user and document; malformed share inputs are
+rejected before lookup; shared routes use a dedicated content security policy;
+asset uploads accept only approved raster formats; and notification visibility
+reuses authorization results only for the duration of one query.
 
-Public deployment remains blocked until the outstanding security, authorization, data-integrity, and lifecycle acceptance checks in the internal hardening plan are completed and recorded.
+Storage counters, retained history, deleted content, unattached uploads, and
+recent-document lists have bounded reconciliation or cleanup paths. These
+safeguards complement the existing organization, role, project-grant, mutation,
+and quota checks enforced by the backend.
+
+Repository verification does not replace acceptance in a configured release
+candidate. Public launch remains blocked until that environment successfully
+completes authenticated rate soaks, a trusted-proxy spoofing matrix, real shared
+document rendering, byte-counter reconciliation, orphan-deletion safety checks,
+near-quota history checks, and recent-document pruning checks.
+
+## Responsive and accessible interface
+
+The editor keeps its primary actions reachable on narrow screens and switches
+to a single editor or preview pane below the tablet breakpoint without losing
+the saved desktop split-view choice. Comments, outline, file navigation, and
+version history use mobile sheets with bounded internal scrolling; version
+history places the checkpoint list above its unified comparison on small
+screens. Dashboard cards, organization controls, invitations, and public landing
+sections reflow for touch use without body-level horizontal scrolling at the
+supported mobile widths.
+
+Dialogs and editor popovers share keyboard focus containment, Escape dismissal,
+opener-focus restoration, and modal scroll locking where appropriate. The
+read-only preview is visibly identified and skipped by sequential keyboard
+navigation, status and presence colors meet normal-text contrast targets, error
+and toast messages are announced, and page, view-transition, reveal, marquee,
+and presence motion honor the operating system's reduced-motion preference.
+
+Repository-level checks cover formatting, linting, types, dependency use,
+spelling, secrets, source policy, and production compilation. Final release
+acceptance must also exercise the authenticated editor, sheets, focus order,
+screen-reader announcements, and reduced-motion behavior in the configured
+release candidate on representative mobile and desktop browsers.
+
+## Resilience and observability
+
+Operational failures use stable structured server events while read-only pages
+retain explicit fallback states. Clerk webhook verification failures are rejected,
+and verified events that fail during processing return a retryable server response
+instead of acknowledging incomplete synchronization. Editor and public-share
+routes have local recovery screens so an isolated rendering failure does not take
+down the surrounding application shell.
+
+The editor derives write and administrator controls from the live project grant.
+If edit access is revoked during a session, editing becomes read-only within the
+next reactive update and the editor explains the change. Transient collaboration
+failures retain local updates and display a persistent reconnecting count until
+the pending edits synchronize. The lightweight `/api/health` response is suitable
+for load balancers; `/api/health?deep=1` also verifies Convex reachability and
+returns a service-unavailable status when that dependency cannot be reached.
+
+## Performance and scale safeguards
+
+Large file trees use windowed rendering with overscan, keeping mounted rows
+bounded while retaining selection, keyboard navigation, expansion, rename,
+drag-and-drop, and move operations. Project tree queries no longer sign every
+stored asset URL: URLs are requested only for a selected asset, assets referenced
+by the visible preview, or assets required by an export.
+
+Organization-wide search uses bounded organization-scoped name and content
+indexes, then revalidates project access and inactive ancestors before returning
+results. Comment-range memoization depends on stable collaborative document
+references, optional mention and share subscriptions activate only while their
+panels are open, and rich-text, history-comparison, and Mermaid code remain behind
+route or dynamic import boundaries.
+
+## Consistent workspace experience
+
+Known backend failures use one user-facing message catalog across document,
+sharing, template, access, and collaboration actions. Data-driven views distinguish
+loading skeletons, empty results, and recoverable route errors so an unavailable
+query is not presented as an empty workspace.
+
+Dates for recent activity, notifications, comments, history, sharing events, and
+save status use the same relative-time language, with exact timestamps available
+on hover. Storage values use one byte formatter throughout the dashboard and
+editor. In the editor, press `?` outside a text field to open the shortcut
+reference; `Ctrl`/`Cmd` + `K` opens workspace search and `Ctrl`/`Cmd` + `S`
+confirms that changes synchronize automatically.
 
 ## Key features
 
 ### Documents and files
 
-- Nested project folders with Markdown, HTML, rich-text, image, and SVG nodes.
+- Nested project folders with Markdown, HTML, rich-text, and PNG, JPEG, GIF,
+  WebP, or AVIF image nodes.
 - Multi-file Markdown, HTML, and text import with 512 KB file limits.
 - Drag-and-drop movement with cycle prevention and an accessible move dialog.
 - File duplication with collision-safe names and independent collaboration state.
@@ -63,7 +148,8 @@ Public deployment remains blocked until the outstanding security, authorization,
 - Full-text search across every accessible project.
 - Token-aware multi-term results without contiguous-substring loss.
 - Dashboard quick-open palette with project, path, file, and content results.
-- Per-user recent-document tracking with access revalidation.
+- Per-user, organization-scoped recent-document tracking with access
+  revalidation and a bounded history.
 
 ### Sharing and export
 
@@ -98,7 +184,7 @@ flowchart LR
 
 Authorization is enforced inside Convex public functions. UI restrictions are presentation controls and are not treated as security boundaries.
 
-### Data lifecycle
+### Data lifecycle and scheduled maintenance
 
 ```mermaid
 flowchart LR
@@ -109,7 +195,19 @@ flowchart LR
   Drain --> Removed["Data and storage removed"]
 ```
 
-Scheduled functions sweep stale presence, prune history, notifications, activity and share windows, purge expired trash, resume interrupted purges, and reap failed project clones.
+Trash entries show a countdown to automatic deletion after 30 days and highlight
+the final three days. Expired trash and permanent deletions drain through bounded,
+resumable purge jobs.
+
+History uses a separate per-document budget, a 50-checkpoint ceiling, and 30-day
+retention. It is pruned independently and does not consume the live project
+storage quota. Recent documents are capped at 100 entries per user and
+organization when opened, with a daily fallback prune.
+
+Scheduled maintenance also sweeps stale presence; prunes notifications, activity,
+share windows, and authenticated-write windows; reconciles project byte counters
+daily; removes unattached storage objects older than 24 hours in a weekly sweep;
+and reaps failed project clones.
 
 ## Technology stack
 
@@ -124,7 +222,6 @@ Scheduled functions sweep stale presence, prune history, notifications, activity
 | Rich text | Tiptap 3 | ProseMirror-based collaborative editing |
 | Rendering | marked, Mermaid, Resvg | Markdown, diagrams, and SVG processing |
 | Styling | Tailwind CSS 4 | Theme tokens and application styling |
-| Testing | Vitest | Automated regression tests |
 | Quality | Biome, ESLint, TypeScript, Knip | Formatting and static verification |
 | Package management | pnpm 11 | Reproducible dependency installation |
 
@@ -165,18 +262,25 @@ Copy the environment template:
 cp .env.example .env.local
 ```
 
-| Variable | Required for | Handling |
+| Variable | Required? | Purpose |
 | --- | --- | --- |
-| `NEXT_PUBLIC_SITE_URL` | Canonical application URL | Public |
-| `CONVEX_DEPLOYMENT` | Convex target | Server tooling |
-| `NEXT_PUBLIC_CONVEX_URL` | Browser Convex client | Public |
-| `NEXT_PUBLIC_CONVEX_SITE_URL` | Convex HTTP endpoint | Public |
-| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Clerk browser SDK | Public |
-| `CLERK_SECRET_KEY` | Clerk server API | Secret |
-| `CLERK_WEBHOOK_SIGNING_SECRET` | Webhook verification | Secret |
-| `CONVEX_PURGE_SECRET` | Trusted server-to-Convex operations | Secret, 32+ random characters |
-| `SHARE_IP_SALT` | Share throttle privacy | Secret, independent random value |
-| `CLERK_JWT_ISSUER_DOMAIN` | Convex JWT verification | Server configuration |
+| `NEXT_PUBLIC_SITE_URL` | Yes | Canonical public application URL |
+| `CONVEX_DEPLOYMENT` | Yes | Convex deployment selected by local tooling |
+| `NEXT_PUBLIC_CONVEX_URL` | Yes | Browser and server Convex client endpoint |
+| `NEXT_PUBLIC_CONVEX_SITE_URL` | Yes | Convex HTTP actions endpoint |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Yes | Public Clerk browser configuration |
+| `CLERK_SECRET_KEY` | Yes | Clerk server API and billing-plan reads |
+| `CLERK_WEBHOOK_SIGNING_SECRET` | For webhooks | Verifies Clerk membership and organization events |
+| `CONVEX_PURGE_SECRET` | Yes | Authenticates trusted Next.js-to-Convex operations; use 32+ random characters |
+| `SHARE_IP_SALT` | Yes | Hashes client addresses used by public-share throttling; use an independent random value |
+| `SHARE_TRUST_FORWARDED` | No | Defaults to `0`; set to `1` only behind a trusted proxy or CDN that overwrites forwarding headers |
+| `CLERK_JWT_ISSUER_DOMAIN` | Yes | Verifies Clerk session JWTs inside Convex |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | No | Overrides the sign-in route; template default is `/sign-in` |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | No | Overrides the sign-up route; template default is `/sign-up` |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_FORCE_REDIRECT_URL` | No | Post-sign-in destination; template default is `/dashboard` |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL` | No | Post-sign-up destination; template default is `/dashboard` |
+| `RESEND_API_KEY` | No | Reserved for optional notification-email delivery; unused by the current runtime |
+| `RESEND_FROM_EMAIL` | No | Reserved verified sender for optional Resend delivery |
 
 Never commit `.env.local` or production credentials.
 
@@ -187,6 +291,21 @@ pnpm dev:local
 ```
 
 The command initializes local Convex and runs the database, web application, and local dashboard helper together.
+
+For a first boot:
+
+1. Create a Clerk development application, enable Organizations, and copy its
+   publishable and secret keys into `.env.local`.
+2. Add a Clerk JWT template named `convex`, then set
+   `CLERK_JWT_ISSUER_DOMAIN` to the development instance issuer.
+3. Replace `CONVEX_PURGE_SECRET` and `SHARE_IP_SALT` with independent random
+   development values. Leave the optional Resend values empty.
+4. Run `pnpm dev:local`, open the web address below, sign in, and create or join
+   an organization.
+
+`CLERK_WEBHOOK_SIGNING_SECRET` is needed only when exercising Clerk webhook
+synchronization locally. Dashboard reconciliation keeps organization membership
+usable during local development without a public webhook tunnel.
 
 | Address | Service |
 | --- | --- |
@@ -234,15 +353,21 @@ CI installs from the frozen lockfile and executes `pnpm check` for every push to
 
 - Convex functions validate authenticated identity, active organization, organization role, project grant, and write level.
 - Viewers cannot modify documents, comments, checkpoints, files, or shares.
+- Collaboration updates and presence heartbeats use per-user, per-document write throttles after authentication and access checks.
 - Presence removal requires ownership of the target session.
-- Share tokens contain 256 random bits and support expiry and rotation.
+- Share tokens contain 256 random bits and support expiry and rotation; malformed tokens are rejected before lookup.
 - Public share throttling uses a salted token-and-IP digest; raw IP addresses are not stored.
+- Forwarded share-client addresses are ignored by default; trusted forwarding can be enabled only through the documented proxy setting.
+- Shared routes use a content security policy that constrains scripts, styles, images, fonts, connections, and frames while disabling base and form targets.
 - Server service secrets use constant-time comparison.
 - HTML preview runs in a sandboxed iframe.
-- Upload type, file size, project size, tree depth, and node-count limits are enforced server-side.
+- Asset uploads use a server-enforced PNG, JPEG, GIF, WebP, and AVIF MIME allowlist; file size, project size, tree depth, and node-count limits are also enforced server-side.
+- Notification queries revalidate visibility and reuse per-project access decisions only within the current query.
 - Secretlint runs locally and in CI.
 
-The controls above describe the current repository and do not constitute public-launch approval. Deployment must remain private or limited to controlled internal evaluation until every outstanding launch gate is complete.
+The controls above describe the current repository and do not constitute
+public-launch approval. The configured release-candidate checks listed under
+security and data-integrity hardening must pass before public deployment.
 
 ## Production deployment
 
@@ -263,15 +388,21 @@ Production approval additionally requires:
 - Production billing plans and limits.
 - A signed Clerk webhook configured for `/api/webhooks/clerk`.
 - Strong independent purge and share-rate secrets.
-- External health monitoring for `/api/health`.
+- Lightweight availability monitoring for `/api/health` and dependency-aware
+  monitoring for `/api/health?deep=1`.
 - Convex scheduled-function failure and purge-backlog visibility.
-- Successful execution of every runbook acceptance check.
+- A coordinated Convex and frontend rollout before public launch; content in any
+  active pre-release editor tabs must be synced or copied before those tabs are
+  refreshed or closed.
+- Successful authenticated rate soaks, trusted-proxy spoofing checks, real share
+  rendering, counter reconciliation, orphan-deletion safety checks, near-quota
+  history checks, and recent-document pruning in the release candidate.
 
 Repository code alone does not prove these account-side controls are active.
 
 ## Performance verification
 
-Performance work is accepted only when before-and-after measurements use the same machine, browser, network profile, dataset, and production build. Record the source commit, browser trace, route bundle output, editor interaction readiness, preview latency, Mermaid cancellation latency, and collaboration replay time.
+Performance work is accepted only when before-and-after measurements use the same machine, browser, network profile, dataset, and production build. Record the source commit, browser trace, route bundle output, mounted tree-row count, editor interaction readiness, preview latency, asset URL requests, search function reads, Mermaid cancellation latency, and collaboration replay time.
 
 ## Repository conventions
 

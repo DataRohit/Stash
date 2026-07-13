@@ -1,9 +1,10 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { FileCode, FileText, Folder, Image as ImageIcon, Loader2, Search, X } from "lucide-react";
+import { FileCode, FileText, Folder, Image as ImageIcon, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { pathOf, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { DataSkeleton, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
@@ -153,18 +154,10 @@ export function SearchPanel({
       ) : (
         <div id={resultsId} className="min-h-0 flex-1 overflow-auto py-1.5">
           {loading && nameMatches.length === 0 ? (
-            <p
-              className="flex items-center gap-2 px-3 py-4 text-muted-foreground/80 text-xs"
-              role="status"
-            >
-              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
-              Searching…
-            </p>
+            <DataSkeleton label="Searching project" rows={3} compact />
           ) : null}
           {empty ? (
-            <p className="px-3 py-4 text-muted-foreground/80 text-xs" role="status">
-              No matches for “{trimmed}”.
-            </p>
+            <DataState title={`No matches for “${trimmed}”`} compact className="m-2" />
           ) : null}
           {nameMatches.length > 0 ? (
             <ul className="flex flex-col gap-1 px-2">

@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
+import { isRasterAssetMimeType } from "../lib/asset-formats";
+import { TRASH_RETENTION_MS } from "../lib/lifecycle";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -20,7 +22,6 @@ const MAX_NODES_PER_PROJECT = 2000;
 const MAX_DEPTH = 16;
 const PURGE_COLLAB_BATCH = 200;
 const PURGE_DOCUMENT_BATCH = 20;
-const TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const WINDOWS_RESERVED_NAMES = new Set([
   "con",
   "prn",
@@ -328,7 +329,11 @@ export async function projectTotalBytes(ctx: QueryCtx, projectId: Id<"projects">
     .query("documents")
     .withIndex("by_project", (q) => q.eq("projectId", projectId))
     .collect();
-  return docs.reduce((sum, doc) => sum + doc.size, 0);
+  return liveDocumentBytes(docs);
+}
+
+export function liveDocumentBytes(documents: Array<Pick<Doc<"documents">, "size">>): number {
+  return documents.reduce((sum, document) => sum + document.size, 0);
 }
 
 export async function cachedProjectBytes(ctx: QueryCtx, project: Doc<"projects">): Promise<number> {
@@ -346,8 +351,18 @@ export async function addProjectBytes(
   if (delta === 0) {
     return;
   }
-  const base = await cachedProjectBytes(ctx, project);
-  await ctx.db.patch(project._id, { totalBytes: Math.max(0, base + delta) });
+  const current = await ctx.db.get(project._id);
+  if (!current) {
+    return;
+  }
+  const totalBytes =
+    typeof current.totalBytes === "number"
+      ? Math.max(0, current.totalBytes + delta)
+      : await projectTotalBytes(ctx, current._id);
+  await ctx.db.patch(project._id, {
+    totalBytes,
+    byteVersion: (current.byteVersion ?? 0) + 1,
+  });
 }
 
 async function subtree(
@@ -512,6 +527,20 @@ export async function purgeDocCollabBatch(
   return comments.length > 0;
 }
 
+export async function purgeRecentDocumentBatch(
+  ctx: MutationCtx,
+  documentId: Id<"documents">,
+): Promise<boolean> {
+  const rows = await ctx.db
+    .query("recentDocuments")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of rows) {
+    await ctx.db.delete(row._id);
+  }
+  return rows.length > 0;
+}
+
 export async function purgeDocCollab(ctx: MutationCtx, documentId: Id<"documents">): Promise<void> {
   let more = true;
   while (more) {
@@ -536,10 +565,27 @@ export const purgeSubtreeBatch = internalMutation({
       return;
     }
     let freed = 0;
+    const accountFreed = async () => {
+      if (freed === 0) {
+        return;
+      }
+      const project = await ctx.db.get(args.projectId);
+      if (project) {
+        await addProjectBytes(ctx, project, -freed);
+      }
+      freed = 0;
+    };
     for (const doc of batch) {
+      const hasMoreRecent = await purgeRecentDocumentBatch(ctx, doc._id);
+      if (hasMoreRecent) {
+        await accountFreed();
+        await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, args);
+        return;
+      }
       if (doc.kind === "file") {
         const hasMoreCollab = await purgeDocCollabBatch(ctx, doc._id);
         if (hasMoreCollab) {
+          await accountFreed();
           await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, args);
           return;
         }
@@ -550,12 +596,7 @@ export const purgeSubtreeBatch = internalMutation({
       freed += doc.size;
       await ctx.db.delete(doc._id);
     }
-    if (freed > 0) {
-      const project = await ctx.db.get(args.projectId);
-      if (project) {
-        await addProjectBytes(ctx, project, -freed);
-      }
-    }
+    await accountFreed();
     await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, args);
   },
 });
@@ -614,19 +655,45 @@ export const listByProject = query({
       .query("documents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
-    return Promise.all(
-      visibleDocuments(docs).map(async (doc) => ({
-        id: doc._id,
-        parentId: doc.parentId,
-        kind: doc.kind,
-        name: doc.name,
-        fileType: doc.fileType,
-        size: doc.size,
-        mimeType: doc.mimeType,
-        assetUrl:
-          doc.kind === "asset" && doc.storageId ? await ctx.storage.getUrl(doc.storageId) : null,
-      })),
-    );
+    return visibleDocuments(docs).map((doc) => ({
+      id: doc._id,
+      parentId: doc.parentId,
+      kind: doc.kind,
+      name: doc.name,
+      fileType: doc.fileType,
+      size: doc.size,
+      mimeType: doc.mimeType,
+      hasAsset: doc.kind === "asset" && doc.storageId !== null,
+      assetUrl: null,
+    }));
+  },
+});
+
+export const getAssetUrls = query({
+  args: { documentIds: v.array(v.id("documents")) },
+  handler: async (ctx, args) => {
+    const documentIds = [...new Set(args.documentIds)].slice(0, 100);
+    const accessByProject = new Map<Id<"projects">, boolean>();
+    const urls: { id: Id<"documents">; url: string }[] = [];
+    for (const documentId of documentIds) {
+      const doc = await ctx.db.get(documentId);
+      if (doc?.kind !== "asset" || !doc.storageId || (await isInactiveTree(ctx, doc))) {
+        continue;
+      }
+      let allowed = accessByProject.get(doc.projectId);
+      if (allowed === undefined) {
+        allowed = Boolean(await accessForProject(ctx, doc.projectId));
+        accessByProject.set(doc.projectId, allowed);
+      }
+      if (!allowed) {
+        continue;
+      }
+      const url = await ctx.storage.getUrl(doc.storageId);
+      if (url) {
+        urls.push({ id: doc._id, url });
+      }
+    }
+    return urls;
   },
 });
 
@@ -1346,7 +1413,7 @@ export const createAsset = mutation({
       throw new Error("invalid-asset");
     }
     const mimeType = meta.contentType ?? "";
-    if (!mimeType.startsWith("image/")) {
+    if (!isRasterAssetMimeType(mimeType)) {
       await ctx.storage.delete(args.storageId);
       throw new Error("invalid-asset");
     }

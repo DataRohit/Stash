@@ -51,7 +51,12 @@ function ToastCard({
   const { icon: Icon, badge, iconColor } = TYPE_STYLES[type];
 
   return (
-    <div className="glass-strong pointer-events-auto flex w-[356px] max-w-[calc(100vw-2rem)] items-center gap-3 rounded-lg p-3.5">
+    <div
+      role={type === "error" ? "alert" : "status"}
+      aria-live={type === "error" ? "assertive" : "polite"}
+      aria-atomic="true"
+      className="glass-strong pointer-events-auto flex w-[356px] max-w-[calc(100vw-2rem)] items-center gap-3 rounded-lg p-3.5"
+    >
       <span
         className={cn("flex size-7 shrink-0 items-center justify-center rounded-md border", badge)}
       >
