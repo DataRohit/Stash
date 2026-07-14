@@ -11,7 +11,7 @@ import {
   SearchResults,
   searchKey,
 } from "@/components/dashboard/search-ui";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 
 export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
@@ -78,7 +78,7 @@ export function GlobalSearchPage({ clerkOrgId }: { clerkOrgId: string }) {
               className="m-5"
             />
           ) : results === undefined ? (
-            <DataSkeleton label="Searching workspace" rows={4} />
+            <DataLoader label="Searching workspace" />
           ) : (
             <>
               <div className="flex items-center justify-between gap-4 border-hairline border-b bg-surface/30 px-5 py-3">

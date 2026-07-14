@@ -5,7 +5,7 @@ import { useQuery } from "convex/react";
 import { Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DataSkeleton } from "@/components/ui/data-state";
+import { DataLoader } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { api } from "@/convex/_generated/api";
 import { type GlobalResult, resultHref, SearchResults, searchKey } from "./search-ui";
@@ -148,9 +148,8 @@ export function QuickOpen() {
       </div>
       <div id="quick-results" className="max-h-[60dvh] min-h-48 overflow-auto">
         {loading ? (
-          <DataSkeleton
+          <DataLoader
             label={query.trim() ? "Searching workspace" : "Loading recent workspace items"}
-            rows={3}
             compact
           />
         ) : (

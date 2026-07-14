@@ -153,13 +153,15 @@ export function ProjectAccessManager({
                     aria-label="Revoke access"
                     disabled={busy}
                     onClick={() => run(userId, () => revoke({ projectId: pid, userId }))}
-                    className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-xs border border-hairline text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive disabled:cursor-default"
+                    className="flex shrink-0 cursor-pointer items-center justify-center rounded-sm border border-hairline p-0.5 text-muted-foreground transition-colors hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive disabled:cursor-default"
                   >
-                    {busy ? (
-                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <X className="size-4" aria-hidden="true" />
-                    )}
+                    <span className="flex size-7 items-center justify-center">
+                      {busy ? (
+                        <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <X className="size-4" aria-hidden="true" />
+                      )}
+                    </span>
                   </button>
                 </div>
               ) : (

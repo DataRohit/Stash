@@ -21,7 +21,7 @@ import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { historyEmail, mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { api } from "@/convex/_generated/api";
@@ -34,7 +34,7 @@ type VersionHistoryModalProps = {
   fileNode: TreeNode;
   nodes: TreeNode[];
   currentContent: string;
-  language: "md" | "html" | "doc";
+  language: "md" | "html";
   canCheckpoint: boolean;
   canManage: boolean;
   onClose: () => void;
@@ -206,7 +206,7 @@ function VersionSelect({
 }
 
 function LoadingPane({ label }: { label: string }) {
-  return <DataSkeleton label={label} rows={4} className="h-full" />;
+  return <DataLoader label={label} className="h-full" />;
 }
 
 export function VersionHistoryModal({
@@ -236,7 +236,6 @@ export function VersionHistoryModal({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  const isRichText = language === "doc";
 
   useDialogA11y({
     open: true,
@@ -487,7 +486,7 @@ export function VersionHistoryModal({
                     onClick={() => setTab("compare")}
                   />
                 </div>
-                {tab === "file" && !isRichText ? (
+                {tab === "file" ? (
                   <div className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                     {(
                       [
@@ -534,20 +533,7 @@ export function VersionHistoryModal({
               <div className="relative min-h-0 flex-1">
                 {tab === "file" ? (
                   preview ? (
-                    isRichText ? (
-                      <div className="flex size-full flex-col">
-                        <p className="shrink-0 border-hairline border-b px-3 py-2 text-muted-foreground text-xs">
-                          Text approximation of this rich document.
-                        </p>
-                        <DocEditor
-                          key={`text:${selected}`}
-                          initialContent={preview.content}
-                          language="md"
-                          readOnly
-                          onChange={noop}
-                        />
-                      </div>
-                    ) : fileMode === "preview" ? (
+                    fileMode === "preview" ? (
                       <DocPreview fileNode={fileNode} content={preview.content} nodes={nodes} />
                     ) : (
                       <DocEditor
@@ -566,11 +552,6 @@ export function VersionHistoryModal({
                 {tab === "diff" ? (
                   preview ? (
                     <div className="flex size-full flex-col">
-                      {isRichText ? (
-                        <p className="shrink-0 border-hairline border-b px-3 py-2 text-muted-foreground text-xs">
-                          Text approximation of this rich document.
-                        </p>
-                      ) : null}
                       <div className="min-h-0 flex-1">
                         <DiffView
                           original={preview.content}
@@ -587,11 +568,6 @@ export function VersionHistoryModal({
                 {tab === "compare" ? (
                   basePreview && comparePreview ? (
                     <div className="flex size-full flex-col">
-                      {isRichText ? (
-                        <p className="shrink-0 border-hairline border-b px-3 py-2 text-muted-foreground text-xs">
-                          Text approximation of this rich document.
-                        </p>
-                      ) : null}
                       <div className="min-h-0 flex-1">
                         <DiffView
                           original={basePreview.content}

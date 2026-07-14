@@ -24,7 +24,7 @@ type SearchResult = {
   kind: "project" | "file" | "folder" | "asset" | "content";
   name: string;
   path: string;
-  fileType: "md" | "html" | "doc" | null;
+  fileType: "md" | "html" | null;
   snippet: { before: string; match: string; after: string; lineNumber: number } | null;
   rank: number;
 };

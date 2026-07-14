@@ -1,8 +1,6 @@
-import { AlertTriangle, Inbox } from "lucide-react";
+import { AlertTriangle, Inbox, Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
-
-const SKELETON_KEYS = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
 
 type DataStateProps = {
   title: string;
@@ -46,14 +44,12 @@ export function DataState({
   );
 }
 
-export function DataSkeleton({
+export function DataLoader({
   label,
-  rows = 3,
   compact = false,
   className,
 }: {
   label: string;
-  rows?: number;
   compact?: boolean;
   className?: string;
 }) {
@@ -61,17 +57,13 @@ export function DataSkeleton({
     <div
       role="status"
       aria-label={label}
-      className={cn("flex animate-pulse flex-col gap-2", compact ? "p-3" : "p-5", className)}
+      className={cn(
+        "flex items-center justify-center",
+        compact ? "px-4 py-6" : "px-6 py-10",
+        className,
+      )}
     >
-      {SKELETON_KEYS.slice(0, rows).map((key, index) => (
-        <span
-          key={key}
-          className={cn(
-            "h-10 rounded-md bg-foreground/[0.05]",
-            index === rows - 1 && rows > 1 ? "w-2/3" : "w-full",
-          )}
-        />
-      ))}
+      <Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
       <span className="sr-only">{label}</span>
     </div>
   );

@@ -1,6 +1,6 @@
 # Stash
 
-## Collaborative document workspace for Markdown, HTML, and rich text
+## Collaborative document workspace for Markdown and HTML
 
 [![Quality](https://github.com/DataRohit/Stash/actions/workflows/quality.yml/badge.svg)](https://github.com/DataRohit/Stash/actions/workflows/quality.yml)
 [![Project Status: Active](https://img.shields.io/badge/Project%20Status-Active-brightgreen)](https://github.com/DataRohit/Stash)
@@ -21,7 +21,11 @@
 
 ## Overview
 
-Stash is a multi-tenant document workspace built for teams that maintain Markdown, HTML, and rich-text content together. Every format participates in real-time collaboration, comments, version history, search, sharing, and export. Convex owns reactive data and authorization boundaries; Clerk owns sessions, organizations, roles, invitations, and billing-plan data.
+Stash is a multi-tenant, developer-first document workspace built for teams that
+maintain Markdown and HTML together. Both formats participate in real-time
+collaboration, comments, version history, search, sharing, and export. Convex owns
+reactive data and authorization boundaries; Clerk owns sessions, organizations,
+roles, invitations, and billing-plan data.
 
 The repository includes the complete application and local backend workflow. Production account provisioning, webhook configuration, deployment, and monitoring remain operator-controlled requirements.
 
@@ -98,8 +102,8 @@ Organization-wide search uses bounded organization-scoped name and content
 indexes, then revalidates project access and inactive ancestors before returning
 results. Comment-range memoization depends on stable collaborative document
 references, optional mention and share subscriptions activate only while their
-panels are open, and rich-text, history-comparison, and Mermaid code remain behind
-route or dynamic import boundaries.
+panels are open, and history-comparison and Mermaid code remain behind route or
+dynamic import boundaries.
 
 ## Consistent workspace experience
 
@@ -119,9 +123,12 @@ confirms that changes synchronize automatically.
 
 ### Documents and files
 
-- Nested project folders with Markdown, HTML, rich-text, and PNG, JPEG, GIF,
-  WebP, or AVIF image nodes.
-- Multi-file Markdown, HTML, and text import with 512 KB file limits.
+- Nested project folders with Markdown, HTML, and PNG, JPEG, GIF, WebP, or AVIF
+  image nodes.
+- Document names accept only `.md` and `.html`. Entering either extension in the
+  creation dialog selects the matching format automatically; names without an
+  extension use the selected format and receive its canonical extension.
+- Multi-file `.md` and `.html` import with 512 KB file limits.
 - Drag-and-drop movement with cycle prevention and an accessible move dialog.
 - File duplication with collision-safe names and independent collaboration state.
 - Thirty-day trash, restoration, administrator-only permanent deletion, and bounded purge jobs.
@@ -130,7 +137,6 @@ confirms that changes synchronize automatically.
 ### Editing and collaboration
 
 - CodeMirror 6 editors for Markdown and HTML.
-- Tiptap editor for collaborative rich text.
 - Yjs incremental synchronization over Convex with snapshots and compaction.
 - Presence and remote cursors with session ownership protection.
 - Cross-file link completion, synchronized outlines, and image paste or drop.
@@ -138,7 +144,7 @@ confirms that changes synchronize automatically.
 
 ### Review and communication
 
-- Yjs-relative comment anchors for code and rich-text editors.
+- Yjs-relative comment anchors for Markdown and HTML editors.
 - Replies, resolution, reopening, mentions, and notification preferences.
 - Version checkpoints, text comparison, restoration, and live collaborator updates.
 - Project activity feed with actor, target, event type, and time.
@@ -219,7 +225,6 @@ and reaps failed project clones.
 | Identity | Clerk | Authentication, organizations, roles, plans, invitations |
 | Collaboration | Yjs | Shared document state and relative positions |
 | Code editing | CodeMirror 6 | Markdown and HTML editing |
-| Rich text | Tiptap 3 | ProseMirror-based collaborative editing |
 | Rendering | marked, Mermaid, Resvg | Markdown, diagrams, and SVG processing |
 | Styling | Tailwind CSS 4 | Theme tokens and application styling |
 | Quality | Biome, ESLint, TypeScript, Knip | Formatting and static verification |
@@ -442,7 +447,6 @@ Stash is distributed under the [MIT License](./LICENSE).
 - [Clerk documentation](https://clerk.com/docs)
 - [Yjs documentation](https://docs.yjs.dev)
 - [CodeMirror documentation](https://codemirror.net/docs/)
-- [Tiptap documentation](https://tiptap.dev/docs)
 
 ---
 

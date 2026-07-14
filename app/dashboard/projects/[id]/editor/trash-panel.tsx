@@ -1,18 +1,10 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import {
-  FileCode,
-  FileText,
-  FileType,
-  Folder,
-  Image as ImageIcon,
-  RotateCcw,
-  Trash2,
-} from "lucide-react";
+import { FileCode, FileText, Folder, Image as ImageIcon, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
@@ -27,7 +19,7 @@ type TrashItem = {
   id: string;
   kind: "folder" | "file" | "asset";
   name: string;
-  fileType: "md" | "html" | "doc" | null;
+  fileType: "md" | "html" | null;
   size: number;
   trashedAt: number;
 };
@@ -48,9 +40,6 @@ function ItemGlyph({ item }: { item: TrashItem }) {
   }
   if (item.fileType === "html") {
     return <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />;
-  }
-  if (item.fileType === "doc") {
-    return <FileType className="size-4 shrink-0 text-info" aria-hidden="true" />;
   }
   return <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />;
 }
@@ -121,7 +110,7 @@ export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProp
       >
         <div className="py-2">
           {itemsData === undefined ? (
-            <DataSkeleton label="Loading trash" rows={3} compact />
+            <DataLoader label="Loading trash" compact />
           ) : items.length === 0 ? (
             <DataState
               title="Trash is empty"

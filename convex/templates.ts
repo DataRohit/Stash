@@ -2,7 +2,6 @@ import { v } from "convex/values";
 import * as Y from "yjs";
 import { mutation, query } from "./_generated/server";
 import { accessForProject, isInactiveTree, requireProjectAdmin } from "./documents";
-import { BUILTIN_TEMPLATES } from "./templateContent";
 
 const MAX_TEMPLATES = 50;
 const MAX_NAME = 80;
@@ -29,27 +28,16 @@ export const listForProject = query({
       .query("orgTemplates")
       .withIndex("by_org", (q) => q.eq("clerkOrgId", access.project.clerkOrgId))
       .collect();
-    return [
-      ...BUILTIN_TEMPLATES.map((item) => ({
-        ...item,
-        kind: "builtin" as const,
+    return rows
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((item) => ({
+        id: item._id,
+        name: item.name,
+        fileType: item.fileType,
         preview: item.content.slice(0, 180),
-        creatorName: "Stash",
-        updatedAt: null,
-      })),
-      ...rows
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .map((item) => ({
-          id: item._id,
-          name: item.name,
-          description: "Organization template",
-          fileType: item.fileType,
-          kind: "organization" as const,
-          preview: item.content.slice(0, 180),
-          creatorName: item.createdByName,
-          updatedAt: item.updatedAt,
-        })),
-    ];
+        creatorName: item.createdByName,
+        updatedAt: item.updatedAt,
+      }));
   },
 });
 

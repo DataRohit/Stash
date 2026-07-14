@@ -389,11 +389,17 @@ function relativePath(from: TreeNode, to: TreeNode, nodes: TreeNode[]): string {
   return [...fromParts.map(() => ".."), ...toParts].join("/") || to.name;
 }
 
-function fileCompletions(language: "md" | "html", fileNode?: TreeNode, nodes: TreeNode[] = []) {
+function fileCompletions(
+  language: "md" | "html",
+  getFileNode: () => TreeNode | undefined,
+  getNodes: () => TreeNode[],
+) {
   return (context: CompletionContext) => {
+    const fileNode = getFileNode();
     if (!fileNode) {
       return null;
     }
+    const nodes = getNodes();
     const before = context.state.sliceDoc(0, context.pos);
     const match =
       language === "md" ? /\]\(([^)\s]*)$/.exec(before) : /(?:href|src)="([^"]*)$/.exec(before);
@@ -423,8 +429,8 @@ function fileCompletions(language: "md" | "html", fileNode?: TreeNode, nodes: Tr
 function editorExtensions(
   language: "md" | "html",
   collab: boolean,
-  fileNode?: TreeNode,
-  nodes?: TreeNode[],
+  getFileNode: () => TreeNode | undefined,
+  getNodes: () => TreeNode[],
 ) {
   const editorKeymap = [
     closeBracketsKeymap,
@@ -453,7 +459,7 @@ function editorExtensions(
     syntaxHighlighting(editorHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
-    autocompletion({ override: [fileCompletions(language, fileNode, nodes)] }),
+    autocompletion({ override: [fileCompletions(language, getFileNode, getNodes)] }),
     rectangularSelection(),
     crosshairCursor(),
     search({ top: true, createPanel: createStashSearchPanel }),
@@ -547,6 +553,8 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
   const onInsertImageRef = useRef(onInsertImage);
   const commentRangesRef = useRef(commentRanges);
   const activeCommentIdRef = useRef(activeCommentId);
+  const fileNodeRef = useRef(fileNode);
+  const nodesRef = useRef(nodes ?? []);
   const initialContentRef = useRef(initialContent);
 
   useEffect(() => {
@@ -578,6 +586,14 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
     activeCommentIdRef.current = activeCommentId;
     viewRef.current?.dispatch({});
   }, [activeCommentId]);
+
+  useEffect(() => {
+    fileNodeRef.current = fileNode;
+  }, [fileNode]);
+
+  useEffect(() => {
+    nodesRef.current = nodes ?? [];
+  }, [nodes]);
 
   useEffect(() => {
     initialContentRef.current = initialContent;
@@ -703,7 +719,12 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
       doc: collab ? (ytext?.toString() ?? "") : initialContentRef.current,
       parent: parentRef.current,
       extensions: [
-        ...editorExtensions(language, collab, fileNode, nodes),
+        ...editorExtensions(
+          language,
+          collab,
+          () => fileNodeRef.current,
+          () => nodesRef.current,
+        ),
         EditorState.readOnly.of(readOnly),
         maxContentBytes
           ? EditorState.transactionFilter.of((transaction) => {
@@ -747,7 +768,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
       view.destroy();
       undoManager?.destroy();
     };
-  }, [language, maxContentBytes, readOnly, ytext, awareness, fileNode, nodes]);
+  }, [language, maxContentBytes, readOnly, ytext, awareness]);
 
   useEffect(() => {
     const view = viewRef.current;

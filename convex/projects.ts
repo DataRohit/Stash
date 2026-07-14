@@ -529,7 +529,7 @@ export const insertDuplicateNode = internalMutation({
     parentId: v.union(v.id("documents"), v.null()),
     kind: v.union(v.literal("folder"), v.literal("file"), v.literal("asset")),
     name: v.string(),
-    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("doc"), v.null()),
+    fileType: v.union(v.literal("md"), v.literal("html"), v.null()),
     content: v.string(),
     contentState: v.optional(v.bytes()),
     storageId: v.union(v.id("_storage"), v.null()),

@@ -14,7 +14,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -129,7 +129,7 @@ export function ProjectActivity({ projectId }: { projectId: Id<"projects"> }) {
         activity remain visible.
       </p>
       {events === undefined ? (
-        <DataSkeleton label="Loading project activity" rows={4} />
+        <DataLoader label="Loading project activity" />
       ) : events.length === 0 ? (
         <DataState
           title="No project activity yet"

@@ -1,5 +1,3 @@
-import * as Y from "yjs";
-
 export type OutlineItem = {
   level: number;
   text: string;
@@ -10,13 +8,6 @@ export type OutlineItem = {
 
 function outlineItem(level: number, text: string, offset: number, index: number): OutlineItem {
   return { level, text: text || "Untitled", offset, index, target: `stash-heading-${index}` };
-}
-
-function clampLevel(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 1;
-  }
-  return Math.min(6, Math.max(1, Math.round(value)));
 }
 
 function markdownOutline(content: string): OutlineItem[] {
@@ -101,43 +92,4 @@ function htmlOutline(content: string): OutlineItem[] {
 
 export function extractTextOutline(content: string, isHtml: boolean): OutlineItem[] {
   return isHtml ? htmlOutline(content) : markdownOutline(content);
-}
-
-function headingText(element: Y.XmlElement): string {
-  const parts: string[] = [];
-  for (const child of element.toArray()) {
-    if (child instanceof Y.XmlText) {
-      for (const op of child.toDelta() as Array<{ insert?: unknown }>) {
-        if (typeof op.insert === "string") {
-          parts.push(op.insert);
-        }
-      }
-    } else if (child instanceof Y.XmlElement) {
-      parts.push(headingText(child));
-    }
-  }
-  return parts.join("").replace(/\s+/g, " ").trim();
-}
-
-export function extractDocOutline(fragment: Y.XmlFragment): OutlineItem[] {
-  const items: OutlineItem[] = [];
-  let index = 0;
-  const walk = (node: Y.XmlFragment | Y.XmlElement) => {
-    for (const child of node.toArray()) {
-      if (!(child instanceof Y.XmlElement)) {
-        continue;
-      }
-      if (child.nodeName === "heading") {
-        const raw = child.getAttribute("level");
-        const level = clampLevel(typeof raw === "number" ? raw : Number(raw));
-        const text = headingText(child);
-        items.push(outlineItem(level, text, 0, index));
-        index += 1;
-      } else {
-        walk(child);
-      }
-    }
-  };
-  walk(fragment);
-  return items;
 }

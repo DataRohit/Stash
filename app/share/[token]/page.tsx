@@ -129,7 +129,6 @@ export default async function SharedDocumentPage({
         documentName: result.documentName,
         fileType: result.fileType,
         content: result.content,
-        docHtml: result.docHtml,
         updatedAt: result.updatedAt,
         nodes: result.nodes as TreeNode[],
         fileLinks: result.fileLinks,

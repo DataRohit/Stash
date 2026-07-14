@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Bell, CheckCheck, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
@@ -90,7 +90,7 @@ export function NotificationBell() {
             </button>
           </div>
           {notifications === undefined ? (
-            <DataSkeleton label="Loading notifications" rows={3} compact />
+            <DataLoader label="Loading notifications" compact />
           ) : notifications.length === 0 ? (
             <DataState
               title="No notifications"

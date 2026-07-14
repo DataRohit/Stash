@@ -10,6 +10,7 @@ import {
   renderMermaid,
 } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { DataLoader } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -33,6 +34,15 @@ export function DocPreview({
   const noteId = useId();
   const [debounced, setDebounced] = useState(content);
   const [rendered, setRendered] = useState<{ key: string; doc: string } | null>(null);
+  const [fileId, setFileId] = useState(fileNode.id);
+  const [ready, setReady] = useState(false);
+
+  if (fileId !== fileNode.id) {
+    setFileId(fileNode.id);
+    setDebounced(content);
+    setRendered(null);
+    setReady(false);
+  }
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(content), 400);
@@ -88,15 +98,22 @@ export function DocPreview({
       >
         Read-only preview. Use the file tree or editor controls to navigate.
       </p>
-      <iframe
-        ref={iframeRef}
-        title="Document preview"
-        aria-describedby={noteId}
-        tabIndex={-1}
-        srcDoc={srcDoc}
-        sandbox="allow-scripts allow-popups allow-top-navigation-by-user-activation"
-        className="min-h-0 w-full flex-1 border-0 bg-white"
-      />
+      <div className="relative min-h-0 w-full flex-1">
+        <iframe
+          key={fileNode.id}
+          ref={iframeRef}
+          title="Document preview"
+          aria-describedby={noteId}
+          tabIndex={-1}
+          srcDoc={srcDoc}
+          onLoad={() => setReady(true)}
+          sandbox="allow-scripts allow-popups allow-top-navigation-by-user-activation"
+          className="editor-panel size-full border-0"
+        />
+        {ready ? null : (
+          <DataLoader label="Rendering preview" className="editor-panel absolute inset-0" />
+        )}
+      </div>
     </div>
   );
 }

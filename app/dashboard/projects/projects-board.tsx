@@ -9,7 +9,7 @@ import { RecentDocuments } from "@/app/dashboard/projects/recent-documents";
 import { createProject } from "@/app/dashboard/projects-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import { MAX_TAG_LENGTH, MAX_TAGS } from "@/lib/org";
@@ -149,7 +149,6 @@ export function ProjectsBoard({
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               disabled={creating}
-              rows={2}
               placeholder="What is this project for?"
               className={`resize-none py-2 ${fieldClass}`}
             />
@@ -225,7 +224,7 @@ export function ProjectsBoard({
       <div className="mt-6 border-hairline border-t pt-6">
         <RecentDocuments clerkOrgId={clerkOrgId} />
         {projects === undefined ? (
-          <DataSkeleton label="Loading projects" rows={3} compact />
+          <DataLoader label="Loading projects" compact />
         ) : projects.length === 0 ? (
           <DataState
             title={isAdmin ? "No projects yet" : "No accessible projects"}

@@ -14,7 +14,7 @@ import {
 import { RoleBadge } from "@/components/dashboard/role-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DataSkeleton } from "@/components/ui/data-state";
+import { DataLoader } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 
@@ -264,7 +264,7 @@ export function OrgMembers({ clerkOrgId, currentUserId, isAdmin, maxMembers }: O
 
       <div className="mt-6 border-hairline border-t pt-6">
         {people === undefined ? (
-          <DataSkeleton label="Loading organization members" rows={4} compact />
+          <DataLoader label="Loading organization members" compact />
         ) : (
           <ul className="flex flex-col divide-y divide-hairline">
             {people.map((person) => {

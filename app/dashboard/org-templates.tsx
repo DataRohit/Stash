@@ -3,7 +3,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { Pencil, Trash2 } from "lucide-react";
 import { FileIcon } from "@/components/file-icon";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -26,7 +26,7 @@ export function OrgTemplates({ clerkOrgId, isAdmin }: { clerkOrgId: string; isAd
       </div>
       <div className="mt-6 border-hairline border-t pt-5">
         {templates === undefined ? (
-          <DataSkeleton label="Loading organization templates" rows={3} compact />
+          <DataLoader label="Loading organization templates" compact />
         ) : templates.length === 0 ? (
           <DataState
             title="No organization templates"

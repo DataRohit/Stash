@@ -407,14 +407,14 @@ export function OrgCard(props: OrgCardProps) {
                   onClick={togglePublicSharing}
                   disabled={togglingShare}
                   className={cn(
-                    "relative inline-flex h-9 w-12 shrink-0 cursor-pointer items-center rounded-full border border-hairline transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                    "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border border-hairline transition-colors disabled:cursor-not-allowed disabled:opacity-60",
                     publicSharing ? "bg-accent" : "bg-foreground/15",
                   )}
                 >
                   <span
                     className={cn(
-                      "inline-block size-4 rounded-full bg-background shadow-sm transition-transform",
-                      publicSharing ? "translate-x-7" : "translate-x-1",
+                      "inline-block size-4 rounded-full bg-white shadow-sm transition-transform",
+                      publicSharing ? "translate-x-6" : "translate-x-1",
                     )}
                   />
                 </button>

@@ -51,7 +51,6 @@ import { FileTree } from "@/app/dashboard/projects/[id]/editor/file-tree";
 import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import {
-  extractDocOutline,
   extractTextOutline,
   type OutlineItem,
 } from "@/app/dashboard/projects/[id]/editor/lib/outline";
@@ -61,10 +60,6 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/lib/use-collab-doc";
 import { NewDocumentDialog } from "@/app/dashboard/projects/[id]/editor/new-document-dialog";
 import { OutlinePanel } from "@/app/dashboard/projects/[id]/editor/outline-panel";
-import type {
-  RichCommentRange,
-  RichDocSelection,
-} from "@/app/dashboard/projects/[id]/editor/rich-doc-editor";
 import { SaveTemplateDialog } from "@/app/dashboard/projects/[id]/editor/save-template-dialog";
 import { SearchPanel } from "@/app/dashboard/projects/[id]/editor/search-panel";
 import {
@@ -74,7 +69,7 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/share-popover";
 import { TrashPanel } from "@/app/dashboard/projects/[id]/editor/trash-panel";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
@@ -94,14 +89,6 @@ type ProjectEditorProps = {
 };
 
 type ViewMode = "editor" | "split" | "preview";
-
-const RichDocEditor = dynamic(
-  () => import("@/app/dashboard/projects/[id]/editor/rich-doc-editor"),
-  {
-    ssr: false,
-    loading: () => <DataSkeleton label="Loading rich-text editor" rows={6} className="flex-1" />,
-  },
-);
 
 const VersionHistoryModal = dynamic(
   () =>
@@ -354,7 +341,6 @@ export function ProjectEditor({
 
   const createFolder = useMutation(api.documents.createFolder);
   const createFile = useMutation(api.documents.createFile);
-  const createDocument = useMutation(api.documents.createDocument);
   const createFromTemplate = useMutation(api.documents.createFromTemplate);
   const renameDoc = useMutation(api.documents.rename);
   const removeDoc = useMutation(api.documents.remove);
@@ -382,13 +368,10 @@ export function ProjectEditor({
   const [newDocumentParent, setNewDocumentParent] = useState<string | null | undefined>(undefined);
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
-  const [docOutline, setDocOutline] = useState<OutlineItem[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
-  const [editorSelection, setEditorSelection] = useState<
-    EditorSelectionState | RichDocSelection | null
-  >(null);
+  const [editorSelection, setEditorSelection] = useState<EditorSelectionState | null>(null);
   const [focusRequest, setFocusRequest] = useState<CommentFocusRequest | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -398,7 +381,7 @@ export function ProjectEditor({
     documentId: null,
     open: false,
   });
-  const lastSeeded = useRef<string | null>(null);
+  const [seededFileId, setSeededFileId] = useState<string | null>(null);
   const previewFrameRef = useRef<HTMLIFrameElement>(null);
   const editorRef = useRef<DocEditorHandle | null>(null);
   const handledDeepLinkRef = useRef<string | null>(null);
@@ -469,7 +452,6 @@ export function ProjectEditor({
     selectedAssetId ? { documentIds: [selectedAssetId as Id<"documents">] } : "skip",
   );
   const selectedAssetUrl = selectedAssetUrls?.[0]?.url ?? null;
-  const isDoc = selectedNode?.kind === "file" && selectedNode.fileType === "doc";
   const historyOpen = Boolean(
     selectedFileId && historyState.open && historyState.documentId === selectedFileId,
   );
@@ -519,7 +501,7 @@ export function ProjectEditor({
   const collabYtext = collab?.ytext;
   const resolvedCommentRanges = useMemo(() => {
     const ranges = new Map<string, ResolvedCommentRange>();
-    if (isDoc || !collabYdoc || !collabYtext) {
+    if (!collabYdoc || !collabYtext) {
       return ranges;
     }
     for (const thread of commentThreads) {
@@ -547,22 +529,10 @@ export function ProjectEditor({
       }
     }
     return ranges;
-  }, [collabYdoc, collabYtext, commentThreads, isDoc]);
+  }, [collabYdoc, collabYtext, commentThreads]);
   const commentRanges = useMemo<CommentRange[]>(
     () => [...resolvedCommentRanges.values()],
     [resolvedCommentRanges],
-  );
-  const richCommentRanges = useMemo<RichCommentRange[]>(
-    () =>
-      isDoc
-        ? commentThreads.map((thread) => ({
-            id: thread.id,
-            startRel: thread.startRel,
-            endRel: thread.endRel,
-            status: thread.status,
-          }))
-        : [],
-    [commentThreads, isDoc],
   );
   const unresolvedCommentCount = commentThreads.filter((thread) => thread.status === "open").length;
   const commentSelection = effectiveViewMode === "preview" ? null : editorSelection;
@@ -570,22 +540,12 @@ export function ProjectEditor({
     if (!outlineOpen || !selectedFileId || selectedNode?.kind !== "file") {
       return [];
     }
-    if (isDoc) {
-      return docOutline;
-    }
     const source = canEdit ? buffer : (doc?.content ?? "");
     return extractTextOutline(source, selectedNode.fileType === "html");
-  }, [outlineOpen, selectedFileId, selectedNode, isDoc, docOutline, buffer, canEdit, doc]);
+  }, [outlineOpen, selectedFileId, selectedNode, buffer, canEdit, doc]);
 
   const scrollToOutline = (item: OutlineItem) => {
     setOutlineOpen(false);
-    if (isDoc) {
-      const headings = document.querySelectorAll<HTMLElement>(
-        ".tiptap-doc-content :is(h1,h2,h3,h4,h5,h6)",
-      );
-      headings[item.index]?.scrollIntoView({ behavior: "smooth", block: "start" });
-      return;
-    }
     editorRef.current?.focusRange(item.offset, item.offset);
     previewFrameRef.current?.contentWindow?.postMessage(
       { type: "stash-scroll-heading", target: item.target },
@@ -661,17 +621,36 @@ export function ProjectEditor({
     };
   }, [moreOpen]);
 
-  useEffect(() => {
-    if (doc && doc.id === selectedFileId && lastSeeded.current !== selectedFileId) {
-      setBuffer(doc.content);
-      lastSeeded.current = selectedFileId;
-      setEditorSelection(null);
-      setShareOpen(false);
-    }
-  }, [doc, selectedFileId]);
+  if (doc && doc.id === selectedFileId && seededFileId !== selectedFileId) {
+    setSeededFileId(selectedFileId);
+    setBuffer(doc.content);
+    setEditorSelection(null);
+    setShareOpen(false);
+  }
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "k"
+      ) {
+        event.preventDefault();
+        setSidebarCollapsed(false);
+        if (compactView) {
+          setMobileFilesOpen(true);
+        }
+        window.setTimeout(() => {
+          const inputs = document.querySelectorAll<HTMLInputElement>(
+            '[data-project-search-input="true"]',
+          );
+          const visibleInput = [...inputs].find((input) => input.offsetParent !== null);
+          visibleInput?.focus();
+          visibleInput?.select();
+        }, 0);
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
         notify.success("Changes sync automatically");
@@ -692,19 +671,7 @@ export function ProjectEditor({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  useEffect(() => {
-    if (!outlineOpen || !isDoc || !collab?.ydoc) {
-      return;
-    }
-    const ydoc = collab.ydoc;
-    const fragment = ydoc.getXmlFragment("prosemirror");
-    const update = () => setDocOutline(extractDocOutline(fragment));
-    update();
-    ydoc.on("update", update);
-    return () => ydoc.off("update", update);
-  }, [outlineOpen, isDoc, collab?.ydoc]);
+  }, [compactView]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -753,11 +720,11 @@ export function ProjectEditor({
   };
 
   const handleUpload = async (parentId: string | null, files: File[]) => {
-    const imports = files.filter((file) => /\.(?:md|markdown|html?|txt)$/i.test(file.name));
+    const imports = files.filter((file) => /\.(?:md|html)$/i.test(file.name));
     const assets = files.filter((file) => isRasterAssetMimeType(file.type));
     if (imports.length + assets.length !== files.length) {
       notify.error("Unsupported file", {
-        description: `Upload ${RASTER_ASSET_FORMATS} images, Markdown, HTML, or plain-text files.`,
+        description: `Upload ${RASTER_ASSET_FORMATS} images or .md and .html documents.`,
       });
     }
     if (imports.length > 0) {
@@ -843,7 +810,8 @@ export function ProjectEditor({
       !selectedFileId ||
       !collab?.ready ||
       !editorSelection ||
-      (!isDoc && (!collab.ytext || effectiveViewMode === "preview")) ||
+      !collab.ytext ||
+      effectiveViewMode === "preview" ||
       editorSelection.from >= editorSelection.to
     ) {
       notify.error("Select text first", {
@@ -855,23 +823,18 @@ export function ProjectEditor({
       return;
     }
     try {
-      const anchors = isDoc
-        ? {
-            startRel: (editorSelection as RichDocSelection).startRel,
-            endRel: (editorSelection as RichDocSelection).endRel,
-          }
-        : {
-            startRel: toArrayBuffer(
-              Y.encodeRelativePosition(
-                Y.createRelativePositionFromTypeIndex(collab.ytext as Y.Text, editorSelection.from),
-              ),
-            ),
-            endRel: toArrayBuffer(
-              Y.encodeRelativePosition(
-                Y.createRelativePositionFromTypeIndex(collab.ytext as Y.Text, editorSelection.to),
-              ),
-            ),
-          };
+      const anchors = {
+        startRel: toArrayBuffer(
+          Y.encodeRelativePosition(
+            Y.createRelativePositionFromTypeIndex(collab.ytext, editorSelection.from),
+          ),
+        ),
+        endRel: toArrayBuffer(
+          Y.encodeRelativePosition(
+            Y.createRelativePositionFromTypeIndex(collab.ytext, editorSelection.to),
+          ),
+        ),
+      };
       const commentId = await createCommentThread({
         documentId: selectedFileId as Id<"documents">,
         startRel: anchors.startRel,
@@ -951,9 +914,6 @@ export function ProjectEditor({
 
   const focusThread = (commentId: string) => {
     setActiveCommentId(commentId);
-    if (isDoc) {
-      return;
-    }
     const range = resolvedCommentRanges.get(commentId);
     if (range) {
       setFocusRequest({ id: commentId, from: range.from, to: range.to, nonce: Date.now() });
@@ -992,15 +952,6 @@ export function ProjectEditor({
         onCreateFile={(parentId, name) =>
           guard(() =>
             createFile({
-              projectId: pid,
-              parentId: parentId as Id<"documents"> | null,
-              name,
-            }),
-          )
-        }
-        onCreateDocument={(parentId, name) =>
-          guard(() =>
-            createDocument({
               projectId: pid,
               parentId: parentId as Id<"documents"> | null,
               name,
@@ -1239,9 +1190,6 @@ export function ProjectEditor({
                   fileNode={selectedNode}
                   content={canEdit ? buffer : doc.content}
                   nodes={nodes}
-                  richContentState={
-                    isDoc && collab ? toArrayBuffer(Y.encodeStateAsUpdate(collab.ydoc)) : null
-                  }
                 />
               ) : null}
               {isAdmin && selectedFileId ? (
@@ -1320,43 +1268,41 @@ export function ProjectEditor({
               >
                 <CircleHelp className="size-4" aria-hidden="true" />
               </button>
-              {!isDoc ? (
-                <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
-                  <legend className="sr-only">View mode</legend>
-                  {(
-                    [
-                      ["editor", Code2, "Editor"],
-                      ["split", Columns2, "Split"],
-                      ["preview", Eye, "Preview"],
-                    ] as const
-                  ).map(([mode, Icon, label]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => {
-                        if (compactView) {
-                          if (mode !== "split") {
-                            setMobileViewMode(mode);
-                          }
-                        } else {
-                          setViewMode(mode);
+              <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
+                <legend className="sr-only">View mode</legend>
+                {(
+                  [
+                    ["editor", Code2, "Editor"],
+                    ["split", Columns2, "Split"],
+                    ["preview", Eye, "Preview"],
+                  ] as const
+                ).map(([mode, Icon, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => {
+                      if (compactView) {
+                        if (mode !== "split") {
+                          setMobileViewMode(mode);
                         }
-                      }}
-                      aria-label={label}
-                      aria-pressed={effectiveViewMode === mode}
-                      className={cn(
-                        "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
-                        mode === "split" && "hidden md:flex",
-                        effectiveViewMode === mode
-                          ? "bg-foreground/[0.08] text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      <Icon className="size-4" aria-hidden="true" />
-                    </button>
-                  ))}
-                </fieldset>
-              ) : null}
+                      } else {
+                        setViewMode(mode);
+                      }
+                    }}
+                    aria-label={label}
+                    aria-pressed={effectiveViewMode === mode}
+                    className={cn(
+                      "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
+                      mode === "split" && "hidden md:flex",
+                      effectiveViewMode === mode
+                        ? "bg-foreground/[0.08] text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Icon className="size-4" aria-hidden="true" />
+                  </button>
+                ))}
+              </fieldset>
             </div>
           ) : null}
           {selectedFileId ? (
@@ -1468,85 +1414,57 @@ export function ProjectEditor({
                   {collab.pendingEdits === 1 ? "edit" : "edits"} pending.
                 </div>
               ) : null}
-              {isDoc ? (
-                collab?.ready && collab.sessionId ? (
-                  <RichDocEditor
-                    key={selectedFileId}
-                    ydoc={collab.ydoc}
-                    awareness={collab.awareness}
-                    editable={canEdit && !collab.blocked}
-                    userName={collab.userLabel}
-                    userColor={collab.color}
-                    userColorLight={collab.colorLight}
-                    sessionId={collab.sessionId}
-                    commentRanges={richCommentRanges}
-                    activeCommentId={activeCommentId}
-                    onSelectionChange={setEditorSelection}
-                    onCommentRangeClick={(commentId) => {
-                      setCommentsOpen(true);
-                      focusThread(commentId);
-                    }}
-                  />
-                ) : (
-                  <DataSkeleton label="Loading document" rows={6} className="min-h-0 flex-1" />
-                )
-              ) : (
-                <div className="flex min-h-0 flex-1">
-                  {effectiveViewMode !== "preview" ? (
-                    <div
-                      className={cn(
-                        "min-w-0 overflow-auto",
-                        effectiveViewMode === "split"
-                          ? "flex-1 border-hairline border-r"
-                          : "flex-1",
-                      )}
-                    >
-                      <DocEditor
-                        ref={editorRef}
-                        key={`${selectedFileId}:${doc.fileType}`}
-                        initialContent={doc.content}
-                        language={doc.fileType === "html" ? "html" : "md"}
-                        readOnly={!canEdit || Boolean(collab?.blocked)}
-                        onChange={setBuffer}
-                        maxContentBytes={canEdit ? maxEditableBytes : undefined}
-                        onLimit={() =>
-                          notify.error("Edit is too large", {
-                            description: mapDocError(new Error("file-too-large")),
-                          })
-                        }
-                        ytext={collab?.ytext}
-                        awareness={collab?.awareness}
-                        commentRanges={commentRanges}
-                        activeCommentId={activeCommentId}
-                        focusRequest={focusRequest}
-                        onSelectionChange={setEditorSelection}
-                        onCommentRangeClick={(commentId) => {
-                          setCommentsOpen(true);
-                          focusThread(commentId);
-                        }}
-                        onInsertImage={canEdit ? insertImageAsset : undefined}
-                        fileNode={selectedNode}
-                        nodes={nodes}
-                      />
-                    </div>
-                  ) : null}
-                  {effectiveViewMode !== "editor" ? (
-                    <div className="min-w-0 flex-1">
-                      <DocPreview
-                        fileNode={selectedNode}
-                        content={canEdit ? buffer : doc.content}
-                        nodes={nodes}
-                        iframeRef={previewFrameRef}
-                      />
-                    </div>
-                  ) : null}
-                </div>
-              )}
+              <div className="flex min-h-0 flex-1">
+                {effectiveViewMode !== "preview" ? (
+                  <div
+                    className={cn(
+                      "min-w-0 overflow-auto",
+                      effectiveViewMode === "split" ? "flex-1 border-hairline border-r" : "flex-1",
+                    )}
+                  >
+                    <DocEditor
+                      ref={editorRef}
+                      key={`${selectedFileId}:${doc.fileType}`}
+                      initialContent={doc.content}
+                      language={doc.fileType === "html" ? "html" : "md"}
+                      readOnly={!canEdit || Boolean(collab?.blocked)}
+                      onChange={setBuffer}
+                      maxContentBytes={canEdit ? maxEditableBytes : undefined}
+                      onLimit={() =>
+                        notify.error("Edit is too large", {
+                          description: mapDocError(new Error("file-too-large")),
+                        })
+                      }
+                      ytext={collab?.ytext}
+                      awareness={collab?.awareness}
+                      commentRanges={commentRanges}
+                      activeCommentId={activeCommentId}
+                      focusRequest={focusRequest}
+                      onSelectionChange={setEditorSelection}
+                      onCommentRangeClick={(commentId) => {
+                        setCommentsOpen(true);
+                        focusThread(commentId);
+                      }}
+                      onInsertImage={canEdit ? insertImageAsset : undefined}
+                      fileNode={selectedNode}
+                      nodes={nodes}
+                    />
+                  </div>
+                ) : null}
+                {effectiveViewMode !== "editor" ? (
+                  <div className="min-w-0 flex-1">
+                    <DocPreview
+                      fileNode={selectedNode}
+                      content={canEdit ? buffer : doc.content}
+                      nodes={nodes}
+                      iframeRef={previewFrameRef}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </div>
           ) : selectedFileId && doc === undefined ? (
-            <div className="editor-panel flex min-w-0 flex-1 overflow-hidden">
-              <DataSkeleton label="Loading document" rows={6} className="w-full" />
-            </div>
+            <DataLoader label="Loading document" className="editor-panel min-w-0 flex-1" />
           ) : selectedNode?.kind === "asset" && selectedAssetUrl ? (
             <div className="editor-panel flex min-w-0 flex-1 items-center justify-center overflow-auto p-6">
               <Image
@@ -1561,7 +1479,7 @@ export function ProjectEditor({
           ) : selectedNode?.kind === "asset" ? (
             <div className="editor-panel flex flex-1 items-center justify-center p-6 text-center">
               {selectedAssetUrls === undefined ? (
-                <DataSkeleton label="Loading asset" rows={3} className="w-full max-w-lg" />
+                <DataLoader label="Loading asset" compact />
               ) : (
                 <DataState
                   kind="error"
@@ -1573,7 +1491,7 @@ export function ProjectEditor({
           ) : (
             <div className="editor-panel flex flex-1 items-center justify-center p-6 text-center">
               {nodesData === undefined ? (
-                <DataSkeleton label="Loading project files" rows={5} className="w-full max-w-lg" />
+                <DataLoader label="Loading project files" compact />
               ) : (
                 <DataState
                   title={nodes.length === 0 ? "No documents yet" : "Select a file"}
@@ -1619,8 +1537,8 @@ export function ProjectEditor({
           documentId={selectedFileId}
           fileNode={selectedNode}
           nodes={nodes}
-          currentContent={isDoc ? doc.content : canEdit ? buffer : doc.content}
-          language={doc.fileType === "html" ? "html" : doc.fileType === "doc" ? "doc" : "md"}
+          currentContent={canEdit ? buffer : doc.content}
+          language={doc.fileType === "html" ? "html" : "md"}
           canCheckpoint={canEdit && !collab?.syncing}
           canManage={isAdmin}
           onClose={() => setHistoryState({ documentId: selectedFileId, open: false })}
@@ -1649,6 +1567,10 @@ export function ProjectEditor({
         <dl className="divide-y divide-hairline px-3 py-2">
           {[
             ["Quick open", "Ctrl / ⌘ K"],
+            ["Undo", "Ctrl / ⌘ Z"],
+            ["Redo", "Ctrl Y / ⌘ ⇧ Z"],
+            ["Find in file", "Ctrl / ⌘ F"],
+            ["Select all", "Ctrl / ⌘ A"],
             ["Confirm automatic sync", "Ctrl / ⌘ S"],
             ["Open this reference", "?"],
             ["Close a dialog", "Esc"],
@@ -1684,7 +1606,7 @@ export function ProjectEditor({
         <SaveTemplateDialog
           open={saveTemplateOpen}
           documentName={selectedNode.name}
-          fileType={selectedNode.fileType ?? "doc"}
+          fileType={selectedNode.fileType ?? "md"}
           onClose={() => setSaveTemplateOpen(false)}
           onSave={async (name) => {
             await saveTemplate({ documentId: selectedFileId as Id<"documents">, name });

@@ -3,7 +3,7 @@ export type TreeNode = {
   parentId: string | null;
   kind: "folder" | "file" | "asset";
   name: string;
-  fileType: "md" | "html" | "doc" | null;
+  fileType: "md" | "html" | null;
   size: number;
   mimeType: string | null;
   hasAsset?: boolean;

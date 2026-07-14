@@ -34,7 +34,6 @@ type FileTreeProps = {
   onSelect: (node: TreeNode) => void;
   onCreateFolder: (parentId: string | null, name: string) => Promise<void>;
   onCreateFile: (parentId: string | null, name: string) => Promise<void>;
-  onCreateDocument: (parentId: string | null, name: string) => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onRemove: (node: TreeNode) => Promise<void>;
   onUpload: (parentId: string | null, files: File[]) => Promise<void>;
@@ -44,7 +43,7 @@ type FileTreeProps = {
   onOpenDocumentDialog: (parentId: string | null) => void;
 };
 
-type DraftKind = "folder" | "file" | "doc";
+type DraftKind = "folder" | "file";
 type Draft = { kind: DraftKind; parentId: string | null };
 type VisibleRow = { node: TreeNode; depth: number };
 type VirtualEntry =
@@ -58,8 +57,8 @@ const PAD_BASE = 8;
 const VIRTUALIZE_ROWS_THRESHOLD = 500;
 const VIRTUAL_ROW_HEIGHT = 30;
 const VIRTUAL_OVERSCAN = 8;
-const BARE_INPUT =
-  "min-w-0 flex-1 bg-transparent p-0 text-foreground text-xs caret-accent outline-none placeholder:text-muted-foreground/45";
+const TREE_INPUT =
+  "h-6 min-w-0 flex-1 rounded-sm border border-hairline bg-surface/65 px-2 text-foreground text-xs caret-accent outline-none transition-colors placeholder:text-muted-foreground/45 focus-visible:border-foreground/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60";
 
 function rowPadding(depth: number) {
   return `${PAD_BASE + depth * INDENT}px`;
@@ -81,9 +80,6 @@ function DraftGlyph({ kind }: { kind: DraftKind }) {
   if (kind === "folder") {
     return <FileIcon kind="folder" />;
   }
-  if (kind === "doc") {
-    return <FileIcon kind="file" fileType="doc" />;
-  }
   return <FileIcon kind="file" fileType="md" />;
 }
 
@@ -96,7 +92,7 @@ function IndentGuides({ depth }: { depth: number }) {
     <span
       key={left}
       aria-hidden="true"
-      className="absolute inset-y-0 w-px bg-hairline/70"
+      className="absolute inset-y-0 z-[1] w-px bg-hairline/70"
       style={{ left: `${left}px` }}
     />
   ));
@@ -122,7 +118,7 @@ function ActionButton({
       }}
       aria-label={label}
       className={cn(
-        "pointer-events-auto flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors",
+        "pointer-events-auto flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-xs text-muted-foreground outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent/70 focus-visible:ring-inset",
         danger
           ? "hover:bg-destructive/10 hover:text-destructive"
           : "hover:bg-foreground/10 hover:text-foreground",
@@ -140,7 +136,6 @@ export function FileTree({
   onSelect,
   onCreateFolder,
   onCreateFile,
-  onCreateDocument,
   onRename,
   onRemove,
   onUpload,
@@ -450,8 +445,6 @@ export function FileTree({
     setDraftName("");
     if (draft.kind === "folder") {
       await onCreateFolder(draft.parentId, name);
-    } else if (draft.kind === "doc") {
-      await onCreateDocument(draft.parentId, name);
     } else {
       await onCreateFile(draft.parentId, name);
     }
@@ -491,14 +484,8 @@ export function FileTree({
             onChange={(event) => setDraftName(event.target.value)}
             onBlur={submitDraft}
             onKeyDown={onDraftKey}
-            placeholder={
-              draft.kind === "folder"
-                ? "folder name"
-                : draft.kind === "doc"
-                  ? "document name"
-                  : "name.md or name.html"
-            }
-            className={BARE_INPUT}
+            placeholder={draft.kind === "folder" ? "folder name" : "name.md or name.html"}
+            className={TREE_INPUT}
           />
         </div>
       </li>
@@ -508,7 +495,7 @@ export function FileTree({
     const list = onlyNode ? [onlyNode] : sortedChildren(parentId);
     return (
       <ul
-        className={cn("flex flex-col gap-0.5", (depth === 0 || onlyNode) && "px-2")}
+        className={cn("flex flex-col gap-0.5", (depth === 0 || onlyNode) && "px-3")}
         role={depth === 0 || onlyNode ? "presentation" : "group"}
       >
         {!onlyNode && draft?.parentId === parentId ? renderDraft(depth) : null}
@@ -521,25 +508,36 @@ export function FileTree({
             <li key={node.id} className={cn(containRows && "tree-row-contained")}>
               <div
                 className={cn(
-                  "group relative flex h-7 items-center overflow-hidden rounded-md transition-colors",
+                  "group relative flex h-7 items-center rounded-md transition-colors",
                   !isRenaming && "cursor-pointer",
-                  dropTargetId === node.id && node.kind === "folder"
-                    ? "bg-accent/12 ring-1 ring-accent/50 ring-inset"
-                    : isSelected
-                      ? "bg-accent/[0.09] text-foreground"
-                      : isActiveFolder
-                        ? "text-foreground hover:bg-foreground/[0.04]"
-                        : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground",
+                  isSelected
+                    ? "text-foreground"
+                    : isActiveFolder
+                      ? "text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
                   dragNodeId === node.id && "opacity-40",
                 )}
               >
-                {isSelected ? (
-                  <span aria-hidden="true" className="absolute inset-y-0 left-0 w-0.5 bg-accent" />
-                ) : null}
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none absolute inset-y-0 right-0 z-0 rounded-md transition-colors",
+                    dropTargetId === node.id && node.kind === "folder"
+                      ? "bg-accent/12 ring-1 ring-accent/50 ring-inset"
+                      : isSelected
+                        ? "bg-accent/[0.09]"
+                        : "group-hover:bg-foreground/[0.04]",
+                  )}
+                  style={{ left: `${depth * INDENT}px` }}
+                >
+                  {isSelected ? (
+                    <span className="absolute inset-y-0 left-0 w-0.5 rounded-full bg-accent" />
+                  ) : null}
+                </span>
                 <IndentGuides depth={depth} />
                 {isRenaming ? (
                   <div
-                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 pr-2"
+                    className="relative z-[1] flex h-full min-w-0 flex-1 items-center gap-1.5 pr-2"
                     style={{ paddingLeft: rowPadding(depth) }}
                   >
                     <span className="size-4 shrink-0" />
@@ -558,7 +556,7 @@ export function FileTree({
                           setRenaming(null);
                         }
                       }}
-                      className={BARE_INPUT}
+                      className={TREE_INPUT}
                     />
                   </div>
                 ) : (
@@ -599,7 +597,7 @@ export function FileTree({
                     aria-expanded={node.kind === "folder" ? isOpen : undefined}
                     tabIndex={isSelected || (!selectedId && visibleIds[0] === node.id) ? 0 : -1}
                     className={cn(
-                      "flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent pr-2 text-left transition-[padding] duration-150",
+                      "relative z-[1] flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent pr-2 text-left transition-[padding] duration-150",
                       canEdit &&
                         (node.kind === "folder"
                           ? "group-focus-within:pr-40 group-hover:pr-40"
@@ -789,7 +787,7 @@ export function FileTree({
       <input
         ref={uploadRef}
         type="file"
-        accept={`${RASTER_ASSET_ACCEPT},.md,.markdown,.html,.htm,.txt,text/markdown,text/plain,text/html`}
+        accept={`${RASTER_ASSET_ACCEPT},.md,.html,text/markdown,text/html`}
         multiple
         className="hidden"
         onChange={(event) => {

@@ -4,14 +4,14 @@ import { useQuery } from "convex/react";
 import { Clock3 } from "lucide-react";
 import Link from "next/link";
 import { FileIcon } from "@/components/file-icon";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 export function RecentDocuments({ clerkOrgId }: { clerkOrgId: string }) {
   const recent = useQuery(api.navigation.listRecent, { clerkOrgId });
   if (recent === undefined)
-    return <DataSkeleton label="Loading recent documents" rows={2} compact className="mb-6" />;
+    return <DataLoader label="Loading recent documents" compact className="mb-6" />;
   return (
     <section className="mb-6">
       <div className="mb-3 flex items-center gap-2">

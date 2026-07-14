@@ -34,11 +34,12 @@ body{scrollbar-color:#6b7280 #0f1219;scrollbar-width:thin}
 export const PREVIEW_HTML_CSS = `
 html,body{margin:0}
 body{background:#ffffff;color:#0f172a;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}
-body{scrollbar-color:#94a3b8 #f8fafc;scrollbar-width:thin}
+html{scrollbar-color:#6b7280 #0f1219;scrollbar-width:thin}
 ::-webkit-scrollbar{width:12px;height:12px}
-::-webkit-scrollbar-track{background:#f8fafc}
-::-webkit-scrollbar-thumb{min-height:3rem;background:#94a3b8;border:3px solid #f8fafc;border-radius:999px;background-clip:content-box}
-::-webkit-scrollbar-thumb:hover{background:#64748b}
+::-webkit-scrollbar-track{background:#0f1219}
+::-webkit-scrollbar-thumb{min-height:3rem;background:#6b7280;border:3px solid #0f1219;border-radius:999px;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#9ca3af}
+::-webkit-scrollbar-corner{background:#0f1219}
 img{max-width:100%}
 a.missing-ref{color:#dc2626;text-decoration-style:wavy}
 `;

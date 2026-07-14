@@ -38,7 +38,7 @@ import { ProjectAccessManager } from "@/app/dashboard/projects/[id]/project-acce
 import { ProjectActivity } from "@/app/dashboard/projects/[id]/project-activity";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { DataSkeleton } from "@/components/ui/data-state";
+import { DataLoader } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
@@ -106,6 +106,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const deleteInputRef = useRef<HTMLInputElement>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [confirmTitle, setConfirmTitle] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -126,7 +127,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   if (project === undefined) {
     return (
       <section className="glass rounded-lg">
-        <DataSkeleton label="Loading project" rows={6} />
+        <DataLoader label="Loading project" />
       </section>
     );
   }
@@ -348,81 +349,82 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
             </div>
           </div>
 
-          {!deleteOpen ? (
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-              {mode === "view" ? (
-                <>
-                  <Link
-                    href={`/dashboard/projects/${project.id}/editor`}
-                    className={cn(buttonVariants({ variant: "primary" }), "w-full sm:w-40")}
-                  >
-                    <SquarePen className="size-4" aria-hidden="true" />
-                    Open editor
-                  </Link>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            {mode === "view" ? (
+              <>
+                <Link
+                  href={`/dashboard/projects/${project.id}/editor`}
+                  className={cn(buttonVariants({ variant: "primary" }), "w-full sm:w-40")}
+                >
+                  <SquarePen className="size-4" aria-hidden="true" />
+                  Open editor
+                </Link>
+                <Button
+                  variant="secondary"
+                  className="w-full sm:w-40"
+                  onClick={handleExportZip}
+                  disabled={exportingZip}
+                >
+                  {exportingZip ? (
+                    <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Package className="size-4" aria-hidden="true" />
+                  )}
+                  {exportingZip ? "Exporting…" : "Export ZIP"}
+                </Button>
+                {isAdmin ? (
                   <Button
                     variant="secondary"
                     className="w-full sm:w-40"
-                    onClick={handleExportZip}
-                    disabled={exportingZip}
+                    onClick={() => setDuplicateOpen(true)}
                   >
-                    {exportingZip ? (
-                      <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Package className="size-4" aria-hidden="true" />
-                    )}
-                    {exportingZip ? "Exporting…" : "Export ZIP"}
+                    <Copy className="size-4" />
+                    Duplicate
                   </Button>
-                  {isAdmin ? (
-                    <Button
-                      variant="secondary"
-                      className="w-full sm:w-40"
-                      onClick={() => setDuplicateOpen(true)}
-                    >
-                      <Copy className="size-4" />
-                      Duplicate
+                ) : null}
+                {isAdmin ? (
+                  <>
+                    <Button variant="secondary" className="w-full sm:w-40" onClick={beginEdit}>
+                      <Pencil className="size-4" aria-hidden="true" />
+                      Edit details
                     </Button>
-                  ) : null}
-                  {isAdmin ? (
-                    <>
-                      <Button variant="secondary" className="w-full sm:w-40" onClick={beginEdit}>
-                        <Pencil className="size-4" aria-hidden="true" />
-                        Edit details
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        className="w-full sm:w-40"
-                        onClick={() => setDeleteOpen(true)}
-                      >
-                        <Trash2 className="size-4" aria-hidden="true" />
-                        Delete
-                      </Button>
-                    </>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="w-full sm:w-40"
-                    onClick={() => setMode("view")}
-                    disabled={saving}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    form="project-edit-form"
-                    className="w-full sm:w-40"
-                    disabled={saving || draftTitle.trim().length < 2}
-                  >
-                    <Check className="size-4" aria-hidden="true" />
-                    {saving ? "Saving…" : "Save changes"}
-                  </Button>
-                </>
-              )}
-            </div>
-          ) : null}
+                    <Button
+                      variant="destructive"
+                      className="w-full sm:w-40"
+                      onClick={() => {
+                        setConfirmTitle("");
+                        setDeleteOpen(true);
+                      }}
+                    >
+                      <Trash2 className="size-4" aria-hidden="true" />
+                      Delete
+                    </Button>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full sm:w-40"
+                  onClick={() => setMode("view")}
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  form="project-edit-form"
+                  className="w-full sm:w-40"
+                  disabled={saving || draftTitle.trim().length < 2}
+                >
+                  <Check className="size-4" aria-hidden="true" />
+                  {saving ? "Saving…" : "Save changes"}
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
         {mode === "view" ? (
@@ -524,51 +526,6 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                 access={project.access}
                 maxCollaborators={project.maxCollaborators}
               />
-            ) : null}
-
-            {isAdmin && deleteOpen ? (
-              <div className="flex max-w-md flex-col gap-3 rounded-md border border-destructive/30 bg-destructive/[0.04] p-4">
-                <div className="flex flex-col gap-1">
-                  <p className="font-medium text-sm">Delete this project?</p>
-                  <p className="text-muted-foreground text-sm leading-relaxed">
-                    This permanently removes{" "}
-                    <span className="text-foreground">{project.title}</span> and all its access.
-                    Type the title to confirm.
-                  </p>
-                </div>
-                <input
-                  type="text"
-                  aria-label={`Type ${project.title} to confirm deletion`}
-                  value={confirmTitle}
-                  onChange={(event) => setConfirmTitle(event.target.value)}
-                  disabled={deleting}
-                  autoComplete="off"
-                  placeholder={project.title}
-                  className={`h-10 ${fieldClass}`}
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    variant="destructive"
-                    className="w-full bg-destructive text-background hover:bg-destructive/90 hover:text-background"
-                    onClick={confirmDelete}
-                    disabled={deleting || confirmTitle.trim() !== project.title.trim()}
-                  >
-                    <Trash2 className="size-4" aria-hidden="true" />
-                    {deleting ? "Deleting…" : "Permanently delete"}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    className="w-full"
-                    onClick={() => {
-                      setDeleteOpen(false);
-                      setConfirmTitle("");
-                    }}
-                    disabled={deleting}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
             ) : null}
           </div>
         ) : (
@@ -721,6 +678,70 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
           </form>
         )}
       </section>
+      <Dialog
+        open={isAdmin && deleteOpen}
+        onClose={() => {
+          if (deleting) return;
+          setDeleteOpen(false);
+          setConfirmTitle("");
+        }}
+        title="Delete project"
+        icon={<Trash2 className="size-4 text-destructive" aria-hidden="true" />}
+        description="This action cannot be undone."
+        initialFocusRef={deleteInputRef}
+        className="max-w-md border-destructive/30"
+        footer={
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setDeleteOpen(false);
+                setConfirmTitle("");
+              }}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              className="bg-destructive text-background hover:bg-destructive/90 hover:text-background"
+              onClick={confirmDelete}
+              disabled={deleting || confirmTitle.trim() !== project.title.trim()}
+            >
+              {deleting ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Trash2 className="size-4" aria-hidden="true" />
+              )}
+              {deleting ? "Deleting…" : "Permanently delete"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-4 p-4">
+          <p className="text-muted-foreground text-sm leading-relaxed">
+            This permanently removes{" "}
+            <span className="font-medium text-foreground">{project.title}</span> and all its access.
+            Type the project title to confirm.
+          </p>
+          <div className="flex flex-col gap-2">
+            <label htmlFor="delete-project-title" className={labelClass}>
+              Project title
+            </label>
+            <input
+              ref={deleteInputRef}
+              id="delete-project-title"
+              type="text"
+              value={confirmTitle}
+              onChange={(event) => setConfirmTitle(event.target.value)}
+              disabled={deleting}
+              autoComplete="off"
+              placeholder={project.title}
+              className={`h-10 ${fieldClass}`}
+            />
+          </div>
+        </div>
+      </Dialog>
       <Dialog
         open={duplicateOpen}
         onClose={() => !duplicating && setDuplicateOpen(false)}

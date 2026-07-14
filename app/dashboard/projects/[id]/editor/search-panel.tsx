@@ -4,7 +4,7 @@ import { useQuery } from "convex/react";
 import { FileCode, FileText, Folder, Image as ImageIcon, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { pathOf, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
@@ -14,7 +14,7 @@ type ContentHit = {
   id: string;
   name: string;
   parentId: string | null;
-  fileType: "md" | "html" | "doc" | null;
+  fileType: "md" | "html" | null;
   snippet: Snippet;
 };
 
@@ -120,6 +120,7 @@ export function SearchPanel({
         <Search className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <input
           ref={inputRef}
+          data-project-search-input="true"
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={(event) => {
@@ -154,7 +155,7 @@ export function SearchPanel({
       ) : (
         <div id={resultsId} className="min-h-0 flex-1 overflow-auto py-1.5">
           {loading && nameMatches.length === 0 ? (
-            <DataSkeleton label="Searching project" rows={3} compact />
+            <DataLoader label="Searching project" compact />
           ) : null}
           {empty ? (
             <DataState title={`No matches for “${trimmed}”`} compact className="m-2" />

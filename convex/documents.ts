@@ -13,7 +13,6 @@ import {
   HARD_MAX_PROJECT_BYTES,
   MIN_PROJECT_BYTES,
 } from "./limits";
-import { BUILTIN_TEMPLATES } from "./templateContent";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_FILE_BYTES = 512 * 1024;
@@ -115,18 +114,36 @@ function fileTypeFromName(name: string): "md" | "html" | null {
   return null;
 }
 
+type FileType = "md" | "html";
+
+function requireFileTypeFromName(name: string): FileType {
+  const fileType = fileTypeFromName(name);
+  if (!fileType) throw new Error("invalid-type");
+  if (!name.slice(0, -`.${fileType}`.length).trim()) throw new Error("invalid-name");
+  return fileType;
+}
+
+function requestedFileType(raw: string, fallback: FileType): FileType {
+  const trimmed = raw.replaceAll("/", "").replaceAll("\\", "").trim();
+  const explicit = fileTypeFromName(trimmed);
+  if (explicit) return requireFileTypeFromName(trimmed);
+  if (/\.[^./\\]+$/.test(trimmed)) throw new Error("invalid-type");
+  return fallback;
+}
+
+function nameForFileType(raw: string, fileType: FileType): string {
+  const extension = `.${fileType}`;
+  const sanitized = raw.replaceAll("/", "").replaceAll("\\", "").trim();
+  const withoutSupportedExtension = sanitized.replace(/\.(md|html)$/i, "");
+  const stem = sanitized.toLowerCase().endsWith(extension)
+    ? sanitized.slice(0, -extension.length)
+    : withoutSupportedExtension;
+  if (!stem.trim()) throw new Error("invalid-name");
+  return cleanName(`${stem.slice(0, MAX_NAME_LENGTH - extension.length).trim()}${extension}`);
+}
+
 function importName(raw: string): string {
-  const name = cleanName(raw, "import.md");
-  if (/\.markdown$/i.test(name)) {
-    return `${name.slice(0, -9)}.md`;
-  }
-  if (/\.htm$/i.test(name)) {
-    return `${name.slice(0, -4)}.html`;
-  }
-  if (/\.txt$/i.test(name)) {
-    return `${name.slice(0, -4)}.md`;
-  }
-  return name;
+  return cleanName(raw, "import.md");
 }
 
 async function callerFor(ctx: QueryCtx, clerkOrgId: string) {
@@ -838,56 +855,12 @@ export const createFile = mutation({
   },
 });
 
-export const createDocument = mutation({
-  args: {
-    projectId: v.id("projects"),
-    parentId: v.union(v.id("documents"), v.null()),
-    name: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const access = await requireProjectEditor(ctx, args.projectId);
-    await assertParent(ctx, args.projectId, args.parentId);
-    await assertCapacity(ctx, args.projectId);
-    if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) {
-      throw new Error("too-deep");
-    }
-    const name = cleanName(args.name);
-    if (await nameTaken(ctx, args.projectId, args.parentId, name)) {
-      throw new Error("name-taken");
-    }
-    const now = Date.now();
-    const id = await ctx.db.insert("documents", {
-      projectId: args.projectId,
-      clerkOrgId: access.project.clerkOrgId,
-      parentId: args.parentId,
-      kind: "file",
-      name,
-      fileType: "doc",
-      content: "",
-      storageId: null,
-      mimeType: null,
-      size: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-    await recordProjectEvent(ctx, {
-      projectId: args.projectId,
-      clerkOrgId: access.project.clerkOrgId,
-      kind: "node_created",
-      documentId: id,
-      targetName: name,
-      detail: "doc",
-    });
-    return id;
-  },
-});
-
 export const createFromTemplate = mutation({
   args: {
     projectId: v.id("projects"),
     parentId: v.union(v.id("documents"), v.null()),
     name: v.string(),
-    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("doc")),
+    fileType: v.union(v.literal("md"), v.literal("html")),
     templateId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -895,28 +868,22 @@ export const createFromTemplate = mutation({
     await assertParent(ctx, args.projectId, args.parentId);
     await assertCapacity(ctx, args.projectId);
     if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) throw new Error("too-deep");
+    const fileType = requestedFileType(args.name, args.fileType);
     let content = "";
     let contentState: ArrayBuffer | undefined;
-    if (args.templateId?.startsWith("builtin:")) {
-      const template = BUILTIN_TEMPLATES.find((item) => item.id === args.templateId);
-      if (!template || template.fileType !== args.fileType) throw new Error("invalid-template");
-      content = template.content;
-    } else if (args.templateId) {
+    if (args.templateId) {
       const templateId = ctx.db.normalizeId("orgTemplates", args.templateId);
       const template = templateId ? await ctx.db.get(templateId) : null;
       if (
         !template ||
         template.clerkOrgId !== access.project.clerkOrgId ||
-        template.fileType !== args.fileType
+        template.fileType !== fileType
       )
         throw new Error("invalid-template");
       content = template.content;
       contentState = template.contentState;
     }
-    let rawName = args.name.trim();
-    if (args.fileType === "md" && !/\.md$/i.test(rawName)) rawName += ".md";
-    if (args.fileType === "html" && !/\.html$/i.test(rawName)) rawName += ".html";
-    const name = cleanName(rawName);
+    const name = nameForFileType(args.name, fileType);
     if (await nameTaken(ctx, args.projectId, args.parentId, name)) throw new Error("name-taken");
     const size = byteLength(content);
     if (size > MAX_FILE_BYTES) throw new Error("file-too-large");
@@ -927,7 +894,7 @@ export const createFromTemplate = mutation({
       throw new Error("project-full");
     if (!contentState) {
       const ydoc = new Y.Doc();
-      if (args.fileType !== "doc" && content) ydoc.getText("codemirror").insert(0, content);
+      if (content) ydoc.getText("codemirror").insert(0, content);
       contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
       ydoc.destroy();
     }
@@ -938,7 +905,7 @@ export const createFromTemplate = mutation({
       parentId: args.parentId,
       kind: "file",
       name,
-      fileType: args.fileType,
+      fileType,
       content,
       contentSeq: 1,
       contentState,
@@ -961,7 +928,7 @@ export const createFromTemplate = mutation({
       kind: "node_created",
       documentId: id,
       targetName: name,
-      detail: args.templateId ? "template" : args.fileType,
+      detail: args.templateId ? "template" : fileType,
     });
     return id;
   },
@@ -996,11 +963,8 @@ export const importDocuments = mutation({
     );
     const prepared = args.files.map((file) => {
       const name = importName(file.name);
-      const fileType = fileTypeFromName(name);
+      const fileType = requireFileTypeFromName(name);
       const size = byteLength(file.content);
-      if (!fileType) {
-        throw new Error("invalid-type");
-      }
       if (size > MAX_FILE_BYTES) {
         throw new Error("file-too-large");
       }
@@ -1074,14 +1038,7 @@ export const rename = mutation({
     const name = cleanName(args.name);
     let fileType = doc.fileType;
     if (doc.kind === "file") {
-      if (doc.fileType === "doc") {
-        fileType = "doc";
-      } else {
-        fileType = fileTypeFromName(name);
-        if (!fileType) {
-          throw new Error("invalid-type");
-        }
-      }
+      fileType = requireFileTypeFromName(name);
     }
     if (await nameTaken(ctx, doc.projectId, doc.parentId, name, doc._id)) {
       throw new Error("name-taken");
@@ -1192,7 +1149,7 @@ export const duplicate = mutation({
       throw new Error("project-full");
     }
     let state: ArrayBuffer | null = doc.contentState ?? null;
-    if (!state && doc.fileType !== "doc" && doc.content.length > 0) {
+    if (!state && doc.content.length > 0) {
       const seedDoc = new Y.Doc();
       seedDoc.getText("codemirror").insert(0, doc.content);
       state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
@@ -1506,160 +1463,6 @@ function buildSnippet(
   };
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function safeUrl(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (/^(?:https?:|mailto:|tel:|\/|#)/i.test(trimmed)) {
-    return trimmed;
-  }
-  return null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function markedText(text: string, attrs: Record<string, unknown>): string {
-  let out = escapeHtml(text);
-  if (attrs.code) {
-    out = `<code>${out}</code>`;
-  }
-  if (attrs.bold || attrs.strong) {
-    out = `<strong>${out}</strong>`;
-  }
-  if (attrs.italic || attrs.em) {
-    out = `<em>${out}</em>`;
-  }
-  if (attrs.strike) {
-    out = `<s>${out}</s>`;
-  }
-  const link = safeUrl(asRecord(attrs.link).href ?? attrs.href);
-  if (link) {
-    out = `<a href="${escapeHtml(link)}">${out}</a>`;
-  }
-  return out;
-}
-
-function textHtml(node: Y.XmlText): string {
-  let out = "";
-  for (const op of node.toDelta() as Array<{ insert?: unknown; attributes?: unknown }>) {
-    if (typeof op.insert === "string") {
-      out += markedText(op.insert, asRecord(op.attributes));
-    }
-  }
-  return out;
-}
-
-function plainText(node: Y.XmlFragment | Y.XmlElement | Y.XmlText): string {
-  if (node instanceof Y.XmlText) {
-    return (node.toDelta() as Array<{ insert?: unknown }>)
-      .map((op) => (typeof op.insert === "string" ? op.insert : ""))
-      .join("");
-  }
-  return node
-    .toArray()
-    .map((child) => plainText(child as Y.XmlFragment | Y.XmlElement | Y.XmlText))
-    .join("");
-}
-
-function elementLevel(element: Y.XmlElement): number {
-  const raw = element.getAttribute("level");
-  const value = typeof raw === "number" ? raw : Number(raw);
-  return Number.isFinite(value) ? Math.min(6, Math.max(1, value)) : 1;
-}
-
-function childrenHtml(element: Y.XmlElement | Y.XmlFragment): string {
-  return element
-    .toArray()
-    .map((child) => richNodeHtml(child as Y.XmlFragment | Y.XmlElement | Y.XmlText))
-    .join("");
-}
-
-function richNodeHtml(node: Y.XmlFragment | Y.XmlElement | Y.XmlText): string {
-  if (node instanceof Y.XmlText) {
-    return textHtml(node);
-  }
-  if (!(node instanceof Y.XmlElement)) {
-    return childrenHtml(node);
-  }
-  const name = node.nodeName;
-  const inner = childrenHtml(node);
-  if (name === "paragraph") {
-    return `<p>${inner || "<br>"}</p>`;
-  }
-  if (name === "heading") {
-    const level = elementLevel(node);
-    return `<h${level}>${inner}</h${level}>`;
-  }
-  if (name === "bulletList" || name === "bullet_list") {
-    return `<ul>${inner}</ul>`;
-  }
-  if (name === "orderedList" || name === "ordered_list") {
-    return `<ol>${inner}</ol>`;
-  }
-  if (name === "listItem" || name === "list_item") {
-    return `<li>${inner}</li>`;
-  }
-  if (name === "blockquote") {
-    return `<blockquote>${inner}</blockquote>`;
-  }
-  if (name === "codeBlock" || name === "code_block") {
-    return `<pre><code>${escapeHtml(plainText(node))}</code></pre>`;
-  }
-  if (name === "horizontalRule" || name === "horizontal_rule") {
-    return "<hr>";
-  }
-  if (name === "hardBreak" || name === "hard_break") {
-    return "<br>";
-  }
-  const imageSrc = safeUrl(node.getAttribute("src"));
-  if (name === "image" && imageSrc) {
-    const alt = escapeHtml(String(node.getAttribute("alt") ?? ""));
-    const title = escapeHtml(String(node.getAttribute("title") ?? ""));
-    return `<img src="${escapeHtml(imageSrc)}" alt="${alt}"${title ? ` title="${title}"` : ""}>`;
-  }
-  return inner;
-}
-
-function fallbackRichTextHtml(content: string): string {
-  const paragraphs = content
-    .split(/\n{2,}/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (paragraphs.length === 0) {
-    return "<p><br></p>";
-  }
-  return paragraphs.map((part) => `<p>${escapeHtml(part).replace(/\n/g, "<br>")}</p>`).join("");
-}
-
-export function richDocumentHtml(doc: Doc<"documents">): string {
-  let body = doc.content ? fallbackRichTextHtml(doc.content) : "<p><br></p>";
-  if (doc.contentState) {
-    const ydoc = new Y.Doc();
-    try {
-      Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
-      const fragment = ydoc.getXmlFragment("prosemirror");
-      const rendered = childrenHtml(fragment);
-      if (rendered.trim().length > 0) {
-        body = rendered;
-      }
-    } finally {
-      ydoc.destroy();
-    }
-  }
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(doc.name)}</title><style>body{margin:0;background:#fff;color:#1a1d24;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}.doc{max-width:820px;margin:0 auto;padding:2.5rem 2rem;line-height:1.7}.doc h1,.doc h2,.doc h3{line-height:1.25}.doc blockquote{border-left:3px solid #cbd0d8;margin:1em 0;padding-left:1rem;color:#5b626e}.doc pre{background:#f4f5f7;border:1px solid #e2e4e9;border-radius:8px;overflow:auto;padding:1rem}.doc code{font-family:ui-monospace,SFMono-Regular,monospace}.doc img{max-width:100%;height:auto}.doc table{border-collapse:collapse;width:100%}.doc th,.doc td{border:1px solid #e2e4e9;padding:.4rem .6rem;text-align:left}@page{margin:1.6cm}</style></head><body><main class="doc">${body}</main></body></html>`;
-}
-
 export const search = query({
   args: { projectId: v.id("projects"), query: v.string() },
   handler: async (ctx, args) => {
@@ -1712,12 +1515,7 @@ export const exportBundle = query({
         kind: doc.kind,
         name: doc.name,
         fileType: doc.fileType,
-        content:
-          doc.kind === "file" && doc.fileType === "doc"
-            ? richDocumentHtml(doc)
-            : doc.kind === "file"
-              ? doc.content
-              : "",
+        content: doc.kind === "file" ? doc.content : "",
         mimeType: doc.mimeType,
         assetUrl:
           doc.kind === "asset" && doc.storageId ? await ctx.storage.getUrl(doc.storageId) : null,

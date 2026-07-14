@@ -1,9 +1,9 @@
-import { FileCode, FileText, FileType, Folder, Image as ImageIcon } from "lucide-react";
+import { FileCode, FileText, Folder, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type FileIconProps = {
   kind: "folder" | "file" | "asset";
-  fileType?: "md" | "html" | "doc" | null;
+  fileType?: "md" | "html" | null;
   className?: string;
 };
 
@@ -17,9 +17,6 @@ export function FileIcon({ kind, fileType, className }: FileIconProps) {
   }
   if (fileType === "html") {
     return <FileCode className={cn(base, "text-warning")} aria-hidden="true" />;
-  }
-  if (fileType === "doc") {
-    return <FileType className={cn(base, "text-success")} aria-hidden="true" />;
   }
   return <FileText className={cn(base, "text-accent")} aria-hidden="true" />;
 }

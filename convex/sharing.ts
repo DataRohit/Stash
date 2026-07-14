@@ -4,13 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
-import {
-  accessForProject,
-  isInactive,
-  isInactiveTree,
-  requireProjectAdmin,
-  richDocumentHtml,
-} from "./documents";
+import { accessForProject, isInactive, isInactiveTree, requireProjectAdmin } from "./documents";
 import { secretMatches } from "./secrets";
 
 type ShareMode = "private" | "org" | "public";
@@ -522,7 +516,6 @@ export const redeemShare = mutation({
       documentName: doc.name,
       fileType: doc.fileType,
       content: doc.content,
-      docHtml: doc.fileType === "doc" ? richDocumentHtml(doc) : null,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,

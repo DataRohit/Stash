@@ -22,18 +22,11 @@ type ExportMenuProps = {
   fileNode: TreeNode;
   content: string;
   nodes: TreeNode[];
-  richContentState?: ArrayBuffer | null;
 };
 
 type Action = "md" | "html" | "pdf" | "zip";
 
-export function ExportMenu({
-  projectId,
-  fileNode,
-  content,
-  nodes,
-  richContentState = null,
-}: ExportMenuProps) {
+export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuProps) {
   const convex = useConvex();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Action | null>(null);
@@ -142,7 +135,7 @@ export function ExportMenu({
             disabled={Boolean(busy)}
             onClick={() =>
               run("html", async () =>
-                exportHtml(fileNode, content, await nodesWithRenderedAssets(), richContentState),
+                exportHtml(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />
@@ -153,9 +146,7 @@ export function ExportMenu({
             loading={busy === "pdf"}
             disabled={Boolean(busy)}
             onClick={() =>
-              run("pdf", async () =>
-                exportPdf(fileNode, content, await nodesWithRenderedAssets(), richContentState),
-              )
+              run("pdf", async () => exportPdf(fileNode, content, await nodesWithRenderedAssets()))
             }
           />
           <div className="my-1 h-px bg-hairline" />

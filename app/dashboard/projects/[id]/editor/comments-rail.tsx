@@ -2,7 +2,7 @@
 
 import { Check, CornerDownRight, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { DataSkeleton, DataState } from "@/components/ui/data-state";
+import { DataLoader, DataState } from "@/components/ui/data-state";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
@@ -341,7 +341,7 @@ export function CommentsRail({
           </section>
 
           {loading ? (
-            <DataSkeleton label="Loading comments" rows={4} compact />
+            <DataLoader label="Loading comments" compact />
           ) : threads.length === 0 ? (
             <DataState
               title="No comments yet"

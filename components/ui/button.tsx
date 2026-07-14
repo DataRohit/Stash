@@ -7,7 +7,7 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: "larry-shadow bg-foreground text-background hover:bg-foreground/90",
+        primary: "bg-foreground text-background hover:bg-foreground/90",
         secondary:
           "press-shadow hairline bg-surface/45 text-foreground backdrop-blur hover:bg-foreground/[0.05]",
         ghost:
@@ -26,6 +26,10 @@ export const buttonVariants = cva(
         icon: "size-9",
       },
     },
+    compoundVariants: [
+      { variant: "primary", size: "lg", class: "larry-shadow" },
+      { variant: "primary", size: ["default", "sm", "icon"], class: "press-shadow" },
+    ],
     defaultVariants: {
       variant: "primary",
       size: "default",

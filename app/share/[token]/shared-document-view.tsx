@@ -13,9 +13,8 @@ export type SharedDocument = {
   projectTitle: string;
   documentId: string;
   documentName: string;
-  fileType: "md" | "html" | "doc" | null;
+  fileType: "md" | "html" | null;
   content: string;
-  docHtml: string | null;
   updatedAt: number;
   nodes: TreeNode[];
   fileLinks: { documentId: string; href: string }[];
@@ -76,14 +75,7 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
         </span>
       </header>
       <section className="editor-surface min-h-0 flex-1 overflow-hidden rounded-lg">
-        {shared.fileType === "doc" ? (
-          <iframe
-            title="Shared document"
-            srcDoc={shared.docHtml ?? "<!doctype html><p></p>"}
-            sandbox=""
-            className="size-full border-0 bg-white"
-          />
-        ) : fileNode ? (
+        {fileNode ? (
           <DocPreview
             fileNode={fileNode}
             content={shared.content}
