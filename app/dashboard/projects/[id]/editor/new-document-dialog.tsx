@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { FileCode, FileText, Loader2, NotebookPen, TableProperties } from "lucide-react";
+import { Columns3, FileCode, FileText, Loader2, NotebookPen, TableProperties } from "lucide-react";
 import { useRef, useState } from "react";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,12 @@ const FILE_TYPES = [
     description: "A collaborative typed grid.",
     extension: ".sheet",
   },
+  {
+    id: "board",
+    name: "Kanban board",
+    description: "Columns and cards for collaborative work.",
+    extension: ".board",
+  },
 ] as const;
 
 function explicitFileType(name: string): FileType | null {
@@ -41,6 +47,7 @@ function explicitFileType(name: string): FileType | null {
   if (lower.endsWith(".md")) return "md";
   if (lower.endsWith(".html")) return "html";
   if (lower.endsWith(".sheet")) return "sheet";
+  if (lower.endsWith(".board")) return "board";
   return null;
 }
 
@@ -60,7 +67,7 @@ function fileNameWithExtension(name: string, fileType: FileType) {
   const sanitized = name.replaceAll("/", "").replaceAll("\\", "").trim();
   if (!sanitized) return "";
   if (hasUnsupportedExtension(sanitized)) return sanitized;
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board)$/i, "");
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -102,7 +109,7 @@ export function NewDocumentDialog({
   const create = async () => {
     if (!name.trim()) return;
     if (hasUnsupportedExtension(name)) {
-      setError("Only .md, .html, and .sheet file extensions are supported.");
+      setError("Only .md, .html, .sheet, and .board file extensions are supported.");
       return;
     }
     if (hasMissingBaseName(name)) {
@@ -125,7 +132,14 @@ export function NewDocumentDialog({
       setBusy(false);
     }
   };
-  const Icon = fileType === "html" ? FileCode : fileType === "sheet" ? TableProperties : FileText;
+  const Icon =
+    fileType === "html"
+      ? FileCode
+      : fileType === "sheet"
+        ? TableProperties
+        : fileType === "board"
+          ? Columns3
+          : FileText;
   const finalName = fileNameWithExtension(name, fileType);
   const invalidExtension = hasUnsupportedExtension(name);
   const missingBaseName = hasMissingBaseName(name);
@@ -186,7 +200,7 @@ export function NewDocumentDialog({
           />
           {invalidExtension ? (
             <p className="mt-1.5 text-destructive text-xs">
-              Only .md, .html, and .sheet file extensions are supported.
+              Only .md, .html, .sheet, and .board file extensions are supported.
             </p>
           ) : missingBaseName ? (
             <p className="mt-1.5 text-destructive text-xs">
@@ -203,7 +217,7 @@ export function NewDocumentDialog({
           <p className="mb-2 font-mono text-muted-foreground text-xs uppercase tracking-widest">
             File type
           </p>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-2">
             {FILE_TYPES.map((item) => (
               <button
                 type="button"

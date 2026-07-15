@@ -33,6 +33,10 @@ import {
 } from "react";
 import * as Y from "yjs";
 import {
+  type BoardCardSelection,
+  BoardEditor,
+} from "@/app/dashboard/projects/[id]/editor/board-editor";
+import {
   CommentsRail,
   type CommentThread,
   type MentionCandidate,
@@ -339,6 +343,7 @@ export function ProjectEditor({
       ? initialCanEdit
       : Boolean(project?.isAdmin || project?.viewerLevel === "editor");
   const isAdmin = project === undefined ? initialIsAdmin : Boolean(project?.isAdmin);
+  const activeProjectTitle = project?.title ?? projectTitle;
   const editAccessRevoked = project !== undefined && initialCanEdit && !canEdit;
   const nodesData = useQuery(api.documents.listByProject, accessLost ? "skip" : { projectId: pid });
   const nodes = useMemo(() => (nodesData ?? []) as TreeNode[], [nodesData]);
@@ -380,6 +385,7 @@ export function ProjectEditor({
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [editorSelection, setEditorSelection] = useState<EditorSelectionState | null>(null);
   const [sheetSelection, setSheetSelection] = useState<SheetCellSelection | null>(null);
+  const [boardSelection, setBoardSelection] = useState<BoardCardSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState<CommentFocusRequest | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -485,7 +491,13 @@ export function ProjectEditor({
   );
   const mentionCandidatesData = useQuery(
     api.comments.mentionCandidates,
-    commentsOpen && selectedFileId && !accessLost ? { projectId: pid } : "skip",
+    (commentsOpen || selectedNode?.fileType === "board") && selectedFileId && !accessLost
+      ? { projectId: pid }
+      : "skip",
+  );
+  const boardMembersData = useQuery(
+    api.members.listByOrg,
+    selectedNode?.fileType === "board" && !accessLost ? { clerkOrgId } : "skip",
   );
   const shareStateData = useQuery(
     api.sharing.getState,
@@ -500,6 +512,22 @@ export function ProjectEditor({
   const mentionCandidates = useMemo(
     () => (mentionCandidatesData ?? []) as MentionCandidate[],
     [mentionCandidatesData],
+  );
+  const boardMembers = useMemo<MentionCandidate[]>(
+    () =>
+      (boardMembersData ?? []).flatMap((member) => {
+        if (member.status !== "accepted" || !member.memberUserId) return [];
+        const name = [member.firstName, member.lastName].filter(Boolean).join(" ") || member.email;
+        return [
+          {
+            userId: member.memberUserId,
+            name,
+            email: member.email,
+            imageUrl: member.imageUrl,
+          },
+        ];
+      }),
+    [boardMembersData],
   );
   const shareState = useMemo(
     () => shareStateData as ShareState | null | undefined,
@@ -549,9 +577,13 @@ export function ProjectEditor({
       ? sheetSelection
         ? { from: 0, to: 1, text: sheetSelection.quote || "Empty cell" }
         : null
-      : effectiveViewMode === "preview"
-        ? null
-        : editorSelection;
+      : selectedNode?.fileType === "board"
+        ? boardSelection
+          ? { from: 0, to: 1, text: boardSelection.quote }
+          : null
+        : effectiveViewMode === "preview"
+          ? null
+          : editorSelection;
   const outlineItems = useMemo<OutlineItem[]>(() => {
     if (!outlineOpen || !selectedFileId || selectedNode?.kind !== "file") {
       return [];
@@ -641,6 +673,8 @@ export function ProjectEditor({
     setSeededFileId(selectedFileId);
     setBuffer(doc.content);
     setEditorSelection(null);
+    setSheetSelection(null);
+    setBoardSelection(null);
     setShareOpen(false);
   }
 
@@ -889,6 +923,28 @@ export function ProjectEditor({
       }
       return;
     }
+    if (selectedNode?.fileType === "board") {
+      if (!selectedFileId || !collab?.ready || !boardSelection) {
+        notify.error("Select a card first");
+        return;
+      }
+      try {
+        const commentId = await createCommentThread({
+          documentId: selectedFileId as Id<"documents">,
+          anchor: { kind: "card", cardId: boardSelection.cardId },
+          quote: boardSelection.quote,
+          body,
+          mentionUserIds,
+        });
+        setCommentsOpen(true);
+        setActiveCommentId(commentId);
+        notify.success("Comment added");
+      } catch (error) {
+        notify.error("Comment failed", { description: mapDocError(error) });
+        throw error;
+      }
+      return;
+    }
     if (
       !selectedFileId ||
       !collab?.ready ||
@@ -996,6 +1052,10 @@ export function ProjectEditor({
 
   const focusThread = (commentId: string) => {
     setActiveCommentId(commentId);
+    const thread = commentThreads.find((item) => item.id === commentId);
+    if (thread?.anchor.kind === "card" && !thread.orphaned) {
+      setBoardSelection({ cardId: thread.anchor.cardId, quote: thread.quote });
+    }
     const range = resolvedCommentRanges.get(commentId);
     if (range) {
       setFocusRequest({ id: commentId, from: range.from, to: range.to, nonce: Date.now() });
@@ -1132,7 +1192,7 @@ export function ProjectEditor({
             className="flex min-w-0 shrink items-center gap-1.5 font-medium font-mono text-muted-foreground text-xs uppercase tracking-widest transition-colors hover:text-foreground sm:max-w-48"
           >
             <ArrowLeft className="size-3.5" aria-hidden="true" />
-            <span className="hidden truncate sm:inline">{projectTitle}</span>
+            <span className="hidden truncate sm:inline">{activeProjectTitle}</span>
           </Link>
           {selectedNode ? (
             <span className="min-w-0 truncate font-mono text-muted-foreground text-xs">
@@ -1252,29 +1312,33 @@ export function ProjectEditor({
                   ) : null}
                 </button>
               ) : null}
-              <button
-                type="button"
-                onClick={() => setOutlineOpen((value) => !value)}
-                aria-label="Document outline"
-                aria-haspopup="dialog"
-                aria-expanded={outlineOpen}
-                aria-pressed={outlineOpen}
-                className={cn(
-                  "hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors lg:flex",
-                  outlineOpen
-                    ? "bg-foreground/[0.08] text-foreground"
-                    : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
-                )}
-              >
-                <List className="size-4" aria-hidden="true" />
-              </button>
+              {selectedNode?.fileType !== "sheet" && selectedNode?.fileType !== "board" ? (
+                <button
+                  type="button"
+                  onClick={() => setOutlineOpen((value) => !value)}
+                  aria-label="Document outline"
+                  aria-haspopup="dialog"
+                  aria-expanded={outlineOpen}
+                  aria-pressed={outlineOpen}
+                  className={cn(
+                    "hidden size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors lg:flex",
+                    outlineOpen
+                      ? "bg-foreground/[0.08] text-foreground"
+                      : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                  )}
+                >
+                  <List className="size-4" aria-hidden="true" />
+                </button>
+              ) : null}
               {selectedNode?.kind === "file" && doc ? (
                 <ExportMenu
                   projectId={pid}
                   fileNode={selectedNode}
                   content={canEdit ? buffer : doc.content}
                   nodes={nodes}
-                  ydoc={doc.fileType === "sheet" ? collab?.ydoc : undefined}
+                  ydoc={
+                    doc.fileType === "sheet" || doc.fileType === "board" ? collab?.ydoc : undefined
+                  }
                 />
               ) : null}
               {isAdmin && selectedFileId ? (
@@ -1305,20 +1369,27 @@ export function ProjectEditor({
                     className="absolute top-10 right-0 z-[80] w-48 rounded-lg border border-hairline bg-surface p-1 shadow-xl"
                     role="menu"
                   >
+                    {selectedNode?.fileType !== "sheet" && selectedNode?.fileType !== "board" ? (
+                      <button
+                        ref={moreFirstRef}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          setOutlineOpen(true);
+                        }}
+                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                      >
+                        <List className="size-4" aria-hidden="true" />
+                        Document outline
+                      </button>
+                    ) : null}
                     <button
-                      ref={moreFirstRef}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setMoreOpen(false);
-                        setOutlineOpen(true);
-                      }}
-                      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
-                    >
-                      <List className="size-4" aria-hidden="true" />
-                      Document outline
-                    </button>
-                    <button
+                      ref={
+                        selectedNode?.fileType === "sheet" || selectedNode?.fileType === "board"
+                          ? moreFirstRef
+                          : undefined
+                      }
                       type="button"
                       role="menuitem"
                       onClick={() => {
@@ -1353,7 +1424,7 @@ export function ProjectEditor({
               >
                 <CircleHelp className="size-4" aria-hidden="true" />
               </button>
-              {selectedNode?.fileType !== "sheet" ? (
+              {selectedNode?.fileType !== "sheet" && selectedNode?.fileType !== "board" ? (
                 <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                   <legend className="sr-only">View mode</legend>
                   {(
@@ -1525,6 +1596,22 @@ export function ProjectEditor({
                     onImportFile={replaceSelectedSheet}
                   />
                 </div>
+              ) : doc.fileType === "board" && collab?.ydoc && collab.awareness ? (
+                <div className="min-h-0 flex-1">
+                  <BoardEditor
+                    key={selectedFileId}
+                    ydoc={collab.ydoc}
+                    awareness={collab.awareness}
+                    ready={collab.ready}
+                    canEdit={canEdit && !collab.blocked}
+                    members={boardMembers}
+                    nodes={nodes}
+                    selectedCardId={boardSelection?.cardId ?? null}
+                    onSelectionChange={setBoardSelection}
+                    onOpenComments={() => setCommentsOpen(true)}
+                    onOpenDocument={selectNode}
+                  />
+                </div>
               ) : (
                 <div className="flex min-h-0 flex-1">
                   {effectiveViewMode !== "preview" ? (
@@ -1625,7 +1712,8 @@ export function ProjectEditor({
         {outlineOpen &&
         selectedFileId &&
         selectedNode?.kind === "file" &&
-        selectedNode.fileType !== "sheet" ? (
+        selectedNode.fileType !== "sheet" &&
+        selectedNode.fileType !== "board" ? (
           <OutlinePanel
             open={outlineOpen}
             items={outlineItems}
@@ -1641,7 +1729,13 @@ export function ProjectEditor({
             ranges={resolvedCommentRanges}
             activeThreadId={activeCommentId}
             selection={commentSelection}
-            selectionKind={selectedNode?.fileType === "sheet" ? "cell" : "text"}
+            selectionKind={
+              selectedNode?.fileType === "sheet"
+                ? "cell"
+                : selectedNode?.fileType === "board"
+                  ? "card"
+                  : "text"
+            }
             onClose={() => setCommentsOpen(false)}
             onCreate={createThreadFromSelection}
             onReply={replyToThread}

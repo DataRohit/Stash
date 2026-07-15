@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
 import { isRasterAssetMimeType } from "../lib/asset-formats";
-import { documentSize, project, sheetRenderModel } from "../lib/doc-projection";
+import { inspectBoard, MAX_BOARD_STORED_BYTES, seedBoard } from "../lib/board-model";
+import { boardRenderModel, documentSize, project, sheetRenderModel } from "../lib/doc-projection";
 import type { FileType } from "../lib/document-types";
 import { TRASH_RETENTION_MS } from "../lib/lifecycle";
 import { serializeDelimited } from "../lib/sheet-csv";
@@ -124,6 +125,9 @@ function fileTypeFromName(name: string): FileType | null {
   if (lower.endsWith(".sheet")) {
     return "sheet";
   }
+  if (lower.endsWith(".board")) {
+    return "board";
+  }
   return null;
 }
 
@@ -145,7 +149,7 @@ function requestedFileType(raw: string, fallback: FileType): FileType {
 function nameForFileType(raw: string, fileType: FileType): string {
   const extension = `.${fileType}`;
   const sanitized = raw.replaceAll("/", "").replaceAll("\\", "").trim();
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|csv|tsv)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|csv|tsv)$/i, "");
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -753,6 +757,7 @@ export const getDocument = query({
       content: doc.content,
       contentSeq: doc.contentSeq ?? 0,
       sheetMeta: doc.sheetMeta,
+      boardMeta: doc.boardMeta,
       mimeType: doc.mimeType,
       size: doc.size,
       assetUrl:
@@ -846,6 +851,7 @@ export const createFile = mutation({
     let contentSeq: number | undefined;
     let size = 0;
     let sheetMeta: { rows: number; cols: number } | undefined;
+    let boardMeta: { columns: number; cards: number } | undefined;
     if (fileType === "sheet") {
       const ydoc = new Y.Doc();
       sheetMeta = seedSheet(ydoc).dimensions;
@@ -855,6 +861,21 @@ export const createFile = mutation({
       contentSeq = 1;
       ydoc.destroy();
       if (size > MAX_SHEET_STORED_BYTES) throw new Error("file-too-large");
+      if (
+        (await cachedProjectBytes(ctx, access.project)) + size >
+        (await maxProjectBytes(ctx, access.project))
+      ) {
+        throw new Error("project-full");
+      }
+    } else if (fileType === "board") {
+      const ydoc = new Y.Doc();
+      boardMeta = seedBoard(ydoc).dimensions;
+      content = project(fileType, ydoc);
+      size = documentSize(fileType, ydoc);
+      contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+      contentSeq = 1;
+      ydoc.destroy();
+      if (size > MAX_BOARD_STORED_BYTES) throw new Error("file-too-large");
       if (
         (await cachedProjectBytes(ctx, access.project)) + size >
         (await maxProjectBytes(ctx, access.project))
@@ -874,6 +895,7 @@ export const createFile = mutation({
       contentSeq,
       contentState,
       sheetMeta,
+      boardMeta,
       storageId: null,
       mimeType: null,
       size,
@@ -906,7 +928,7 @@ export const createFromTemplate = mutation({
     projectId: v.id("projects"),
     parentId: v.union(v.id("documents"), v.null()),
     name: v.string(),
-    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("sheet")),
+    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("sheet"), v.literal("board")),
     templateId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -936,17 +958,21 @@ export const createFromTemplate = mutation({
       Y.applyUpdate(ydoc, new Uint8Array(contentState));
     } else if (fileType === "sheet") {
       seedSheet(ydoc);
+    } else if (fileType === "board") {
+      seedBoard(ydoc);
     } else if (content) {
       ydoc.getText("codemirror").insert(0, content);
     }
     content = project(fileType, ydoc);
     const size = documentSize(fileType, ydoc);
     const sheetMeta = fileType === "sheet" ? inspectSheet(ydoc).dimensions : undefined;
+    const boardMeta = fileType === "board" ? inspectBoard(ydoc).dimensions : undefined;
     contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
     ydoc.destroy();
     if (
       byteLength(content) > MAX_FILE_BYTES ||
-      (fileType === "sheet" && size > MAX_SHEET_STORED_BYTES)
+      (fileType === "sheet" && size > MAX_SHEET_STORED_BYTES) ||
+      (fileType === "board" && size > MAX_BOARD_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }
@@ -967,6 +993,7 @@ export const createFromTemplate = mutation({
       contentSeq: 1,
       contentState,
       sheetMeta,
+      boardMeta,
       storageId: null,
       mimeType: null,
       size,
@@ -1298,6 +1325,11 @@ export const duplicate = mutation({
       seedSheet(seedDoc);
       state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
       seedDoc.destroy();
+    } else if (!state && doc.fileType === "board") {
+      const seedDoc = new Y.Doc();
+      seedBoard(seedDoc);
+      state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
+      seedDoc.destroy();
     } else if (!state && doc.content.length > 0) {
       const seedDoc = new Y.Doc();
       seedDoc.getText("codemirror").insert(0, doc.content);
@@ -1317,6 +1349,7 @@ export const duplicate = mutation({
       contentSeq: state ? 1 : undefined,
       contentState: state ?? undefined,
       sheetMeta: doc.sheetMeta,
+      boardMeta: doc.boardMeta,
       storageId: null,
       mimeType: null,
       size: doc.size,
@@ -1346,7 +1379,9 @@ export const setContent = mutation({
     if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
-    if (doc.fileType === "sheet") throw new Error("unsupported-filetype");
+    if (doc.fileType === "sheet" || doc.fileType === "board") {
+      throw new Error("unsupported-filetype");
+    }
     const access = await requireProjectEditor(ctx, doc.projectId);
     const newSize = byteLength(args.content);
     if (newSize > MAX_FILE_BYTES) {
@@ -1682,6 +1717,21 @@ export const exportBundle = query({
             ",",
             "\r\n",
           );
+          ydoc.destroy();
+        } else if (doc.kind === "file" && doc.fileType === "board" && doc.contentState) {
+          const ydoc = new Y.Doc();
+          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          const model = boardRenderModel(ydoc);
+          content = model.columns
+            .map((column) =>
+              [
+                `## ${column.name}`,
+                ...column.cards.map(
+                  (card) => `- **${card.title}**\n\n  ${card.description.replaceAll("\n", "\n  ")}`,
+                ),
+              ].join("\n\n"),
+            )
+            .join("\n\n");
           ydoc.destroy();
         }
         return {

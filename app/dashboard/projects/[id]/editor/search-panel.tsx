@@ -1,9 +1,10 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { FileCode, FileText, Folder, Image as ImageIcon, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { pathOf, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { FileIcon } from "@/components/file-icon";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -30,17 +31,7 @@ type SearchPanelProps = {
 };
 
 function NodeGlyph({ node }: { node: TreeNode }) {
-  if (node.kind === "folder") {
-    return <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
-  }
-  if (node.kind === "asset") {
-    return <ImageIcon className="size-4 shrink-0 text-info" aria-hidden="true" />;
-  }
-  return node.fileType === "html" ? (
-    <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />
-  ) : (
-    <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />
-  );
+  return <FileIcon kind={node.kind} fileType={node.fileType} />;
 }
 
 function Highlighted({ text, term }: { text: string; term: string }) {
@@ -208,11 +199,7 @@ export function SearchPanel({
                         )}
                       >
                         <span className="flex items-center gap-2">
-                          {hit.fileType === "html" ? (
-                            <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />
-                          ) : (
-                            <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />
-                          )}
+                          <FileIcon kind="file" fileType={hit.fileType} />
                           <span className="min-w-0 flex-1 truncate text-foreground text-xs">
                             {hit.name}
                           </span>

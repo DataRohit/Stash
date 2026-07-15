@@ -15,6 +15,7 @@ const DOC_ERROR_MESSAGES: ReadonlyArray<readonly [string, string]> = [
   ["update-too-large", "That edit is too large to sync at once. Split it into smaller changes."],
   ["invalid-update", "That edit could not be validated. The last synced version was restored."],
   ["too-many-cells", "That spreadsheet would exceed its row, column, or 100,000-cell limit."],
+  ["too-many-cards", "That board would exceed its 100-column or 2,000-card limit."],
   [
     "import-conflict",
     "The spreadsheet changed during import. Review the latest edits and try again.",
@@ -39,7 +40,7 @@ const DOC_ERROR_MESSAGES: ReadonlyArray<readonly [string, string]> = [
   ["invalid-target", "You can’t move a folder into itself."],
   ["invalid-tree", "The project tree could not be processed safely."],
   ["invalid-title", "Enter a project title with at least 2 characters."],
-  ["invalid-type", "Document names must end in .md, .html, or .sheet."],
+  ["invalid-type", "Document names must end in .md, .html, .sheet, or .board."],
   ["invalid-name", "That name isn’t allowed."],
   ["name-taken", "A file or folder with that name already exists here."],
   ["too-deep", "Folders can’t be nested that deeply."],

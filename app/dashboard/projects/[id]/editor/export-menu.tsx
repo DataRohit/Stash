@@ -15,6 +15,9 @@ import type * as Y from "yjs";
 import { referencedAssetIds } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import {
   type BundleNode,
+  exportBoardHtml,
+  exportBoardMarkdown,
+  exportBoardPdf,
   exportHtml,
   exportMarkdown,
   exportPdf,
@@ -105,6 +108,7 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
 
   const isMd = fileNode.fileType === "md";
   const isSheet = fileNode.fileType === "sheet";
+  const isBoard = fileNode.fileType === "board";
 
   return (
     <div ref={ref} className="relative">
@@ -141,6 +145,16 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
               onClick={() => run("md", () => exportMarkdown(fileNode, content))}
             />
           ) : null}
+          {isBoard && ydoc ? (
+            <ExportItem
+              icon={<FileText className="size-4 text-accent" aria-hidden="true" />}
+              label="Board as Markdown"
+              hint=".md"
+              loading={busy === "md"}
+              disabled={Boolean(busy)}
+              onClick={() => run("md", () => exportBoardMarkdown(fileNode, ydoc))}
+            />
+          ) : null}
           {isSheet && ydoc ? (
             <ExportItem
               icon={<FileSpreadsheet className="size-4 text-accent" aria-hidden="true" />}
@@ -161,7 +175,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
               run("html", async () =>
                 isSheet && ydoc
                   ? exportSheetHtml(fileNode, ydoc)
-                  : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
+                  : isBoard && ydoc
+                    ? exportBoardHtml(fileNode, ydoc)
+                    : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />
@@ -175,7 +191,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
               run("pdf", async () =>
                 isSheet && ydoc
                   ? exportSheetPdf(fileNode, ydoc)
-                  : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
+                  : isBoard && ydoc
+                    ? exportBoardPdf(fileNode, ydoc)
+                    : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />

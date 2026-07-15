@@ -1,6 +1,14 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
-import { documentSize, project, sheetRenderModel } from "../lib/doc-projection";
+import {
+  BoardValidationError,
+  getBoardRoots,
+  inspectBoard,
+  MAX_BOARD_STORED_BYTES,
+  seedBoard,
+  UNFILED_COLUMN_ID,
+} from "../lib/board-model";
+import { boardRenderModel, documentSize, project, sheetRenderModel } from "../lib/doc-projection";
 import type { FileType } from "../lib/document-types";
 import {
   getSheetRoots,
@@ -40,8 +48,8 @@ const MAX_HISTORY_PER_DOC = 50;
 const HISTORY_PRUNE_BATCH = 50;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_COLLAB_UPDATE_BYTES = 768 * 1024;
-const SHEET_REPLACE_CHUNK_BYTES = 192 * 1024;
-const SHEET_REPLACE_CHUNK_ITEMS = 512;
+const STRUCTURED_REPLACE_CHUNK_BYTES = 192 * 1024;
+const STRUCTURED_REPLACE_CHUNK_ITEMS = 512;
 const COLLAB_WRITE_LIMIT = { capacity: 30, refillPerSecond: 5 };
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -51,7 +59,12 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 function docFileType(doc: Doc<"documents">): FileType {
-  if (doc.fileType === "md" || doc.fileType === "html" || doc.fileType === "sheet") {
+  if (
+    doc.fileType === "md" ||
+    doc.fileType === "html" ||
+    doc.fileType === "sheet" ||
+    doc.fileType === "board"
+  ) {
     return doc.fileType;
   }
   throw new Error("invalid-type");
@@ -135,6 +148,7 @@ async function materializedContent(
   replayed: number;
   size: number;
   sheetMeta?: { rows: number; cols: number };
+  boardMeta?: { columns: number; cards: number };
   cleanupUpdate?: ArrayBuffer;
 } | null> {
   const ydoc = new Y.Doc();
@@ -161,6 +175,12 @@ async function materializedContent(
   const cleanupRowMeta = new Set<string>();
   const duplicateRows = new Set<string>();
   const duplicateCols = new Set<string>();
+  const boardOrderCleanup = new Set<string>();
+  const boardMetaCleanup = new Set<string>();
+  const priorBoardAssignees = new Set<string>();
+  const priorBoardLinks = new Set<string>();
+  const priorBoardLabels = new Set<string>();
+  const duplicateBoardColumns = new Set<string>();
   if (fileType === "sheet") {
     const inspection = inspectSheet(ydoc);
     const roots = getSheetRoots(ydoc);
@@ -186,6 +206,36 @@ async function materializedContent(
     for (const colId of roots.cols.toArray()) {
       if (seenCols.has(colId)) duplicateCols.add(colId);
       seenCols.add(colId);
+    }
+  }
+  if (fileType === "board") {
+    const inspection = inspectBoard(ydoc);
+    const roots = getBoardRoots(ydoc);
+    for (const card of inspection.cards.values()) {
+      for (const userId of card.assignees) priorBoardAssignees.add(userId);
+      for (const labelId of card.labels) priorBoardLabels.add(labelId);
+      if (card.linkedDocId) priorBoardLinks.add(card.linkedDocId);
+    }
+    const seenColumns = new Set<string>();
+    for (const columnId of roots.columns.toArray()) {
+      if (seenColumns.has(columnId)) duplicateBoardColumns.add(columnId);
+      seenColumns.add(columnId);
+    }
+    for (const id of roots.columnMeta.keys()) {
+      if (!inspection.columnSet.has(id)) boardMetaCleanup.add(id);
+    }
+    for (const [columnId, order] of roots.cardOrder.entries()) {
+      if (columnId !== UNFILED_COLUMN_ID && !inspection.columnSet.has(columnId)) {
+        boardOrderCleanup.add(columnId);
+        continue;
+      }
+      const seen = new Set<string>();
+      for (const cardId of order.toArray()) {
+        const card = inspection.cards.get(cardId);
+        if (!card || card.columnId !== columnId || seen.has(cardId))
+          boardOrderCleanup.add(columnId);
+        seen.add(cardId);
+      }
     }
   }
   try {
@@ -244,7 +294,112 @@ async function materializedContent(
     }, "cleanup");
     if (changed) cleanupUpdate = toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector));
   }
-  const inspection = fileType === "sheet" ? inspectSheet(ydoc) : null;
+  if (
+    fileType === "board" &&
+    (boardOrderCleanup.size > 0 || boardMetaCleanup.size > 0 || duplicateBoardColumns.size > 0)
+  ) {
+    const roots = getBoardRoots(ydoc);
+    const inspection = inspectBoard(ydoc);
+    const vector = Y.encodeStateVector(ydoc);
+    let changed = false;
+    ydoc.transact(() => {
+      for (const id of boardMetaCleanup) {
+        if (roots.columnMeta.has(id)) {
+          roots.columnMeta.delete(id);
+          changed = true;
+        }
+      }
+      const seenColumns = new Set<string>();
+      for (let index = 0; index < roots.columns.length; ) {
+        const columnId = roots.columns.get(index);
+        if (duplicateBoardColumns.has(columnId) && seenColumns.has(columnId)) {
+          roots.columns.delete(index, 1);
+          changed = true;
+        } else {
+          seenColumns.add(columnId);
+          index += 1;
+        }
+      }
+      for (const columnId of boardOrderCleanup) {
+        const order = roots.cardOrder.get(columnId);
+        if (!order) continue;
+        if (columnId !== UNFILED_COLUMN_ID && !inspection.columnSet.has(columnId)) {
+          roots.cardOrder.delete(columnId);
+          changed = true;
+          continue;
+        }
+        const seen = new Set<string>();
+        for (let index = 0; index < order.length; ) {
+          const cardId = order.get(index);
+          const card = inspection.cards.get(cardId);
+          if (!card || card.columnId !== columnId || seen.has(cardId)) {
+            order.delete(index, 1);
+            changed = true;
+          } else {
+            seen.add(cardId);
+            index += 1;
+          }
+        }
+      }
+      let unfiled = roots.cardOrder.get(UNFILED_COLUMN_ID);
+      if (!unfiled) {
+        unfiled = new Y.Array<string>();
+        roots.cardOrder.set(UNFILED_COLUMN_ID, unfiled);
+        changed = true;
+      }
+      for (const card of inspection.cards.values()) {
+        if (card.columnId !== UNFILED_COLUMN_ID && !inspection.columnSet.has(card.columnId)) {
+          const cardMap = roots.cards.get(card.id);
+          cardMap?.set("columnId", UNFILED_COLUMN_ID);
+          if (!unfiled.toArray().includes(card.id)) unfiled.push([card.id]);
+          changed = true;
+        }
+      }
+    }, "cleanup");
+    if (changed) cleanupUpdate = toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector));
+  }
+  const sheetInspection = fileType === "sheet" ? inspectSheet(ydoc) : null;
+  const boardInspection = fileType === "board" ? inspectBoard(ydoc) : null;
+  if (boardInspection) {
+    const roots = getBoardRoots(ydoc);
+    const assignees = new Set<string>();
+    const linkedDocuments = new Set<string>();
+    for (const card of boardInspection.cards.values()) {
+      for (const userId of card.assignees) assignees.add(userId);
+      for (const labelId of card.labels) {
+        if (!roots.labelMeta.has(labelId) && !priorBoardLabels.has(labelId)) {
+          throw new BoardValidationError("invalid-update");
+        }
+      }
+      if (card.linkedDocId) linkedDocuments.add(card.linkedDocId);
+    }
+    for (const userId of assignees) {
+      if (priorBoardAssignees.has(userId)) continue;
+      const member = await ctx.db
+        .query("members")
+        .withIndex("by_org_user", (q) =>
+          q.eq("clerkOrgId", doc.clerkOrgId).eq("memberUserId", userId),
+        )
+        .unique();
+      if (member?.status !== "accepted") {
+        throw new BoardValidationError("invalid-update");
+      }
+    }
+    for (const documentId of linkedDocuments) {
+      if (priorBoardLinks.has(documentId)) continue;
+      const id = ctx.db.normalizeId("documents", documentId);
+      const linked = id ? await ctx.db.get(id) : null;
+      if (
+        !linked ||
+        linked.projectId !== doc.projectId ||
+        linked.kind !== "file" ||
+        linked.trashedAt ||
+        linked.deletingAt
+      ) {
+        throw new BoardValidationError("invalid-update");
+      }
+    }
+  }
   const content = project(fileType, ydoc);
   const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
   const size = documentSize(fileType, ydoc);
@@ -254,7 +409,8 @@ async function materializedContent(
     state,
     replayed: updates.length,
     size,
-    ...(inspection ? { sheetMeta: inspection.dimensions } : {}),
+    ...(sheetInspection ? { sheetMeta: sheetInspection.dimensions } : {}),
+    ...(boardInspection ? { boardMeta: boardInspection.dimensions } : {}),
     cleanupUpdate,
   };
 }
@@ -297,14 +453,44 @@ function sheetPreviewFromState(state: ArrayBuffer) {
   return preview;
 }
 
+function boardPreviewFromState(state: ArrayBuffer) {
+  const ydoc = new Y.Doc();
+  Y.applyUpdate(ydoc, new Uint8Array(state));
+  const preview = boardRenderModel(ydoc);
+  ydoc.destroy();
+  return preview;
+}
+
 function copyYMap(source: Y.Map<unknown>): Y.Map<unknown> {
   const target = new Y.Map<unknown>();
   for (const [key, value] of source.entries()) target.set(key, value);
   return target;
 }
 
+function copyBoardMap(source: Y.Map<unknown>): Y.Map<unknown> {
+  const target = new Y.Map<unknown>();
+  for (const [key, value] of source.entries()) {
+    if (value instanceof Y.Text) {
+      const text = new Y.Text();
+      if (value.length > 0) text.insert(0, value.toString());
+      target.set(key, text);
+    } else if (value instanceof Y.Array) {
+      const array = new Y.Array<unknown>();
+      if (value.length > 0) array.insert(0, value.toArray());
+      target.set(key, array);
+    } else {
+      target.set(key, value);
+    }
+  }
+  return target;
+}
+
 function estimatedValueBytes(value: unknown): number {
   if (typeof value === "string") return byteLength(value);
+  if (value instanceof Y.Text) return byteLength(value.toString()) + 64;
+  if (value instanceof Y.Array) {
+    return value.toArray().reduce((size, item) => size + estimatedValueBytes(item) + 16, 64);
+  }
   return 16;
 }
 
@@ -324,7 +510,8 @@ function chunkValues<T>(values: readonly T[], estimate: (value: T) => number): T
     const valueBytes = Math.max(1, estimate(value));
     if (
       chunk.length > 0 &&
-      (chunk.length >= SHEET_REPLACE_CHUNK_ITEMS || bytes + valueBytes > SHEET_REPLACE_CHUNK_BYTES)
+      (chunk.length >= STRUCTURED_REPLACE_CHUNK_ITEMS ||
+        bytes + valueBytes > STRUCTURED_REPLACE_CHUNK_BYTES)
     ) {
       chunks.push(chunk);
       chunk = [];
@@ -392,12 +579,96 @@ function replaceSheetStateInChunks(
   return updates;
 }
 
+function replaceBoardStateInChunks(
+  current: Y.Doc,
+  target: Y.Doc,
+  origin: "restore",
+): ArrayBuffer[] {
+  const currentRoots = getBoardRoots(current);
+  const targetRoots = getBoardRoots(target);
+  const updates: ArrayBuffer[] = [];
+  const transact = (apply: () => void) => {
+    const vector = Y.encodeStateVector(current);
+    current.transact(apply, origin);
+    const update = Y.encodeStateAsUpdate(current, vector);
+    if (update.byteLength === 0) return;
+    if (update.byteLength > MAX_COLLAB_UPDATE_BYTES) throw new Error("update-too-large");
+    updates.push(toArrayBuffer(update));
+  };
+  while (currentRoots.columns.length > 0) {
+    transact(() => currentRoots.columns.delete(0, Math.min(currentRoots.columns.length, 512)));
+  }
+  for (const map of [
+    currentRoots.columnMeta,
+    currentRoots.cardOrder,
+    currentRoots.cards,
+    currentRoots.labelMeta,
+  ]) {
+    for (const chunk of chunkValues([...map.keys()], (key) => byteLength(key) + 64)) {
+      transact(() => {
+        for (const key of chunk) map.delete(key);
+      });
+    }
+  }
+  for (const chunk of chunkValues(targetRoots.columns.toArray(), (id) => byteLength(id) + 32)) {
+    transact(() => currentRoots.columns.insert(currentRoots.columns.length, chunk));
+  }
+  for (const [currentMap, entries] of [
+    [currentRoots.columnMeta, [...targetRoots.columnMeta.entries()]],
+    [currentRoots.cards, [...targetRoots.cards.entries()]],
+    [currentRoots.labelMeta, [...targetRoots.labelMeta.entries()]],
+  ] as const) {
+    for (const chunk of chunkValues(entries, ([key, value]) =>
+      estimatedMapEntryBytes(key, value),
+    )) {
+      transact(() => {
+        for (const [key, value] of chunk) currentMap.set(key, copyBoardMap(value));
+      });
+    }
+  }
+  for (const chunk of chunkValues(
+    [...targetRoots.cardOrder.entries()],
+    ([key, value]) => byteLength(key) + value.length * 96,
+  )) {
+    transact(() => {
+      for (const [key, value] of chunk) {
+        const order = new Y.Array<string>();
+        if (value.length > 0) order.insert(0, value.toArray());
+        currentRoots.cardOrder.set(key, order);
+      }
+    });
+  }
+  return updates;
+}
+
 function replaceDocumentState(current: Y.Doc, target: Y.Doc, fileType: FileType): void {
-  if (fileType !== "sheet") {
+  if (fileType !== "sheet" && fileType !== "board") {
     const currentText = current.getText("codemirror");
     const targetText = target.getText("codemirror").toString();
     currentText.delete(0, currentText.length);
     if (targetText) currentText.insert(0, targetText);
+    return;
+  }
+  if (fileType === "board") {
+    const currentRoots = getBoardRoots(current);
+    const targetRoots = getBoardRoots(target);
+    currentRoots.columns.delete(0, currentRoots.columns.length);
+    currentRoots.columnMeta.clear();
+    currentRoots.cardOrder.clear();
+    currentRoots.cards.clear();
+    currentRoots.labelMeta.clear();
+    currentRoots.columns.insert(0, targetRoots.columns.toArray());
+    for (const [key, value] of targetRoots.columnMeta.entries())
+      currentRoots.columnMeta.set(key, copyBoardMap(value));
+    for (const [key, value] of targetRoots.cards.entries())
+      currentRoots.cards.set(key, copyBoardMap(value));
+    for (const [key, value] of targetRoots.labelMeta.entries())
+      currentRoots.labelMeta.set(key, copyBoardMap(value));
+    for (const [key, value] of targetRoots.cardOrder.entries()) {
+      const order = new Y.Array<string>();
+      order.insert(0, value.toArray());
+      currentRoots.cardOrder.set(key, order);
+    }
     return;
   }
   const currentRoots = getSheetRoots(current);
@@ -600,7 +871,7 @@ export const pushUpdateV2 = mutation({
     try {
       materialized = await materializedContent(ctx, doc, args.update);
     } catch (error) {
-      if (error instanceof SheetValidationError) {
+      if (error instanceof SheetValidationError || error instanceof BoardValidationError) {
         return { ok: false as const, error: error.code };
       }
       return { ok: false as const, error: "invalid-update" as const };
@@ -608,10 +879,19 @@ export const pushUpdateV2 = mutation({
     if (!materialized) {
       return { ok: false as const, error: "invalid-update" as const };
     }
-    const { content, state, replayed, size: newSize, sheetMeta, cleanupUpdate } = materialized;
+    const {
+      content,
+      state,
+      replayed,
+      size: newSize,
+      sheetMeta,
+      boardMeta,
+      cleanupUpdate,
+    } = materialized;
     if (
       byteLength(content) > MAX_FILE_BYTES ||
-      (doc.fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES)
+      (doc.fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
+      (doc.fileType === "board" && newSize > MAX_BOARD_STORED_BYTES)
     ) {
       return { ok: false as const, error: "file-too-large" as const };
     }
@@ -650,6 +930,7 @@ export const pushUpdateV2 = mutation({
       contentState: state,
       size: newSize,
       sheetMeta,
+      boardMeta,
       updatedAt: Date.now(),
     });
     await addProjectBytes(ctx, access.project, newSize - doc.size);
@@ -834,12 +1115,18 @@ export const ensureSeed = mutation({
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
       .first();
     const snapshot = await baseSnapshot(ctx, args.documentId);
-    if (existing || snapshot || (doc.fileType !== "sheet" && doc.content.length === 0)) {
+    if (
+      existing ||
+      snapshot ||
+      (doc.fileType !== "sheet" && doc.fileType !== "board" && doc.content.length === 0)
+    ) {
       return { seeded: false };
     }
     const seedDoc = new Y.Doc();
     if (doc.fileType === "sheet") {
       seedSheet(seedDoc);
+    } else if (doc.fileType === "board") {
+      seedBoard(seedDoc);
     } else {
       seedDoc.getText("codemirror").insert(0, doc.content);
     }
@@ -848,6 +1135,7 @@ export const ensureSeed = mutation({
     const content = project(docFileType(doc), seedDoc);
     const size = documentSize(docFileType(doc), seedDoc);
     const sheetMeta = doc.fileType === "sheet" ? inspectSheet(seedDoc).dimensions : undefined;
+    const boardMeta = doc.fileType === "board" ? inspectBoard(seedDoc).dimensions : undefined;
     seedDoc.destroy();
     await ctx.db.insert("yjsUpdates", {
       documentId: args.documentId,
@@ -861,6 +1149,7 @@ export const ensureSeed = mutation({
       content,
       size,
       sheetMeta,
+      boardMeta,
     });
     if (size !== doc.size) {
       const projectRow = await ctx.db.get(doc.projectId);
@@ -1003,6 +1292,7 @@ export const getHistoryPreview = query({
       content: snapshot.previewText ?? contentFromState(snapshot.snapshot, docFileType(doc)),
       fileType: docFileType(doc),
       sheetPreview: doc.fileType === "sheet" ? sheetPreviewFromState(snapshot.snapshot) : undefined,
+      boardPreview: doc.fileType === "board" ? boardPreviewFromState(snapshot.snapshot) : undefined,
       label: snapshot.label ?? `Snapshot ${snapshot.throughSeq}`,
       authorName: snapshot.authorName ?? "Unknown",
       authorEmail: await snapshotAuthorEmail(ctx, doc, snapshot),
@@ -1030,7 +1320,8 @@ export const restoreHistory = mutation({
     const newSize = documentSize(fileType, targetDoc);
     if (
       byteLength(targetContent) > MAX_FILE_BYTES ||
-      (fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES)
+      (fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
+      (fileType === "board" && newSize > MAX_BOARD_STORED_BYTES)
     ) {
       targetDoc.destroy();
       throw new Error("file-too-large");
@@ -1052,6 +1343,8 @@ export const restoreHistory = mutation({
     let replacementUpdates: ArrayBuffer[];
     if (fileType === "sheet") {
       replacementUpdates = replaceSheetStateInChunks(ydoc, targetDoc, "restore");
+    } else if (fileType === "board") {
+      replacementUpdates = replaceBoardStateInChunks(ydoc, targetDoc, "restore");
     } else {
       const vector = Y.encodeStateVector(ydoc);
       ydoc.transact(() => replaceDocumentState(ydoc, targetDoc, fileType), "restore");
@@ -1060,12 +1353,14 @@ export const restoreHistory = mutation({
     const restoredContent = project(fileType, ydoc);
     const restoredSize = documentSize(fileType, ydoc);
     const restoredSheetMeta = fileType === "sheet" ? inspectSheet(ydoc).dimensions : undefined;
+    const restoredBoardMeta = fileType === "board" ? inspectBoard(ydoc).dimensions : undefined;
     const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
     ydoc.destroy();
     targetDoc.destroy();
     if (
       byteLength(restoredContent) > MAX_FILE_BYTES ||
-      (fileType === "sheet" && restoredSize > MAX_SHEET_STORED_BYTES)
+      (fileType === "sheet" && restoredSize > MAX_SHEET_STORED_BYTES) ||
+      (fileType === "board" && restoredSize > MAX_BOARD_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }
@@ -1089,6 +1384,7 @@ export const restoreHistory = mutation({
       contentState: state,
       size: restoredSize,
       sheetMeta: restoredSheetMeta,
+      boardMeta: restoredBoardMeta,
       updatedAt: now,
     });
     await addProjectBytes(ctx, access.project, restoredSize - doc.size);

@@ -334,6 +334,7 @@ export function useCollabDoc(
           message.includes("file-too-large") ||
           message.includes("update-too-large") ||
           message.includes("too-many-cells") ||
+          message.includes("too-many-cards") ||
           message.includes("invalid-update");
         if (blockedByLimit) {
           pending = [];

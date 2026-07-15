@@ -1,4 +1,11 @@
-import { FileCode, FileText, Folder, Image as ImageIcon, TableProperties } from "lucide-react";
+import {
+  Columns3,
+  FileCode,
+  FileText,
+  Folder,
+  Image as ImageIcon,
+  TableProperties,
+} from "lucide-react";
 import type { FileType } from "@/lib/document-types";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +28,9 @@ export function FileIcon({ kind, fileType, className }: FileIconProps) {
   }
   if (fileType === "sheet") {
     return <TableProperties className={cn(base, "text-info")} aria-hidden="true" />;
+  }
+  if (fileType === "board") {
+    return <Columns3 className={cn(base, "text-accent")} aria-hidden="true" />;
   }
   return <FileText className={cn(base, "text-accent")} aria-hidden="true" />;
 }

@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
+import { inspectBoard } from "../lib/board-model";
 import {
   columnLabel,
   displayedCellValue,
@@ -248,6 +249,7 @@ export const listForDocument = query({
       .take(MAX_THREADS_PER_DOCUMENT);
     let activeRows: Set<string> | null = null;
     let activeCols: Set<string> | null = null;
+    let activeCards: Set<string> | null = null;
     if (doc.fileType === "sheet" && doc.contentState) {
       try {
         const ydoc = new Y.Doc();
@@ -259,6 +261,16 @@ export const listForDocument = query({
       } catch {
         activeRows = new Set();
         activeCols = new Set();
+      }
+    }
+    if (doc.fileType === "board" && doc.contentState) {
+      try {
+        const ydoc = new Y.Doc();
+        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+        activeCards = new Set(inspectBoard(ydoc).cards.keys());
+        ydoc.destroy();
+      } catch {
+        activeCards = new Set();
       }
     }
     const rows = await Promise.all(
@@ -279,17 +291,20 @@ export const listForDocument = query({
                   rowId: thread.rowId ?? "",
                   colId: thread.colId ?? "",
                 }
-              : {
-                  kind: "text" as const,
-                  startRel: thread.startRel ?? new ArrayBuffer(0),
-                  endRel: thread.endRel ?? new ArrayBuffer(0),
-                },
+              : thread.anchorKind === "card"
+                ? { kind: "card" as const, cardId: thread.cardId ?? "" }
+                : {
+                    kind: "text" as const,
+                    startRel: thread.startRel ?? new ArrayBuffer(0),
+                    endRel: thread.endRel ?? new ArrayBuffer(0),
+                  },
           orphaned:
-            thread.anchorKind === "cell" &&
-            (!thread.rowId ||
-              !thread.colId ||
-              !activeRows?.has(thread.rowId) ||
-              !activeCols?.has(thread.colId)),
+            (thread.anchorKind === "cell" &&
+              (!thread.rowId ||
+                !thread.colId ||
+                !activeRows?.has(thread.rowId) ||
+                !activeCols?.has(thread.colId))) ||
+            (thread.anchorKind === "card" && (!thread.cardId || !activeCards?.has(thread.cardId))),
           quote: thread.quote,
           status: thread.status,
           authorUserId: thread.authorUserId,
@@ -357,6 +372,7 @@ export const createThread = mutation({
     anchor: v.union(
       v.object({ kind: v.literal("text"), startRel: v.bytes(), endRel: v.bytes() }),
       v.object({ kind: v.literal("cell"), rowId: v.string(), colId: v.string() }),
+      v.object({ kind: v.literal("card"), cardId: v.string() }),
     ),
     quote: v.string(),
     body: v.string(),
@@ -365,10 +381,12 @@ export const createThread = mutation({
   handler: async (ctx, args) => {
     const { doc, access } = await fileForAccess(ctx, args.documentId);
     if (args.anchor.kind === "text") {
-      if (doc.fileType === "sheet") throw new Error("invalid-anchor");
+      if (doc.fileType === "sheet" || doc.fileType === "board") throw new Error("invalid-anchor");
       assertAnchor(args.anchor.startRel);
       assertAnchor(args.anchor.endRel);
-    } else if (doc.fileType !== "sheet" || !doc.contentState) {
+    } else if (args.anchor.kind === "cell" && (doc.fileType !== "sheet" || !doc.contentState)) {
+      throw new Error("invalid-anchor");
+    } else if (args.anchor.kind === "card" && (doc.fileType !== "board" || !doc.contentState)) {
       throw new Error("invalid-anchor");
     }
     if (
@@ -381,7 +399,7 @@ export const createThread = mutation({
     let quote = "";
     if (args.anchor.kind === "text") {
       quote = trimQuote(args.quote);
-    } else {
+    } else if (args.anchor.kind === "cell") {
       try {
         const ydoc = new Y.Doc();
         Y.applyUpdate(ydoc, new Uint8Array(doc.contentState as ArrayBuffer));
@@ -396,6 +414,18 @@ export const createThread = mutation({
       } catch {
         throw new Error("invalid-anchor");
       }
+    } else {
+      try {
+        const ydoc = new Y.Doc();
+        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState as ArrayBuffer));
+        const inspection = inspectBoard(ydoc);
+        const card = inspection.cards.get(args.anchor.cardId);
+        if (!card) throw new Error("invalid-anchor");
+        quote = trimQuote(card.title);
+        ydoc.destroy();
+      } catch {
+        throw new Error("invalid-anchor");
+      }
     }
     const mentionUserIds = await validatedMentionIds(ctx, access.project, args.mentionUserIds);
     const now = Date.now();
@@ -406,7 +436,9 @@ export const createThread = mutation({
       anchorKind: args.anchor.kind,
       ...(args.anchor.kind === "text"
         ? { startRel: args.anchor.startRel, endRel: args.anchor.endRel }
-        : { rowId: args.anchor.rowId, colId: args.anchor.colId }),
+        : args.anchor.kind === "cell"
+          ? { rowId: args.anchor.rowId, colId: args.anchor.colId }
+          : { cardId: args.anchor.cardId }),
       quote,
       status: "open",
       authorUserId: actor.userId,

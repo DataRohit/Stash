@@ -30,7 +30,8 @@ export type CommentThread = {
   id: string;
   anchor:
     | { kind: "text"; startRel: ArrayBuffer; endRel: ArrayBuffer }
-    | { kind: "cell"; rowId: string; colId: string };
+    | { kind: "cell"; rowId: string; colId: string }
+    | { kind: "card"; cardId: string };
   orphaned: boolean;
   quote: string;
   status: "open" | "resolved";
@@ -62,7 +63,7 @@ type CommentsRailProps = {
   ranges: Map<string, ResolvedCommentRange>;
   activeThreadId: string | null;
   selection: SelectionState | null;
-  selectionKind?: "text" | "cell";
+  selectionKind?: "text" | "cell" | "card";
   onClose: () => void;
   onCreate: (body: string, mentionUserIds: string[]) => Promise<void>;
   onReply: (threadId: string, body: string, mentionUserIds: string[]) => Promise<void>;
@@ -334,7 +335,9 @@ export function CommentsRail({
               <p className="mb-2 rounded-sm bg-foreground/[0.04] px-2 py-1.5 text-[11px] text-muted-foreground leading-relaxed">
                 {selectionKind === "cell"
                   ? "Select a cell to start a thread."
-                  : "Select text in the editor to start a thread."}
+                  : selectionKind === "card"
+                    ? "Select a card to start a thread."
+                    : "Select text in the editor to start a thread."}
               </p>
             )}
             <Composer
@@ -399,7 +402,7 @@ export function CommentsRail({
                       </span>
                       {unavailable ? (
                         <span className="text-[11px] text-warning">
-                          {thread.anchor.kind === "cell"
+                          {thread.anchor.kind === "cell" || thread.anchor.kind === "card"
                             ? "Location removed"
                             : "Anchor unavailable"}
                         </span>

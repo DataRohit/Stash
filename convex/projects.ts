@@ -1,5 +1,8 @@
 import { v } from "convex/values";
+import * as Y from "yjs";
 import { isRasterAssetMimeType } from "../lib/asset-formats";
+import { getBoardRoots, inspectBoard, MAX_BOARD_STORED_BYTES } from "../lib/board-model";
+import { documentSize, project } from "../lib/doc-projection";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -518,6 +521,7 @@ export const prepareDuplicate = internalMutation({
         content: doc.content,
         contentState: doc.contentState,
         sheetMeta: doc.sheetMeta,
+        boardMeta: doc.boardMeta,
         storageId: doc.storageId,
         mimeType: doc.mimeType,
         size: doc.size,
@@ -532,10 +536,17 @@ export const insertDuplicateNode = internalMutation({
     parentId: v.union(v.id("documents"), v.null()),
     kind: v.union(v.literal("folder"), v.literal("file"), v.literal("asset")),
     name: v.string(),
-    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("sheet"), v.null()),
+    fileType: v.union(
+      v.literal("md"),
+      v.literal("html"),
+      v.literal("sheet"),
+      v.literal("board"),
+      v.null(),
+    ),
     content: v.string(),
     contentState: v.optional(v.bytes()),
     sheetMeta: v.optional(v.object({ rows: v.number(), cols: v.number() })),
+    boardMeta: v.optional(v.object({ columns: v.number(), cards: v.number() })),
     storageId: v.union(v.id("_storage"), v.null()),
     mimeType: v.union(v.string(), v.null()),
     size: v.number(),
@@ -555,6 +566,7 @@ export const insertDuplicateNode = internalMutation({
       contentSeq: args.kind === "file" && args.contentState ? 1 : undefined,
       contentState: args.contentState,
       sheetMeta: args.sheetMeta,
+      boardMeta: args.boardMeta,
       storageId: args.storageId,
       mimeType: args.mimeType,
       size: args.size,
@@ -574,6 +586,54 @@ export const insertDuplicateNode = internalMutation({
     });
     await addProjectBytes(ctx, project, args.size);
     return id;
+  },
+});
+
+export const remapDuplicateBoardLinks = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    links: v.array(v.object({ source: v.string(), target: v.id("documents") })),
+  },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file" || doc.fileType !== "board" || !doc.contentState) return;
+    const projectRow = await ctx.db.get(doc.projectId);
+    if (projectRow?.cloneState !== "copying") throw new Error("clone-stopped");
+    const mapped = new Map(args.links.map((link) => [link.source, link.target as string]));
+    const ydoc = new Y.Doc();
+    Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+    const roots = getBoardRoots(ydoc);
+    const vector = Y.encodeStateVector(ydoc);
+    let changed = false;
+    ydoc.transact(() => {
+      for (const card of inspectBoard(ydoc).cards.values()) {
+        if (!card.linkedDocId) continue;
+        const cardMap = roots.cards.get(card.id);
+        const target = mapped.get(card.linkedDocId);
+        cardMap?.set("linkedDocId", target ?? null);
+        changed = true;
+      }
+    }, "clone-links");
+    if (!changed) {
+      ydoc.destroy();
+      return;
+    }
+    const updateBytes = Y.encodeStateAsUpdate(ydoc, vector);
+    const stateBytes = Y.encodeStateAsUpdate(ydoc);
+    const content = project("board", ydoc);
+    const size = documentSize("board", ydoc);
+    ydoc.destroy();
+    if (size > MAX_BOARD_STORED_BYTES) throw new Error("file-too-large");
+    const update = updateBytes.slice().buffer;
+    const state = stateBytes.slice().buffer;
+    await ctx.db.insert("yjsUpdates", {
+      documentId: doc._id,
+      seq: 2,
+      update,
+      createdAt: Date.now(),
+    });
+    await ctx.db.patch(doc._id, { content, contentSeq: 2, contentState: state, size });
+    await addProjectBytes(ctx, projectRow, size - doc.size);
   },
 });
 
@@ -668,11 +728,23 @@ export const duplicateProject = action({
           content: node.content,
           contentState: node.contentState,
           sheetMeta: node.sheetMeta,
+          boardMeta: node.boardMeta,
           storageId,
           mimeType: node.mimeType,
           size: node.size,
         });
         mapped.set(node.id, id);
+      }
+      const links = [...mapped].map(([source, target]) => ({ source, target }));
+      for (const node of prepared.docs) {
+        if (node.fileType !== "board") continue;
+        const documentId = mapped.get(node.id);
+        if (documentId) {
+          await ctx.runMutation(internal.projects.remapDuplicateBoardLinks, {
+            documentId,
+            links,
+          });
+        }
       }
       let imageStorageId = null;
       if (prepared.sourceImageStorageId) {

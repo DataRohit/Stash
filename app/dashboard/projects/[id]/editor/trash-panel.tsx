@@ -1,9 +1,10 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { FileCode, FileText, Folder, Image as ImageIcon, RotateCcw, Trash2 } from "lucide-react";
+import { RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
+import { FileIcon } from "@/components/file-icon";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
@@ -33,16 +34,7 @@ type TrashPanelProps = {
 };
 
 function ItemGlyph({ item }: { item: TrashItem }) {
-  if (item.kind === "folder") {
-    return <Folder className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />;
-  }
-  if (item.kind === "asset") {
-    return <ImageIcon className="size-4 shrink-0 text-info" aria-hidden="true" />;
-  }
-  if (item.fileType === "html") {
-    return <FileCode className="size-4 shrink-0 text-warning" aria-hidden="true" />;
-  }
-  return <FileText className="size-4 shrink-0 text-accent" aria-hidden="true" />;
+  return <FileIcon kind={item.kind} fileType={item.fileType} />;
 }
 
 function retentionLabel(trashedAt: number, now: number): { label: string; imminent: boolean } {

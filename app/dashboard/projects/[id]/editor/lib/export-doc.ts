@@ -7,7 +7,7 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { buildZip, type ZipEntry } from "@/app/dashboard/projects/[id]/editor/lib/zip";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
-import { sheetRenderModel } from "@/lib/doc-projection";
+import { boardRenderModel, sheetRenderModel } from "@/lib/doc-projection";
 import type { FileType } from "@/lib/document-types";
 import { serializeDelimited } from "@/lib/sheet-csv";
 
@@ -25,7 +25,7 @@ export type BundleNode = {
 const EMPTY_LINKS: Record<string, string> = {};
 
 function stem(name: string): string {
-  return name.replace(/\.(md|html|sheet)$/i, "");
+  return name.replace(/\.(md|html|sheet|board)$/i, "");
 }
 
 function safeFileName(title: string): string {
@@ -167,6 +167,51 @@ export async function exportSheetPdf(fileNode: TreeNode, ydoc: Y.Doc): Promise<v
   await printHtml(sheetHtml(fileNode, ydoc));
 }
 
+function boardMarkdown(ydoc: Y.Doc): string {
+  return boardRenderModel(ydoc)
+    .columns.map((column) =>
+      [
+        `## ${column.name}`,
+        ...column.cards.map((card) =>
+          [
+            `- **${card.title}**`,
+            card.priority ? ` — ${card.priority} urgency` : "",
+            card.description ? `\n  ${card.description.replaceAll("\n", "\n  ")}` : "",
+          ].join(""),
+        ),
+      ].join("\n\n"),
+    )
+    .join("\n\n");
+}
+
+function boardHtml(fileNode: TreeNode, ydoc: Y.Doc): string {
+  const model = boardRenderModel(ydoc);
+  const columns = model.columns
+    .map(
+      (column) =>
+        `<section><h2><i style="background:${escaped(column.color)}"></i>${escaped(column.name)} <small>${column.cards.length}</small></h2><div>${column.cards
+          .map(
+            (card) =>
+              `<article style="border-left-color:${escaped(card.color)}">${card.priority ? `<b>${escaped(card.priority)}</b>` : ""}${card.labels.map((label) => `<span style="color:${escaped(label.color)}">${escaped(label.name)}</span>`).join(" ")}<h3>${escaped(card.title)}</h3>${card.description ? `<p>${escaped(card.description)}</p>` : ""}${card.due ? `<time>${escaped(new Date(card.due).toLocaleDateString())}</time>` : ""}</article>`,
+          )
+          .join("")}</div></section>`,
+    )
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escaped(stem(fileNode.name))}</title><style>body{font:14px system-ui;margin:24px;color:#111;display:flex;align-items:flex-start;gap:16px;overflow:auto}section{width:280px;flex:none;background:#f4f4f5;border:1px solid #ddd;border-radius:10px;padding:10px}h2{display:flex;align-items:center;gap:7px;font-size:14px;margin:2px 4px 10px}h2 i{display:inline-block;width:14px;height:14px;border-radius:4px}small{color:#666}article{background:#fff;border:1px solid #ddd;border-left:4px solid;border-radius:7px;padding:12px;margin:8px 0;break-inside:avoid}h3{font-size:14px;margin:4px 0}p{white-space:pre-wrap;color:#555;font-size:12px}b,span,time{font-size:10px;margin-right:5px;text-transform:capitalize}@media print{body{margin:0;gap:8px;flex-wrap:wrap}section{width:30%}}</style></head><body>${columns}</body></html>`;
+}
+
+export function exportBoardMarkdown(fileNode: TreeNode, ydoc: Y.Doc): void {
+  download(`${stem(fileNode.name)}.md`, boardMarkdown(ydoc), "text/markdown;charset=utf-8");
+}
+
+export function exportBoardHtml(fileNode: TreeNode, ydoc: Y.Doc): void {
+  download(`${stem(fileNode.name)}.html`, boardHtml(fileNode, ydoc), "text/html;charset=utf-8");
+}
+
+export async function exportBoardPdf(fileNode: TreeNode, ydoc: Y.Doc): Promise<void> {
+  await printHtml(boardHtml(fileNode, ydoc));
+}
+
 export async function exportHtml(
   fileNode: TreeNode,
   content: string,
@@ -270,7 +315,12 @@ export async function exportProjectZip(projectTitle: string, nodes: BundleNode[]
       entries.push({ path: `${path}/`, data: new Uint8Array(0) });
     } else if (node.kind === "file") {
       entries.push({
-        path: node.fileType === "sheet" ? path.replace(/\.sheet$/i, ".csv") : path,
+        path:
+          node.fileType === "sheet"
+            ? path.replace(/\.sheet$/i, ".csv")
+            : node.fileType === "board"
+              ? path.replace(/\.board$/i, ".md")
+              : path,
         data: encoder.encode(node.content),
       });
     } else if (node.kind === "asset" && node.assetUrl) {

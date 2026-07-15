@@ -1,12 +1,13 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
+import { getBoardRoots, inspectBoard } from "../lib/board-model";
 import { mutation, query } from "./_generated/server";
 import { accessForProject, isInactiveTree, requireProjectAdmin } from "./documents";
 
 const MAX_TEMPLATES = 50;
 const MAX_NAME = 80;
 const MAX_BYTES = 512 * 1024;
-const MAX_SHEET_BYTES = 896 * 1024;
+const MAX_STRUCTURED_BYTES = 896 * 1024;
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
@@ -94,13 +95,21 @@ export const saveFromDocument = mutation({
       .withIndex("by_document", (q) => q.eq("documentId", doc._id))
       .collect();
     for (const update of updates) Y.applyUpdate(ydoc, new Uint8Array(update.update));
+    if (doc.fileType === "board") {
+      const roots = getBoardRoots(ydoc);
+      ydoc.transact(() => {
+        for (const card of inspectBoard(ydoc).cards.values()) {
+          if (card.linkedDocId) roots.cards.get(card.id)?.set("linkedDocId", null);
+        }
+      }, "template");
+    }
     const state = Y.encodeStateAsUpdate(ydoc);
     ydoc.destroy();
     const projectionBytes = new TextEncoder().encode(doc.content).byteLength;
     if (
       projectionBytes > MAX_BYTES ||
-      (doc.fileType === "sheet"
-        ? state.byteLength + projectionBytes > MAX_SHEET_BYTES
+      (doc.fileType === "sheet" || doc.fileType === "board"
+        ? state.byteLength + projectionBytes > MAX_STRUCTURED_BYTES
         : state.byteLength > MAX_BYTES)
     )
       throw new Error("template-too-large");

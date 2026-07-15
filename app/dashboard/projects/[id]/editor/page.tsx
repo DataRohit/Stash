@@ -21,11 +21,11 @@ export default async function ProjectEditorPage({ params }: { params: Promise<{ 
 
   const { id } = await params;
   const project = await fetchProject(id);
-  if (!project || project.clerkOrgId !== orgId) {
+  if (project && project.clerkOrgId !== orgId) {
     notFound();
   }
 
-  if (project.viewerIsOwner) {
+  if (project?.viewerIsOwner) {
     const limits = await getUserPlanLimitsForSync();
     if (limits) {
       await setOrgPlanLimits(orgId, {
@@ -38,16 +38,16 @@ export default async function ProjectEditorPage({ params }: { params: Promise<{ 
     }
   }
 
-  const canEdit = project.isAdmin || project.viewerLevel === "editor";
+  const canEdit = Boolean(project?.isAdmin || project?.viewerLevel === "editor");
 
   return (
     <main className="flex h-dvh w-full flex-col px-3 pt-32 pb-4 sm:px-6 lg:pt-24">
       <ProjectEditor
         projectId={id}
-        projectTitle={project.title}
+        projectTitle={project?.title ?? "Project"}
         clerkOrgId={orgId}
         canEdit={canEdit}
-        isAdmin={project.isAdmin}
+        isAdmin={project?.isAdmin ?? false}
       />
     </main>
   );

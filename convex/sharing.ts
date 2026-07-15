@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
-import { sheetRenderModel } from "../lib/doc-projection";
+import { boardRenderModel, sheetRenderModel } from "../lib/doc-projection";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -511,11 +511,24 @@ export const redeemShare = mutation({
       )
       .map((row) => ({ documentId: row.documentId, href: `/share/${row.token}` }));
     let sheetPreview: ReturnType<typeof sheetRenderModel> | undefined;
+    let boardPreview: ReturnType<typeof boardRenderModel> | undefined;
     if (doc.fileType === "sheet" && doc.contentState) {
       const sheet = new Y.Doc();
       Y.applyUpdate(sheet, new Uint8Array(doc.contentState));
       sheetPreview = sheetRenderModel(sheet);
       sheet.destroy();
+    }
+    if (doc.fileType === "board" && doc.contentState) {
+      const board = new Y.Doc();
+      Y.applyUpdate(board, new Uint8Array(doc.contentState));
+      boardPreview = boardRenderModel(board);
+      const visibleIds = new Set(visible.map((node) => node._id as string));
+      for (const column of boardPreview.columns) {
+        for (const card of column.cards) {
+          card.linkedDocRemoved = Boolean(card.linkedDocId && !visibleIds.has(card.linkedDocId));
+        }
+      }
+      board.destroy();
     }
     return {
       status: "ok" as const,
@@ -526,6 +539,7 @@ export const redeemShare = mutation({
       fileType: doc.fileType,
       content: doc.content,
       sheetPreview,
+      boardPreview,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,

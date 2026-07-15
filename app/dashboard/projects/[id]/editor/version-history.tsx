@@ -21,6 +21,7 @@ import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { historyEmail, mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { BoardView } from "@/components/board-view";
 import { SheetTable } from "@/components/sheet-table";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
@@ -223,6 +224,8 @@ export function VersionHistoryModal({
 }: VersionHistoryModalProps) {
   const docId = documentId as Id<"documents">;
   const isSheet = fileNode.fileType === "sheet";
+  const isBoard = fileNode.fileType === "board";
+  const isStructured = isSheet || isBoard;
   const snapshots = useQuery(api.collab.listHistory, { documentId: docId });
   const createCheckpoint = useMutation(api.collab.createHistoryCheckpoint);
   const restoreHistory = useMutation(api.collab.restoreHistory);
@@ -478,11 +481,11 @@ export function VersionHistoryModal({
                 <div
                   className={cn(
                     "grid min-w-0 flex-1 gap-0.5 rounded-sm border border-hairline p-0.5 sm:flex-none",
-                    isSheet ? "grid-cols-2" : "grid-cols-3",
+                    isStructured ? "grid-cols-2" : "grid-cols-3",
                   )}
                 >
                   <TabButton active={tab === "file"} label="File" onClick={() => setTab("file")} />
-                  {!isSheet ? (
+                  {!isStructured ? (
                     <TabButton
                       active={tab === "diff"}
                       label="Diff → current"
@@ -495,7 +498,7 @@ export function VersionHistoryModal({
                     onClick={() => setTab("compare")}
                   />
                 </div>
-                {tab === "file" && !isSheet ? (
+                {tab === "file" && !isStructured ? (
                   <div className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                     {(
                       [
@@ -544,6 +547,8 @@ export function VersionHistoryModal({
                   preview ? (
                     isSheet && preview.sheetPreview ? (
                       <SheetTable model={preview.sheetPreview} className="size-full p-3" />
+                    ) : isBoard && preview.boardPreview ? (
+                      <BoardView model={preview.boardPreview} className="size-full" />
                     ) : fileMode === "preview" ? (
                       <DocPreview fileNode={fileNode} content={preview.content} nodes={nodes} />
                     ) : (
@@ -560,7 +565,7 @@ export function VersionHistoryModal({
                   )
                 ) : null}
 
-                {tab === "diff" && !isSheet ? (
+                {tab === "diff" && !isStructured ? (
                   preview ? (
                     <div className="flex size-full flex-col">
                       <div className="min-h-0 flex-1">
@@ -588,6 +593,17 @@ export function VersionHistoryModal({
                             />
                             <SheetTable
                               model={comparePreview.sheetPreview}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                          </div>
+                        ) : isBoard && basePreview.boardPreview && comparePreview.boardPreview ? (
+                          <div className="grid size-full min-h-0 grid-cols-1 gap-3 overflow-auto p-3 lg:grid-cols-2">
+                            <BoardView
+                              model={basePreview.boardPreview}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                            <BoardView
+                              model={comparePreview.boardPreview}
                               className="min-h-0 rounded-md border border-hairline"
                             />
                           </div>
