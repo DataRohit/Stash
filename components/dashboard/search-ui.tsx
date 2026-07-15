@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { type KeyboardEvent, useEffect, useRef } from "react";
 import { FileIcon } from "@/components/file-icon";
 import { DataState } from "@/components/ui/data-state";
+import type { FileType } from "@/lib/document-types";
 import { cn } from "@/lib/utils";
 
 export type GlobalResult = {
@@ -15,7 +16,7 @@ export type GlobalResult = {
   kind: "project" | "file" | "folder" | "asset" | "content";
   name: string;
   path: string;
-  fileType: "md" | "html" | null;
+  fileType: FileType | null;
   snippet: { before: string; match: string; after: string; lineNumber: number } | null;
 };
 

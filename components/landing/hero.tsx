@@ -17,7 +17,7 @@ export function Hero() {
           <h1 className="max-w-3xl font-serif text-4xl leading-[0.98] tracking-display sm:text-6xl md:text-7xl">
             A workspace for
             <br />
-            Markdown &amp; HTML docs.
+            docs &amp; spreadsheets.
           </h1>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -27,7 +27,7 @@ export function Hero() {
           </div>
 
           <p className="max-w-xl text-base text-muted-foreground leading-relaxed">
-            Host documentation, plans, and notes in projects with nested folders. Invite
+            Host documentation, plans, and structured data in projects with nested folders. Invite
             collaborators, share read-only links, keep full version history, and edit the same file
             together in real time.
           </p>

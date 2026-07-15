@@ -28,8 +28,10 @@ export type CommentMessage = {
 
 export type CommentThread = {
   id: string;
-  startRel: ArrayBuffer;
-  endRel: ArrayBuffer;
+  anchor:
+    | { kind: "text"; startRel: ArrayBuffer; endRel: ArrayBuffer }
+    | { kind: "cell"; rowId: string; colId: string };
+  orphaned: boolean;
   quote: string;
   status: "open" | "resolved";
   authorName: string;
@@ -60,6 +62,7 @@ type CommentsRailProps = {
   ranges: Map<string, ResolvedCommentRange>;
   activeThreadId: string | null;
   selection: SelectionState | null;
+  selectionKind?: "text" | "cell";
   onClose: () => void;
   onCreate: (body: string, mentionUserIds: string[]) => Promise<void>;
   onReply: (threadId: string, body: string, mentionUserIds: string[]) => Promise<void>;
@@ -249,6 +252,7 @@ export function CommentsRail({
   ranges,
   activeThreadId,
   selection,
+  selectionKind = "text",
   onClose,
   onCreate,
   onReply,
@@ -328,7 +332,9 @@ export function CommentsRail({
               </p>
             ) : (
               <p className="mb-2 rounded-sm bg-foreground/[0.04] px-2 py-1.5 text-[11px] text-muted-foreground leading-relaxed">
-                Select text in the editor to start a thread.
+                {selectionKind === "cell"
+                  ? "Select a cell to start a thread."
+                  : "Select text in the editor to start a thread."}
               </p>
             )}
             <Composer
@@ -355,7 +361,7 @@ export function CommentsRail({
             : threads.map((thread) => {
                 const active = activeThreadId === thread.id;
                 const range = ranges.get(thread.id);
-                const unavailable = !range;
+                const unavailable = thread.anchor.kind === "text" ? !range : thread.orphaned;
                 return (
                   <section
                     key={thread.id}
@@ -392,7 +398,11 @@ export function CommentsRail({
                         {thread.quote}
                       </span>
                       {unavailable ? (
-                        <span className="text-[11px] text-warning">Anchor unavailable</span>
+                        <span className="text-[11px] text-warning">
+                          {thread.anchor.kind === "cell"
+                            ? "Location removed"
+                            : "Anchor unavailable"}
+                        </span>
                       ) : null}
                     </button>
 

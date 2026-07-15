@@ -1,7 +1,16 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
 import { isRasterAssetMimeType } from "../lib/asset-formats";
+import { documentSize, project, sheetRenderModel } from "../lib/doc-projection";
+import type { FileType } from "../lib/document-types";
 import { TRASH_RETENTION_MS } from "../lib/lifecycle";
+import { serializeDelimited } from "../lib/sheet-csv";
+import {
+  inspectSheet,
+  MAX_SHEET_STORED_BYTES,
+  SheetValidationError,
+  seedSheet,
+} from "../lib/sheet-model";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -16,6 +25,7 @@ import {
 
 const MAX_NAME_LENGTH = 80;
 const MAX_FILE_BYTES = 512 * 1024;
+const MAX_COLLAB_UPDATE_BYTES = 768 * 1024;
 const MAX_ASSET_BYTES = 5 * 1024 * 1024;
 const MAX_NODES_PER_PROJECT = 2000;
 const MAX_DEPTH = 16;
@@ -103,7 +113,7 @@ function cleanName(raw: string, fallback?: string): string {
   return name;
 }
 
-function fileTypeFromName(name: string): "md" | "html" | null {
+function fileTypeFromName(name: string): FileType | null {
   const lower = name.toLowerCase();
   if (lower.endsWith(".md")) {
     return "md";
@@ -111,10 +121,11 @@ function fileTypeFromName(name: string): "md" | "html" | null {
   if (lower.endsWith(".html")) {
     return "html";
   }
+  if (lower.endsWith(".sheet")) {
+    return "sheet";
+  }
   return null;
 }
-
-type FileType = "md" | "html";
 
 function requireFileTypeFromName(name: string): FileType {
   const fileType = fileTypeFromName(name);
@@ -134,7 +145,7 @@ function requestedFileType(raw: string, fallback: FileType): FileType {
 function nameForFileType(raw: string, fileType: FileType): string {
   const extension = `.${fileType}`;
   const sanitized = raw.replaceAll("/", "").replaceAll("\\", "").trim();
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|csv|tsv)$/i, "");
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -740,6 +751,8 @@ export const getDocument = query({
       name: doc.name,
       fileType: doc.fileType,
       content: doc.content,
+      contentSeq: doc.contentSeq ?? 0,
+      sheetMeta: doc.sheetMeta,
       mimeType: doc.mimeType,
       size: doc.size,
       assetUrl:
@@ -828,6 +841,27 @@ export const createFile = mutation({
     if (await nameTaken(ctx, args.projectId, args.parentId, name)) {
       throw new Error("name-taken");
     }
+    let content = "";
+    let contentState: ArrayBuffer | undefined;
+    let contentSeq: number | undefined;
+    let size = 0;
+    let sheetMeta: { rows: number; cols: number } | undefined;
+    if (fileType === "sheet") {
+      const ydoc = new Y.Doc();
+      sheetMeta = seedSheet(ydoc).dimensions;
+      content = project(fileType, ydoc);
+      size = documentSize(fileType, ydoc);
+      contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+      contentSeq = 1;
+      ydoc.destroy();
+      if (size > MAX_SHEET_STORED_BYTES) throw new Error("file-too-large");
+      if (
+        (await cachedProjectBytes(ctx, access.project)) + size >
+        (await maxProjectBytes(ctx, access.project))
+      ) {
+        throw new Error("project-full");
+      }
+    }
     const now = Date.now();
     const id = await ctx.db.insert("documents", {
       projectId: args.projectId,
@@ -836,13 +870,25 @@ export const createFile = mutation({
       kind: "file",
       name,
       fileType,
-      content: "",
+      content,
+      contentSeq,
+      contentState,
+      sheetMeta,
       storageId: null,
       mimeType: null,
-      size: 0,
+      size,
       createdAt: now,
       updatedAt: now,
     });
+    if (contentState) {
+      await ctx.db.insert("yjsUpdates", {
+        documentId: id,
+        seq: 1,
+        update: contentState,
+        createdAt: now,
+      });
+      await addProjectBytes(ctx, access.project, size);
+    }
     await recordProjectEvent(ctx, {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -860,7 +906,7 @@ export const createFromTemplate = mutation({
     projectId: v.id("projects"),
     parentId: v.union(v.id("documents"), v.null()),
     name: v.string(),
-    fileType: v.union(v.literal("md"), v.literal("html")),
+    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("sheet")),
     templateId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -885,19 +931,30 @@ export const createFromTemplate = mutation({
     }
     const name = nameForFileType(args.name, fileType);
     if (await nameTaken(ctx, args.projectId, args.parentId, name)) throw new Error("name-taken");
-    const size = byteLength(content);
-    if (size > MAX_FILE_BYTES) throw new Error("file-too-large");
+    const ydoc = new Y.Doc();
+    if (contentState) {
+      Y.applyUpdate(ydoc, new Uint8Array(contentState));
+    } else if (fileType === "sheet") {
+      seedSheet(ydoc);
+    } else if (content) {
+      ydoc.getText("codemirror").insert(0, content);
+    }
+    content = project(fileType, ydoc);
+    const size = documentSize(fileType, ydoc);
+    const sheetMeta = fileType === "sheet" ? inspectSheet(ydoc).dimensions : undefined;
+    contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+    ydoc.destroy();
+    if (
+      byteLength(content) > MAX_FILE_BYTES ||
+      (fileType === "sheet" && size > MAX_SHEET_STORED_BYTES)
+    ) {
+      throw new Error("file-too-large");
+    }
     if (
       (await cachedProjectBytes(ctx, access.project)) + size >
       (await maxProjectBytes(ctx, access.project))
     )
       throw new Error("project-full");
-    if (!contentState) {
-      const ydoc = new Y.Doc();
-      if (content) ydoc.getText("codemirror").insert(0, content);
-      contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
-      ydoc.destroy();
-    }
     const now = Date.now();
     const id = await ctx.db.insert("documents", {
       projectId: args.projectId,
@@ -909,6 +966,7 @@ export const createFromTemplate = mutation({
       content,
       contentSeq: 1,
       contentState,
+      sheetMeta,
       storageId: null,
       mimeType: null,
       size,
@@ -1024,6 +1082,92 @@ export const importDocuments = mutation({
         .join(", "),
     });
     return ids;
+  },
+});
+
+export const importSheet = mutation({
+  args: {
+    projectId: v.id("projects"),
+    parentId: v.union(v.id("documents"), v.null()),
+    name: v.string(),
+    updates: v.array(v.bytes()),
+  },
+  handler: async (ctx, args) => {
+    if (
+      args.updates.length < 1 ||
+      args.updates.length > 32 ||
+      args.updates.some((update) => update.byteLength > MAX_COLLAB_UPDATE_BYTES)
+    ) {
+      throw new Error("invalid-import");
+    }
+    const access = await requireProjectEditor(ctx, args.projectId);
+    await assertParent(ctx, args.projectId, args.parentId);
+    await assertCapacity(ctx, args.projectId);
+    if ((await depthOf(ctx, args.parentId)) + 1 > MAX_DEPTH) throw new Error("too-deep");
+    const name = nameForFileType(args.name, "sheet");
+    if (await nameTaken(ctx, args.projectId, args.parentId, name)) throw new Error("name-taken");
+    const ydoc = new Y.Doc();
+    try {
+      for (const update of args.updates) Y.applyUpdate(ydoc, new Uint8Array(update));
+      const inspection = inspectSheet(ydoc);
+      if (inspection.rows.length === 0 || inspection.cols.length === 0) {
+        throw new Error("invalid-import");
+      }
+    } catch (error) {
+      ydoc.destroy();
+      if (error instanceof SheetValidationError) throw new Error(error.code);
+      throw error;
+    }
+    const content = project("sheet", ydoc);
+    const size = documentSize("sheet", ydoc);
+    const sheetMeta = inspectSheet(ydoc).dimensions;
+    const contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+    ydoc.destroy();
+    if (byteLength(content) > MAX_FILE_BYTES || size > MAX_SHEET_STORED_BYTES) {
+      throw new Error("file-too-large");
+    }
+    if (
+      (await cachedProjectBytes(ctx, access.project)) + size >
+      (await maxProjectBytes(ctx, access.project))
+    ) {
+      throw new Error("project-full");
+    }
+    const now = Date.now();
+    const id = await ctx.db.insert("documents", {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      parentId: args.parentId,
+      kind: "file",
+      name,
+      fileType: "sheet",
+      content,
+      contentSeq: args.updates.length,
+      contentState,
+      sheetMeta,
+      storageId: null,
+      mimeType: null,
+      size,
+      createdAt: now,
+      updatedAt: now,
+    });
+    for (const [index, update] of args.updates.entries()) {
+      await ctx.db.insert("yjsUpdates", {
+        documentId: id,
+        seq: index + 1,
+        update,
+        createdAt: now,
+      });
+    }
+    await addProjectBytes(ctx, access.project, size);
+    await recordProjectEvent(ctx, {
+      projectId: args.projectId,
+      clerkOrgId: access.project.clerkOrgId,
+      kind: "documents_imported",
+      documentId: id,
+      targetName: name,
+      detail: "sheet",
+    });
+    return id;
   },
 });
 
@@ -1149,7 +1293,12 @@ export const duplicate = mutation({
       throw new Error("project-full");
     }
     let state: ArrayBuffer | null = doc.contentState ?? null;
-    if (!state && doc.content.length > 0) {
+    if (!state && doc.fileType === "sheet") {
+      const seedDoc = new Y.Doc();
+      seedSheet(seedDoc);
+      state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
+      seedDoc.destroy();
+    } else if (!state && doc.content.length > 0) {
       const seedDoc = new Y.Doc();
       seedDoc.getText("codemirror").insert(0, doc.content);
       state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
@@ -1167,6 +1316,7 @@ export const duplicate = mutation({
       content: doc.content,
       contentSeq: state ? 1 : undefined,
       contentState: state ?? undefined,
+      sheetMeta: doc.sheetMeta,
       storageId: null,
       mimeType: null,
       size: doc.size,
@@ -1196,6 +1346,7 @@ export const setContent = mutation({
     if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
+    if (doc.fileType === "sheet") throw new Error("unsupported-filetype");
     const access = await requireProjectEditor(ctx, doc.projectId);
     const newSize = byteLength(args.content);
     if (newSize > MAX_FILE_BYTES) {
@@ -1520,17 +1671,31 @@ export const exportBundle = query({
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
     const nodes = await Promise.all(
-      visibleDocuments(docs).map(async (doc) => ({
-        id: doc._id,
-        parentId: doc.parentId,
-        kind: doc.kind,
-        name: doc.name,
-        fileType: doc.fileType,
-        content: doc.kind === "file" ? doc.content : "",
-        mimeType: doc.mimeType,
-        assetUrl:
-          doc.kind === "asset" && doc.storageId ? await ctx.storage.getUrl(doc.storageId) : null,
-      })),
+      visibleDocuments(docs).map(async (doc) => {
+        let content = doc.kind === "file" ? doc.content : "";
+        if (doc.kind === "file" && doc.fileType === "sheet" && doc.contentState) {
+          const ydoc = new Y.Doc();
+          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          const model = sheetRenderModel(ydoc);
+          content = serializeDelimited(
+            model.rows.map((row) => row.values),
+            ",",
+            "\r\n",
+          );
+          ydoc.destroy();
+        }
+        return {
+          id: doc._id,
+          parentId: doc.parentId,
+          kind: doc.kind,
+          name: doc.name,
+          fileType: doc.fileType,
+          content,
+          mimeType: doc.mimeType,
+          assetUrl:
+            doc.kind === "asset" && doc.storageId ? await ctx.storage.getUrl(doc.storageId) : null,
+        };
+      }),
     );
     return { projectTitle: access.project.title, nodes };
   },

@@ -21,6 +21,7 @@ import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { historyEmail, mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { SheetTable } from "@/components/sheet-table";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
@@ -221,6 +222,7 @@ export function VersionHistoryModal({
   onRestored,
 }: VersionHistoryModalProps) {
   const docId = documentId as Id<"documents">;
+  const isSheet = fileNode.fileType === "sheet";
   const snapshots = useQuery(api.collab.listHistory, { documentId: docId });
   const createCheckpoint = useMutation(api.collab.createHistoryCheckpoint);
   const restoreHistory = useMutation(api.collab.restoreHistory);
@@ -473,20 +475,27 @@ export function VersionHistoryModal({
 
             <div className="flex min-w-0 flex-1 flex-col">
               <div className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-2 border-hairline border-b px-2 py-1.5">
-                <div className="grid min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-sm border border-hairline p-0.5 sm:flex-none">
+                <div
+                  className={cn(
+                    "grid min-w-0 flex-1 gap-0.5 rounded-sm border border-hairline p-0.5 sm:flex-none",
+                    isSheet ? "grid-cols-2" : "grid-cols-3",
+                  )}
+                >
                   <TabButton active={tab === "file"} label="File" onClick={() => setTab("file")} />
-                  <TabButton
-                    active={tab === "diff"}
-                    label="Diff → current"
-                    onClick={() => setTab("diff")}
-                  />
+                  {!isSheet ? (
+                    <TabButton
+                      active={tab === "diff"}
+                      label="Diff → current"
+                      onClick={() => setTab("diff")}
+                    />
+                  ) : null}
                   <TabButton
                     active={tab === "compare"}
                     label="Compare"
                     onClick={() => setTab("compare")}
                   />
                 </div>
-                {tab === "file" ? (
+                {tab === "file" && !isSheet ? (
                   <div className="flex items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                     {(
                       [
@@ -533,7 +542,9 @@ export function VersionHistoryModal({
               <div className="relative min-h-0 flex-1">
                 {tab === "file" ? (
                   preview ? (
-                    fileMode === "preview" ? (
+                    isSheet && preview.sheetPreview ? (
+                      <SheetTable model={preview.sheetPreview} className="size-full p-3" />
+                    ) : fileMode === "preview" ? (
                       <DocPreview fileNode={fileNode} content={preview.content} nodes={nodes} />
                     ) : (
                       <DocEditor
@@ -549,7 +560,7 @@ export function VersionHistoryModal({
                   )
                 ) : null}
 
-                {tab === "diff" ? (
+                {tab === "diff" && !isSheet ? (
                   preview ? (
                     <div className="flex size-full flex-col">
                       <div className="min-h-0 flex-1">
@@ -569,11 +580,24 @@ export function VersionHistoryModal({
                   basePreview && comparePreview ? (
                     <div className="flex size-full flex-col">
                       <div className="min-h-0 flex-1">
-                        <DiffView
-                          original={basePreview.content}
-                          modified={comparePreview.content}
-                          language={language}
-                        />
+                        {isSheet && basePreview.sheetPreview && comparePreview.sheetPreview ? (
+                          <div className="grid size-full min-h-0 grid-cols-1 gap-3 overflow-auto p-3 lg:grid-cols-2">
+                            <SheetTable
+                              model={basePreview.sheetPreview}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                            <SheetTable
+                              model={comparePreview.sheetPreview}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                          </div>
+                        ) : (
+                          <DiffView
+                            original={basePreview.content}
+                            modified={comparePreview.content}
+                            language={language}
+                          />
+                        )}
                       </div>
                     </div>
                   ) : (

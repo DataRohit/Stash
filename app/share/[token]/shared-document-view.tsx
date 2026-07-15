@@ -5,7 +5,10 @@ import { useEffect, useMemo, useRef } from "react";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { SheetTable } from "@/components/sheet-table";
 import { notify } from "@/components/ui/toast";
+import type { SheetRenderModel } from "@/lib/doc-projection";
+import type { FileType } from "@/lib/document-types";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 export type SharedDocument = {
@@ -13,8 +16,9 @@ export type SharedDocument = {
   projectTitle: string;
   documentId: string;
   documentName: string;
-  fileType: "md" | "html" | null;
+  fileType: FileType | null;
   content: string;
+  sheetPreview?: SheetRenderModel;
   updatedAt: number;
   nodes: TreeNode[];
   fileLinks: { documentId: string; href: string }[];
@@ -81,7 +85,9 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
         </span>
       </header>
       <section className="editor-surface min-h-0 flex-1 overflow-hidden rounded-lg">
-        {fileNode ? (
+        {shared.fileType === "sheet" && shared.sheetPreview ? (
+          <SheetTable model={shared.sheetPreview} className="h-full bg-background p-3" />
+        ) : fileNode ? (
           <DocPreview
             fileNode={fileNode}
             content={shared.content}

@@ -2,7 +2,7 @@
   "name": "stash",
   "version": "0.1.0",
   "private": true,
-  "description": "Host, organize, and collaboratively edit Markdown and HTML documents in nested projects with Convex-backed real-time collaboration, comments, version history, trash and restore, full-text search, and shareable read-only links.",
+  "description": "Host, organize, and collaboratively edit Markdown, HTML, and spreadsheet documents in nested projects with Convex-backed real-time collaboration, comments, history, search, and sharing.",
   "keywords": [
     "authentication",
     "backend",
@@ -10,6 +10,7 @@
     "clerk",
     "collaboration",
     "convex",
+    "csv",
     "database",
     "document-management",
     "documentation",
@@ -19,6 +20,7 @@
     "nextjs",
     "organizations",
     "real-time",
+    "spreadsheet",
     "typescript",
     "version-control",
     "workspace"
@@ -87,6 +89,7 @@
     "@dicebear/core": "^9.4.3",
     "@lezer/highlight": "^1.2.3",
     "@resvg/resvg-js": "^2.6.2",
+    "@tanstack/react-virtual": "^3.14.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "convex": "^1.42.1",

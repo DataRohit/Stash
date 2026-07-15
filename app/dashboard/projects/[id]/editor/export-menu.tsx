@@ -1,8 +1,17 @@
 "use client";
 
 import { useConvex } from "convex/react";
-import { Download, FileText, Globe, Loader2, Package, Printer } from "lucide-react";
+import {
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Globe,
+  Loader2,
+  Package,
+  Printer,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type * as Y from "yjs";
 import { referencedAssetIds } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import {
   type BundleNode,
@@ -10,6 +19,9 @@ import {
   exportMarkdown,
   exportPdf,
   exportProjectZip,
+  exportSheetCsv,
+  exportSheetHtml,
+  exportSheetPdf,
 } from "@/app/dashboard/projects/[id]/editor/lib/export-doc";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { notify } from "@/components/ui/toast";
@@ -22,11 +34,12 @@ type ExportMenuProps = {
   fileNode: TreeNode;
   content: string;
   nodes: TreeNode[];
+  ydoc?: Y.Doc;
 };
 
-type Action = "md" | "html" | "pdf" | "zip";
+type Action = "md" | "csv" | "html" | "pdf" | "zip";
 
-export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuProps) {
+export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: ExportMenuProps) {
   const convex = useConvex();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Action | null>(null);
@@ -91,6 +104,7 @@ export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuPr
   };
 
   const isMd = fileNode.fileType === "md";
+  const isSheet = fileNode.fileType === "sheet";
 
   return (
     <div ref={ref} className="relative">
@@ -127,6 +141,16 @@ export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuPr
               onClick={() => run("md", () => exportMarkdown(fileNode, content))}
             />
           ) : null}
+          {isSheet && ydoc ? (
+            <ExportItem
+              icon={<FileSpreadsheet className="size-4 text-accent" aria-hidden="true" />}
+              label="Spreadsheet"
+              hint=".csv"
+              loading={busy === "csv"}
+              disabled={Boolean(busy)}
+              onClick={() => run("csv", () => exportSheetCsv(fileNode, ydoc))}
+            />
+          ) : null}
           <ExportItem
             icon={<Globe className="size-4 text-info" aria-hidden="true" />}
             label="Web page"
@@ -135,7 +159,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuPr
             disabled={Boolean(busy)}
             onClick={() =>
               run("html", async () =>
-                exportHtml(fileNode, content, await nodesWithRenderedAssets()),
+                isSheet && ydoc
+                  ? exportSheetHtml(fileNode, ydoc)
+                  : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />
@@ -146,7 +172,11 @@ export function ExportMenu({ projectId, fileNode, content, nodes }: ExportMenuPr
             loading={busy === "pdf"}
             disabled={Boolean(busy)}
             onClick={() =>
-              run("pdf", async () => exportPdf(fileNode, content, await nodesWithRenderedAssets()))
+              run("pdf", async () =>
+                isSheet && ydoc
+                  ? exportSheetPdf(fileNode, ydoc)
+                  : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
+              )
             }
           />
           <div className="my-1 h-px bg-hairline" />

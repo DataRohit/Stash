@@ -1,4 +1,12 @@
 import { v } from "convex/values";
+import * as Y from "yjs";
+import {
+  columnLabel,
+  displayedCellValue,
+  getSheetRoots,
+  inspectSheet,
+  readCell,
+} from "../lib/sheet-model";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -238,6 +246,21 @@ export const listForDocument = query({
       .withIndex("by_document_updated", (q) => q.eq("documentId", args.documentId))
       .order("desc")
       .take(MAX_THREADS_PER_DOCUMENT);
+    let activeRows: Set<string> | null = null;
+    let activeCols: Set<string> | null = null;
+    if (doc.fileType === "sheet" && doc.contentState) {
+      try {
+        const ydoc = new Y.Doc();
+        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+        const inspection = inspectSheet(ydoc);
+        activeRows = inspection.rowSet;
+        activeCols = inspection.colSet;
+        ydoc.destroy();
+      } catch {
+        activeRows = new Set();
+        activeCols = new Set();
+      }
+    }
     const rows = await Promise.all(
       threads.map(async (thread) => {
         const messages = await ctx.db
@@ -249,8 +272,24 @@ export const listForDocument = query({
           id: thread._id,
           documentId: thread.documentId,
           projectId: thread.projectId,
-          startRel: thread.startRel,
-          endRel: thread.endRel,
+          anchor:
+            thread.anchorKind === "cell"
+              ? {
+                  kind: "cell" as const,
+                  rowId: thread.rowId ?? "",
+                  colId: thread.colId ?? "",
+                }
+              : {
+                  kind: "text" as const,
+                  startRel: thread.startRel ?? new ArrayBuffer(0),
+                  endRel: thread.endRel ?? new ArrayBuffer(0),
+                },
+          orphaned:
+            thread.anchorKind === "cell" &&
+            (!thread.rowId ||
+              !thread.colId ||
+              !activeRows?.has(thread.rowId) ||
+              !activeCols?.has(thread.colId)),
           quote: thread.quote,
           status: thread.status,
           authorUserId: thread.authorUserId,
@@ -315,16 +354,23 @@ export const mentionCandidates = query({
 export const createThread = mutation({
   args: {
     documentId: v.id("documents"),
-    startRel: v.bytes(),
-    endRel: v.bytes(),
+    anchor: v.union(
+      v.object({ kind: v.literal("text"), startRel: v.bytes(), endRel: v.bytes() }),
+      v.object({ kind: v.literal("cell"), rowId: v.string(), colId: v.string() }),
+    ),
     quote: v.string(),
     body: v.string(),
     mentionUserIds: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    assertAnchor(args.startRel);
-    assertAnchor(args.endRel);
     const { doc, access } = await fileForAccess(ctx, args.documentId);
+    if (args.anchor.kind === "text") {
+      if (doc.fileType === "sheet") throw new Error("invalid-anchor");
+      assertAnchor(args.anchor.startRel);
+      assertAnchor(args.anchor.endRel);
+    } else if (doc.fileType !== "sheet" || !doc.contentState) {
+      throw new Error("invalid-anchor");
+    }
     if (
       !(await enforceWriteRateLimit(ctx, "comments", doc._id, access.userId, COMMENT_WRITE_LIMIT))
     ) {
@@ -332,15 +378,35 @@ export const createThread = mutation({
     }
     const actor = await actorFor(ctx, access.userId);
     const body = trimBody(args.body);
-    const quote = trimQuote(args.quote);
+    let quote = "";
+    if (args.anchor.kind === "text") {
+      quote = trimQuote(args.quote);
+    } else {
+      try {
+        const ydoc = new Y.Doc();
+        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState as ArrayBuffer));
+        const inspection = inspectSheet(ydoc);
+        const rowIndex = inspection.rows.indexOf(args.anchor.rowId);
+        const colIndex = inspection.cols.indexOf(args.anchor.colId);
+        if (rowIndex < 0 || colIndex < 0) throw new Error("invalid-anchor");
+        quote =
+          displayedCellValue(readCell(getSheetRoots(ydoc), args.anchor.rowId, args.anchor.colId)) ||
+          `${columnLabel(colIndex)}${rowIndex + 1}`;
+        ydoc.destroy();
+      } catch {
+        throw new Error("invalid-anchor");
+      }
+    }
     const mentionUserIds = await validatedMentionIds(ctx, access.project, args.mentionUserIds);
     const now = Date.now();
     const commentId = await ctx.db.insert("comments", {
       documentId: doc._id,
       projectId: doc.projectId,
       clerkOrgId: doc.clerkOrgId,
-      startRel: args.startRel,
-      endRel: args.endRel,
+      anchorKind: args.anchor.kind,
+      ...(args.anchor.kind === "text"
+        ? { startRel: args.anchor.startRel, endRel: args.anchor.endRel }
+        : { rowId: args.anchor.rowId, colId: args.anchor.colId }),
       quote,
       status: "open",
       authorUserId: actor.userId,

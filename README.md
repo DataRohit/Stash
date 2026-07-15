@@ -1,6 +1,6 @@
 # Stash
 
-## Collaborative document workspace for Markdown and HTML
+## Collaborative document workspace for Markdown, HTML, and spreadsheets
 
 [![Quality](https://github.com/DataRohit/Stash/actions/workflows/quality.yml/badge.svg)](https://github.com/DataRohit/Stash/actions/workflows/quality.yml)
 [![Project Status: Active](https://img.shields.io/badge/Project%20Status-Active-brightgreen)](https://github.com/DataRohit/Stash)
@@ -22,7 +22,7 @@
 ## Overview
 
 Stash is a multi-tenant, developer-first document workspace built for teams that
-maintain Markdown and HTML together. Both formats participate in real-time
+maintain Markdown, HTML, and structured spreadsheets together. Every document type participates in real-time
 collaboration, comments, version history, search, sharing, and export. Convex owns
 reactive data and authorization boundaries; Clerk owns sessions, organizations,
 roles, invitations, and billing-plan data.
@@ -123,12 +123,12 @@ confirms that changes synchronize automatically.
 
 ### Documents and files
 
-- Nested project folders with Markdown, HTML, and PNG, JPEG, GIF, WebP, or AVIF
+- Nested project folders with Markdown, HTML, spreadsheets, and PNG, JPEG, GIF, WebP, or AVIF
   image nodes.
-- Document names accept only `.md` and `.html`. Entering either extension in the
+- Document names accept `.md`, `.html`, and `.sheet`. Entering an extension in the
   creation dialog selects the matching format automatically; names without an
   extension use the selected format and receive its canonical extension.
-- Multi-file `.md` and `.html` import with 512 KB file limits.
+- Multi-file `.md` and `.html` import plus atomic RFC-style CSV/TSV spreadsheet import.
 - Drag-and-drop movement with cycle prevention and an accessible move dialog.
 - File duplication with collision-safe names and independent collaboration state.
 - Thirty-day trash, restoration, administrator-only permanent deletion, and bounded purge jobs.
@@ -137,6 +137,9 @@ confirms that changes synchronize automatically.
 ### Editing and collaboration
 
 - CodeMirror 6 editors for Markdown and HTML.
+- A two-axis virtualized spreadsheet editor with typed cells, stable-id formulas,
+  range selection, clipboard interoperability, private sort/filter views,
+  structural editing, resize/reorder controls, and remote selections.
 - Yjs incremental synchronization over Convex with snapshots and compaction.
 - Presence and remote cursors with session ownership protection.
 - Cross-file link completion, synchronized outlines, and image paste or drop.
@@ -144,7 +147,7 @@ confirms that changes synchronize automatically.
 
 ### Review and communication
 
-- Yjs-relative comment anchors for Markdown and HTML editors.
+- Yjs-relative text comment anchors and stable row/column cell anchors for spreadsheets.
 - Replies, resolution, reopening, mentions, and notification preferences.
 - Version checkpoints, text comparison, restoration, and live collaborator updates.
 - Project activity feed with actor, target, event type, and time.
@@ -163,7 +166,7 @@ confirms that changes synchronize automatically.
 - Optional expiry and share-token rotation.
 - Organization policy that degrades public links to organization access.
 - Public-edge throttling isolated by token and IP.
-- Standalone HTML, print/PDF, Markdown, and project ZIP export.
+- Standalone HTML, print/PDF, Markdown, canonical CSV, and project ZIP export.
 
 ### Organizations and authorization
 

@@ -9,6 +9,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { FileType } from "@/lib/document-types";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { TRASH_RETENTION_MS } from "@/lib/lifecycle";
 
@@ -19,7 +20,7 @@ type TrashItem = {
   id: string;
   kind: "folder" | "file" | "asset";
   name: string;
-  fileType: "md" | "html" | null;
+  fileType: FileType | null;
   size: number;
   trashedAt: number;
 };

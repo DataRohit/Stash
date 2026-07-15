@@ -1,9 +1,11 @@
+import type { FileType } from "@/lib/document-types";
+
 export type TreeNode = {
   id: string;
   parentId: string | null;
   kind: "folder" | "file" | "asset";
   name: string;
-  fileType: "md" | "html" | null;
+  fileType: FileType | null;
   size: number;
   mimeType: string | null;
   hasAsset?: boolean;

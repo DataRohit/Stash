@@ -67,6 +67,10 @@ import {
   SharePopover,
   type ShareState,
 } from "@/app/dashboard/projects/[id]/editor/share-popover";
+import {
+  type SheetCellSelection,
+  SheetEditor,
+} from "@/app/dashboard/projects/[id]/editor/sheet-editor";
 import { TrashPanel } from "@/app/dashboard/projects/[id]/editor/trash-panel";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { DataLoader, DataState } from "@/components/ui/data-state";
@@ -78,6 +82,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { isRasterAssetMimeType, RASTER_ASSET_FORMATS } from "@/lib/asset-formats";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
+import { parseDelimited, sheetImportUpdates } from "@/lib/sheet-csv";
 import { cn } from "@/lib/utils";
 
 type ProjectEditorProps = {
@@ -349,6 +354,8 @@ export function ProjectEditor({
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const createAsset = useMutation(api.documents.createAsset);
   const importDocuments = useMutation(api.documents.importDocuments);
+  const importSheet = useMutation(api.documents.importSheet);
+  const replaceSheetFromImport = useMutation(api.collab.replaceSheetFromImport);
   const createCommentThread = useMutation(api.comments.createThread);
   const replyToComment = useMutation(api.comments.reply);
   const setCommentResolved = useMutation(api.comments.setResolved);
@@ -372,6 +379,7 @@ export function ProjectEditor({
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [editorSelection, setEditorSelection] = useState<EditorSelectionState | null>(null);
+  const [sheetSelection, setSheetSelection] = useState<SheetCellSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState<CommentFocusRequest | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -505,13 +513,14 @@ export function ProjectEditor({
       return ranges;
     }
     for (const thread of commentThreads) {
+      if (thread.anchor.kind !== "text") continue;
       try {
         const start = Y.createAbsolutePositionFromRelativePosition(
-          Y.decodeRelativePosition(new Uint8Array(thread.startRel)),
+          Y.decodeRelativePosition(new Uint8Array(thread.anchor.startRel)),
           collabYdoc,
         );
         const end = Y.createAbsolutePositionFromRelativePosition(
-          Y.decodeRelativePosition(new Uint8Array(thread.endRel)),
+          Y.decodeRelativePosition(new Uint8Array(thread.anchor.endRel)),
           collabYdoc,
         );
         if (!start || !end || start.type !== collabYtext || end.type !== collabYtext) {
@@ -535,7 +544,14 @@ export function ProjectEditor({
     [resolvedCommentRanges],
   );
   const unresolvedCommentCount = commentThreads.filter((thread) => thread.status === "open").length;
-  const commentSelection = effectiveViewMode === "preview" ? null : editorSelection;
+  const commentSelection =
+    selectedNode?.fileType === "sheet"
+      ? sheetSelection
+        ? { from: 0, to: 1, text: sheetSelection.quote || "Empty cell" }
+        : null
+      : effectiveViewMode === "preview"
+        ? null
+        : editorSelection;
   const outlineItems = useMemo<OutlineItem[]>(() => {
     if (!outlineOpen || !selectedFileId || selectedNode?.kind !== "file") {
       return [];
@@ -721,10 +737,23 @@ export function ProjectEditor({
 
   const handleUpload = async (parentId: string | null, files: File[]) => {
     const imports = files.filter((file) => /\.(?:md|html)$/i.test(file.name));
+    const sheetImports = files.filter((file) => /\.(?:csv|tsv)$/i.test(file.name));
     const assets = files.filter((file) => isRasterAssetMimeType(file.type));
-    if (imports.length + assets.length !== files.length) {
+    if (imports.length + sheetImports.length + assets.length !== files.length) {
       notify.error("Unsupported file", {
-        description: `Upload ${RASTER_ASSET_FORMATS} images or .md and .html documents.`,
+        description: `Upload ${RASTER_ASSET_FORMATS} images, .md/.html documents, or .csv/.tsv spreadsheets.`,
+      });
+    }
+    for (const file of sheetImports) {
+      await guard(async () => {
+        const delimiter = file.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+        const values = parseDelimited(await file.text(), delimiter);
+        await importSheet({
+          projectId: pid,
+          parentId: parentId as Id<"documents"> | null,
+          name: file.name.replace(/\.(?:csv|tsv)$/i, ".sheet"),
+          updates: sheetImportUpdates(values).map(toArrayBuffer),
+        });
       });
     }
     if (imports.length > 0) {
@@ -805,7 +834,61 @@ export function ProjectEditor({
     }
   };
 
+  const replaceSelectedSheet = async (file: File) => {
+    if (!selectedFileId || !collab || selectedNode?.fileType !== "sheet") return;
+    if (!/\.(?:csv|tsv)$/i.test(file.name)) {
+      notify.error("Unsupported import", { description: "Choose a .csv or .tsv file." });
+      return;
+    }
+    if (
+      !window.confirm(
+        "Replace this spreadsheet? Existing cell comments remain, but comments on removed rows or columns will be marked as location removed.",
+      )
+    ) {
+      return;
+    }
+    try {
+      const delimiter = file.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+      const values = parseDelimited(await file.text(), delimiter);
+      const result = await replaceSheetFromImport({
+        documentId: selectedFileId as Id<"documents">,
+        expectedSeq: collab.seq,
+        updates: sheetImportUpdates(values).map(toArrayBuffer),
+      });
+      if (!result.ok) throw new Error(result.error);
+      notify.success("Spreadsheet imported");
+    } catch (error) {
+      notify.error("Import failed", { description: mapDocError(error) });
+    }
+  };
+
   const createThreadFromSelection = async (body: string, mentionUserIds: string[]) => {
+    if (selectedNode?.fileType === "sheet") {
+      if (!selectedFileId || !collab?.ready || !sheetSelection) {
+        notify.error("Select a cell first");
+        return;
+      }
+      try {
+        const commentId = await createCommentThread({
+          documentId: selectedFileId as Id<"documents">,
+          anchor: {
+            kind: "cell",
+            rowId: sheetSelection.rowId,
+            colId: sheetSelection.colId,
+          },
+          quote: sheetSelection.quote,
+          body,
+          mentionUserIds,
+        });
+        setCommentsOpen(true);
+        setActiveCommentId(commentId);
+        notify.success("Comment added");
+      } catch (error) {
+        notify.error("Comment failed", { description: mapDocError(error) });
+        throw error;
+      }
+      return;
+    }
     if (
       !selectedFileId ||
       !collab?.ready ||
@@ -837,8 +920,7 @@ export function ProjectEditor({
       };
       const commentId = await createCommentThread({
         documentId: selectedFileId as Id<"documents">,
-        startRel: anchors.startRel,
-        endRel: anchors.endRel,
+        anchor: { kind: "text", startRel: anchors.startRel, endRel: anchors.endRel },
         quote: editorSelection.text,
         body,
         mentionUserIds,
@@ -1147,27 +1229,29 @@ export function ProjectEditor({
                   ) : null}
                 </div>
               ) : null}
-              <button
-                type="button"
-                onClick={() => setCommentsOpen((value) => !value)}
-                aria-label={`Comments, ${unresolvedCommentCount} open`}
-                aria-haspopup="dialog"
-                aria-expanded={commentsOpen}
-                aria-pressed={commentsOpen}
-                className={cn(
-                  "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
-                  commentsOpen
-                    ? "bg-foreground/[0.08] text-foreground"
-                    : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
-                )}
-              >
-                <MessageSquare className="size-4" aria-hidden="true" />
-                {unresolvedCommentCount > 0 ? (
-                  <span className="absolute -top-1 -right-1 flex min-w-4 items-center justify-center rounded-full bg-accent px-1 font-mono text-[9px] text-background">
-                    {unresolvedCommentCount}
-                  </span>
-                ) : null}
-              </button>
+              {selectedNode?.fileType !== "sheet" ? (
+                <button
+                  type="button"
+                  onClick={() => setCommentsOpen((value) => !value)}
+                  aria-label={`Comments, ${unresolvedCommentCount} open`}
+                  aria-haspopup="dialog"
+                  aria-expanded={commentsOpen}
+                  aria-pressed={commentsOpen}
+                  className={cn(
+                    "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                    commentsOpen
+                      ? "bg-foreground/[0.08] text-foreground"
+                      : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                  )}
+                >
+                  <MessageSquare className="size-4" aria-hidden="true" />
+                  {unresolvedCommentCount > 0 ? (
+                    <span className="absolute -top-1 -right-1 flex min-w-4 items-center justify-center rounded-full bg-accent px-1 font-mono text-[9px] text-background">
+                      {unresolvedCommentCount}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setOutlineOpen((value) => !value)}
@@ -1190,6 +1274,7 @@ export function ProjectEditor({
                   fileNode={selectedNode}
                   content={canEdit ? buffer : doc.content}
                   nodes={nodes}
+                  ydoc={doc.fileType === "sheet" ? collab?.ydoc : undefined}
                 />
               ) : null}
               {isAdmin && selectedFileId ? (
@@ -1268,41 +1353,43 @@ export function ProjectEditor({
               >
                 <CircleHelp className="size-4" aria-hidden="true" />
               </button>
-              <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
-                <legend className="sr-only">View mode</legend>
-                {(
-                  [
-                    ["editor", Code2, "Editor"],
-                    ["split", Columns2, "Split"],
-                    ["preview", Eye, "Preview"],
-                  ] as const
-                ).map(([mode, Icon, label]) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => {
-                      if (compactView) {
-                        if (mode !== "split") {
-                          setMobileViewMode(mode);
+              {selectedNode?.fileType !== "sheet" ? (
+                <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
+                  <legend className="sr-only">View mode</legend>
+                  {(
+                    [
+                      ["editor", Code2, "Editor"],
+                      ["split", Columns2, "Split"],
+                      ["preview", Eye, "Preview"],
+                    ] as const
+                  ).map(([mode, Icon, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => {
+                        if (compactView) {
+                          if (mode !== "split") {
+                            setMobileViewMode(mode);
+                          }
+                        } else {
+                          setViewMode(mode);
                         }
-                      } else {
-                        setViewMode(mode);
-                      }
-                    }}
-                    aria-label={label}
-                    aria-pressed={effectiveViewMode === mode}
-                    className={cn(
-                      "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
-                      mode === "split" && "hidden md:flex",
-                      effectiveViewMode === mode
-                        ? "bg-foreground/[0.08] text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    <Icon className="size-4" aria-hidden="true" />
-                  </button>
-                ))}
-              </fieldset>
+                      }}
+                      aria-label={label}
+                      aria-pressed={effectiveViewMode === mode}
+                      className={cn(
+                        "flex size-7 cursor-pointer items-center justify-center rounded-xs transition-colors",
+                        mode === "split" && "hidden md:flex",
+                        effectiveViewMode === mode
+                          ? "bg-foreground/[0.08] text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      <Icon className="size-4" aria-hidden="true" />
+                    </button>
+                  ))}
+                </fieldset>
+              ) : null}
             </div>
           ) : null}
           {selectedFileId ? (
@@ -1414,54 +1501,82 @@ export function ProjectEditor({
                   {collab.pendingEdits === 1 ? "edit" : "edits"} pending.
                 </div>
               ) : null}
-              <div className="flex min-h-0 flex-1">
-                {effectiveViewMode !== "preview" ? (
-                  <div
-                    className={cn(
-                      "min-w-0 overflow-auto",
-                      effectiveViewMode === "split" ? "flex-1 border-hairline border-r" : "flex-1",
-                    )}
-                  >
-                    <DocEditor
-                      ref={editorRef}
-                      key={`${selectedFileId}:${doc.fileType}`}
-                      initialContent={doc.content}
-                      language={doc.fileType === "html" ? "html" : "md"}
-                      readOnly={!canEdit || Boolean(collab?.blocked)}
-                      onChange={setBuffer}
-                      maxContentBytes={canEdit ? maxEditableBytes : undefined}
-                      onLimit={() =>
-                        notify.error("Edit is too large", {
-                          description: mapDocError(new Error("file-too-large")),
-                        })
-                      }
-                      ytext={collab?.ytext}
-                      awareness={collab?.awareness}
-                      commentRanges={commentRanges}
-                      activeCommentId={activeCommentId}
-                      focusRequest={focusRequest}
-                      onSelectionChange={setEditorSelection}
-                      onCommentRangeClick={(commentId) => {
-                        setCommentsOpen(true);
-                        focusThread(commentId);
-                      }}
-                      onInsertImage={canEdit ? insertImageAsset : undefined}
-                      fileNode={selectedNode}
-                      nodes={nodes}
-                    />
-                  </div>
-                ) : null}
-                {effectiveViewMode !== "editor" ? (
-                  <div className="min-w-0 flex-1">
-                    <DocPreview
-                      fileNode={selectedNode}
-                      content={canEdit ? buffer : doc.content}
-                      nodes={nodes}
-                      iframeRef={previewFrameRef}
-                    />
-                  </div>
-                ) : null}
-              </div>
+              {doc.fileType === "sheet" ? (
+                <div className="min-h-0 flex-1">
+                  <SheetEditor
+                    key={selectedFileId}
+                    ydoc={collab?.ydoc}
+                    awareness={collab?.awareness}
+                    readOnly={!canEdit || Boolean(collab?.blocked)}
+                    documentId={selectedFileId}
+                    activeComment={
+                      commentThreads.find((thread) => thread.id === activeCommentId)?.anchor
+                        .kind === "cell"
+                        ? (commentThreads.find((thread) => thread.id === activeCommentId)
+                            ?.anchor as {
+                            kind: "cell";
+                            rowId: string;
+                            colId: string;
+                          })
+                        : null
+                    }
+                    onSelectionChange={setSheetSelection}
+                    onAddComment={() => setCommentsOpen(true)}
+                    onImportFile={replaceSelectedSheet}
+                  />
+                </div>
+              ) : (
+                <div className="flex min-h-0 flex-1">
+                  {effectiveViewMode !== "preview" ? (
+                    <div
+                      className={cn(
+                        "min-w-0 overflow-auto",
+                        effectiveViewMode === "split"
+                          ? "flex-1 border-hairline border-r"
+                          : "flex-1",
+                      )}
+                    >
+                      <DocEditor
+                        ref={editorRef}
+                        key={`${selectedFileId}:${doc.fileType}`}
+                        initialContent={doc.content}
+                        language={doc.fileType === "html" ? "html" : "md"}
+                        readOnly={!canEdit || Boolean(collab?.blocked)}
+                        onChange={setBuffer}
+                        maxContentBytes={canEdit ? maxEditableBytes : undefined}
+                        onLimit={() =>
+                          notify.error("Edit is too large", {
+                            description: mapDocError(new Error("file-too-large")),
+                          })
+                        }
+                        ytext={collab?.ytext}
+                        awareness={collab?.awareness}
+                        commentRanges={commentRanges}
+                        activeCommentId={activeCommentId}
+                        focusRequest={focusRequest}
+                        onSelectionChange={setEditorSelection}
+                        onCommentRangeClick={(commentId) => {
+                          setCommentsOpen(true);
+                          focusThread(commentId);
+                        }}
+                        onInsertImage={canEdit ? insertImageAsset : undefined}
+                        fileNode={selectedNode}
+                        nodes={nodes}
+                      />
+                    </div>
+                  ) : null}
+                  {effectiveViewMode !== "editor" ? (
+                    <div className="min-w-0 flex-1">
+                      <DocPreview
+                        fileNode={selectedNode}
+                        content={canEdit ? buffer : doc.content}
+                        nodes={nodes}
+                        iframeRef={previewFrameRef}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              )}
             </div>
           ) : selectedFileId && doc === undefined ? (
             <DataLoader label="Loading document" className="editor-panel min-w-0 flex-1" />
@@ -1507,7 +1622,10 @@ export function ProjectEditor({
             </div>
           )}
         </div>
-        {outlineOpen && selectedFileId && selectedNode?.kind === "file" ? (
+        {outlineOpen &&
+        selectedFileId &&
+        selectedNode?.kind === "file" &&
+        selectedNode.fileType !== "sheet" ? (
           <OutlinePanel
             open={outlineOpen}
             items={outlineItems}
@@ -1523,6 +1641,7 @@ export function ProjectEditor({
             ranges={resolvedCommentRanges}
             activeThreadId={activeCommentId}
             selection={commentSelection}
+            selectionKind={selectedNode?.fileType === "sheet" ? "cell" : "text"}
             onClose={() => setCommentsOpen(false)}
             onCreate={createThreadFromSelection}
             onReply={replyToThread}

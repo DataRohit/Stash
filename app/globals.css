@@ -137,7 +137,7 @@ samp {
 :where(
   a,
   button,
-  input,
+  input:not(.sheet-field-input),
   textarea,
   select,
   [role="button"],
@@ -224,6 +224,43 @@ samp {
 }
 
 @layer components {
+  .sheet-toolbar {
+    display: grid;
+    flex-shrink: 0;
+    gap: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--surface);
+  }
+
+  .sheet-toolbar-actions,
+  .sheet-toolbar-secondary {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  .sheet-toolbar-actions {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  .sheet-toolbar-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sheet-toolbar-actions > *,
+  .sheet-toolbar-secondary > * {
+    flex-shrink: 0;
+  }
+
+  .sheet-filter-field {
+    min-width: 0;
+    flex: 1;
+  }
+
   .tree-row-contained {
     content-visibility: auto;
     contain-intrinsic-size: auto 1.75rem;
@@ -518,5 +555,166 @@ html.theme-transition::view-transition-new(root) {
   ::view-transition-old(*) {
     animation-delay: 0s;
     animation-duration: 0s;
+  }
+}
+
+@layer components {
+  .sheet-tool,
+  .sheet-tool-wide {
+    display: inline-flex;
+    height: 1.75rem;
+    cursor: pointer;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    border-radius: 0.25rem;
+    border: 1px solid var(--hairline);
+    color: var(--muted-foreground);
+    transition:
+      color 120ms ease,
+      background-color 120ms ease;
+  }
+
+  .sheet-tool {
+    width: 1.75rem;
+  }
+
+  .sheet-tool-wide {
+    padding-inline: 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .sheet-tool-resize {
+    width: 6.5rem;
+  }
+
+  .sheet-tool svg,
+  .sheet-tool-wide svg {
+    width: 0.875rem;
+    height: 0.875rem;
+  }
+
+  .sheet-tool:hover:not(:disabled),
+  .sheet-tool-wide:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--foreground) 6%, transparent);
+    color: var(--foreground);
+  }
+
+  .sheet-tool:disabled,
+  .sheet-tool-wide:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+  }
+
+  .sheet-col-resize-handle,
+  .sheet-row-resize-handle {
+    position: absolute;
+    z-index: 4;
+    touch-action: none;
+  }
+
+  .sheet-col-resize-handle {
+    top: 0;
+    right: 0;
+    width: 0.5rem;
+    height: 100%;
+    cursor: col-resize;
+  }
+
+  .sheet-row-resize-handle {
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 0.5rem;
+    cursor: row-resize;
+  }
+
+  .sheet-col-resize-handle::after,
+  .sheet-row-resize-handle::after {
+    position: absolute;
+    content: "";
+    background: transparent;
+    transition: background-color 100ms ease;
+  }
+
+  .sheet-col-resize-handle::after {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 1px;
+  }
+
+  .sheet-row-resize-handle::after {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    height: 1px;
+  }
+
+  .sheet-col-resize-handle:hover::after,
+  .sheet-col-resize-handle.is-resizing::after,
+  .sheet-row-resize-handle:hover::after,
+  .sheet-row-resize-handle.is-resizing::after {
+    background: var(--accent);
+  }
+
+  .sheet-field {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    border: 1px solid var(--hairline);
+    border-radius: 0.375rem;
+    background: color-mix(in oklab, var(--background) 82%, var(--surface));
+    transition:
+      border-color 120ms ease,
+      background-color 120ms ease,
+      box-shadow 120ms ease;
+  }
+
+  .sheet-field:hover {
+    border-color: color-mix(in oklab, var(--foreground) 24%, transparent);
+  }
+
+  .sheet-field:focus-within {
+    border-color: var(--ring);
+    background: var(--background);
+    box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 18%, transparent);
+  }
+
+  .sheet-field-input {
+    border: 0;
+    background: transparent;
+    color: var(--foreground);
+    outline: none;
+  }
+
+  .sheet-field-input::placeholder {
+    color: color-mix(in oklab, var(--muted-foreground) 72%, transparent);
+  }
+
+  .sheet-field-input:focus-visible {
+    outline: none;
+  }
+
+  @media (min-width: 64rem) {
+    .sheet-toolbar {
+      display: flex;
+      min-height: 2.75rem;
+      align-items: center;
+    }
+
+    .sheet-toolbar-actions {
+      overflow: visible;
+    }
+
+    .sheet-toolbar-secondary {
+      flex: 1;
+    }
+
+    .sheet-filter-field {
+      min-width: 13rem;
+      max-width: 16.25rem;
+      margin-left: auto;
+    }
   }
 }

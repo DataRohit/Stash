@@ -1,5 +1,14 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
+import { documentSize, project, sheetRenderModel } from "../lib/doc-projection";
+import type { FileType } from "../lib/document-types";
+import {
+  getSheetRoots,
+  inspectSheet,
+  MAX_SHEET_STORED_BYTES,
+  SheetValidationError,
+  seedSheet,
+} from "../lib/sheet-model";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -31,6 +40,8 @@ const MAX_HISTORY_PER_DOC = 50;
 const HISTORY_PRUNE_BATCH = 50;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_COLLAB_UPDATE_BYTES = 768 * 1024;
+const SHEET_REPLACE_CHUNK_BYTES = 192 * 1024;
+const SHEET_REPLACE_CHUNK_ITEMS = 512;
 const COLLAB_WRITE_LIMIT = { capacity: 30, refillPerSecond: 5 };
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -39,8 +50,11 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
-function docContent(ydoc: Y.Doc): string {
-  return ydoc.getText("codemirror").toString();
+function docFileType(doc: Doc<"documents">): FileType {
+  if (doc.fileType === "md" || doc.fileType === "html" || doc.fileType === "sheet") {
+    return doc.fileType;
+  }
+  throw new Error("invalid-type");
 }
 
 async function documentProject(
@@ -115,7 +129,14 @@ async function materializedContent(
   ctx: QueryCtx,
   doc: Doc<"documents">,
   pendingUpdate: ArrayBuffer,
-): Promise<{ content: string; state: ArrayBuffer; replayed: number } | null> {
+): Promise<{
+  content: string;
+  state: ArrayBuffer;
+  replayed: number;
+  size: number;
+  sheetMeta?: { rows: number; cols: number };
+  cleanupUpdate?: ArrayBuffer;
+} | null> {
   const ydoc = new Y.Doc();
   let baseSeq = doc.contentSeq ?? 0;
   if (doc.contentState) {
@@ -134,16 +155,108 @@ async function materializedContent(
   for (const row of updates) {
     Y.applyUpdate(ydoc, new Uint8Array(row.update));
   }
+  const fileType = docFileType(doc);
+  const cleanupCells = new Set<string>();
+  const cleanupColMeta = new Set<string>();
+  const cleanupRowMeta = new Set<string>();
+  const duplicateRows = new Set<string>();
+  const duplicateCols = new Set<string>();
+  if (fileType === "sheet") {
+    const inspection = inspectSheet(ydoc);
+    const roots = getSheetRoots(ydoc);
+    const activeKeys = new Set<string>();
+    for (const rowId of inspection.rows) {
+      for (const colId of inspection.cols) activeKeys.add(`${rowId}:${colId}`);
+    }
+    for (const key of roots.cells.keys()) {
+      if (!activeKeys.has(key)) cleanupCells.add(key);
+    }
+    for (const id of roots.colMeta.keys()) {
+      if (!inspection.colSet.has(id)) cleanupColMeta.add(id);
+    }
+    for (const id of roots.rowMeta.keys()) {
+      if (!inspection.rowSet.has(id)) cleanupRowMeta.add(id);
+    }
+    const seenRows = new Set<string>();
+    for (const rowId of roots.rows.toArray()) {
+      if (seenRows.has(rowId)) duplicateRows.add(rowId);
+      seenRows.add(rowId);
+    }
+    const seenCols = new Set<string>();
+    for (const colId of roots.cols.toArray()) {
+      if (seenCols.has(colId)) duplicateCols.add(colId);
+      seenCols.add(colId);
+    }
+  }
   try {
     Y.applyUpdate(ydoc, new Uint8Array(pendingUpdate));
   } catch {
     ydoc.destroy();
     return null;
   }
-  const content = docContent(ydoc);
+  let cleanupUpdate: ArrayBuffer | undefined;
+  if (
+    fileType === "sheet" &&
+    (cleanupCells.size > 0 ||
+      cleanupColMeta.size > 0 ||
+      cleanupRowMeta.size > 0 ||
+      duplicateRows.size > 0 ||
+      duplicateCols.size > 0)
+  ) {
+    const roots = getSheetRoots(ydoc);
+    const vector = Y.encodeStateVector(ydoc);
+    let changed = false;
+    ydoc.transact(() => {
+      for (const key of cleanupCells) {
+        if (roots.cells.has(key)) {
+          roots.cells.delete(key);
+          changed = true;
+        }
+      }
+      for (const id of cleanupColMeta) {
+        if (roots.colMeta.has(id)) {
+          roots.colMeta.delete(id);
+          changed = true;
+        }
+      }
+      for (const id of cleanupRowMeta) {
+        if (roots.rowMeta.has(id)) {
+          roots.rowMeta.delete(id);
+          changed = true;
+        }
+      }
+      for (const [array, duplicates] of [
+        [roots.rows, duplicateRows],
+        [roots.cols, duplicateCols],
+      ] as const) {
+        const seen = new Set<string>();
+        for (let index = 0; index < array.length; ) {
+          const current = array.get(index);
+          if (duplicates.has(current) && seen.has(current)) {
+            array.delete(index, 1);
+            changed = true;
+          } else {
+            seen.add(current);
+            index += 1;
+          }
+        }
+      }
+    }, "cleanup");
+    if (changed) cleanupUpdate = toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector));
+  }
+  const inspection = fileType === "sheet" ? inspectSheet(ydoc) : null;
+  const content = project(fileType, ydoc);
   const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+  const size = documentSize(fileType, ydoc);
   ydoc.destroy();
-  return { content, state, replayed: updates.length };
+  return {
+    content,
+    state,
+    replayed: updates.length,
+    size,
+    ...(inspection ? { sheetMeta: inspection.dimensions } : {}),
+    cleanupUpdate,
+  };
 }
 
 async function materializedState(ctx: QueryCtx, doc: Doc<"documents">): Promise<ArrayBuffer> {
@@ -168,12 +281,140 @@ async function materializedState(ctx: QueryCtx, doc: Doc<"documents">): Promise<
   return state;
 }
 
-function contentFromState(state: ArrayBuffer): string {
+function contentFromState(state: ArrayBuffer, fileType: FileType): string {
   const ydoc = new Y.Doc();
   Y.applyUpdate(ydoc, new Uint8Array(state));
-  const content = docContent(ydoc);
+  const content = project(fileType, ydoc);
   ydoc.destroy();
   return content;
+}
+
+function sheetPreviewFromState(state: ArrayBuffer) {
+  const ydoc = new Y.Doc();
+  Y.applyUpdate(ydoc, new Uint8Array(state));
+  const preview = sheetRenderModel(ydoc);
+  ydoc.destroy();
+  return preview;
+}
+
+function copyYMap(source: Y.Map<unknown>): Y.Map<unknown> {
+  const target = new Y.Map<unknown>();
+  for (const [key, value] of source.entries()) target.set(key, value);
+  return target;
+}
+
+function estimatedValueBytes(value: unknown): number {
+  if (typeof value === "string") return byteLength(value);
+  return 16;
+}
+
+function estimatedMapEntryBytes(key: string, value: Y.Map<unknown>): number {
+  let size = byteLength(key) + 192;
+  for (const [field, fieldValue] of value.entries()) {
+    size += byteLength(field) + estimatedValueBytes(fieldValue) + 32;
+  }
+  return size;
+}
+
+function chunkValues<T>(values: readonly T[], estimate: (value: T) => number): T[][] {
+  const chunks: T[][] = [];
+  let chunk: T[] = [];
+  let bytes = 0;
+  for (const value of values) {
+    const valueBytes = Math.max(1, estimate(value));
+    if (
+      chunk.length > 0 &&
+      (chunk.length >= SHEET_REPLACE_CHUNK_ITEMS || bytes + valueBytes > SHEET_REPLACE_CHUNK_BYTES)
+    ) {
+      chunks.push(chunk);
+      chunk = [];
+      bytes = 0;
+    }
+    chunk.push(value);
+    bytes += valueBytes;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  return chunks;
+}
+
+function replaceSheetStateInChunks(
+  current: Y.Doc,
+  target: Y.Doc,
+  origin: "import" | "restore",
+): ArrayBuffer[] {
+  const currentRoots = getSheetRoots(current);
+  const targetRoots = getSheetRoots(target);
+  const updates: ArrayBuffer[] = [];
+  const transact = (apply: () => void) => {
+    const vector = Y.encodeStateVector(current);
+    current.transact(apply, origin);
+    const update = Y.encodeStateAsUpdate(current, vector);
+    if (update.byteLength === 0) return;
+    if (update.byteLength > MAX_COLLAB_UPDATE_BYTES) throw new Error("update-too-large");
+    updates.push(toArrayBuffer(update));
+  };
+  const clearMap = <T>(map: Y.Map<T>) => {
+    for (const chunk of chunkValues([...map.keys()], (key) => byteLength(key) + 64)) {
+      transact(() => {
+        for (const key of chunk) map.delete(key);
+      });
+    }
+  };
+  for (const array of [currentRoots.rows, currentRoots.cols]) {
+    while (array.length > 0) {
+      transact(() => array.delete(0, Math.min(array.length, 2048)));
+    }
+  }
+  clearMap(currentRoots.cells);
+  clearMap(currentRoots.colMeta);
+  clearMap(currentRoots.rowMeta);
+  for (const [array, values] of [
+    [currentRoots.rows, targetRoots.rows.toArray()],
+    [currentRoots.cols, targetRoots.cols.toArray()],
+  ] as const) {
+    for (const chunk of chunkValues(values, (value) => byteLength(value) + 32)) {
+      transact(() => array.insert(array.length, chunk));
+    }
+  }
+  for (const [currentMap, entries] of [
+    [currentRoots.cells, [...targetRoots.cells.entries()]],
+    [currentRoots.colMeta, [...targetRoots.colMeta.entries()]],
+    [currentRoots.rowMeta, [...targetRoots.rowMeta.entries()]],
+  ] as const) {
+    for (const chunk of chunkValues(entries, ([key, value]) =>
+      estimatedMapEntryBytes(key, value),
+    )) {
+      transact(() => {
+        for (const [key, value] of chunk) currentMap.set(key, copyYMap(value));
+      });
+    }
+  }
+  return updates;
+}
+
+function replaceDocumentState(current: Y.Doc, target: Y.Doc, fileType: FileType): void {
+  if (fileType !== "sheet") {
+    const currentText = current.getText("codemirror");
+    const targetText = target.getText("codemirror").toString();
+    currentText.delete(0, currentText.length);
+    if (targetText) currentText.insert(0, targetText);
+    return;
+  }
+  const currentRoots = getSheetRoots(current);
+  const targetRoots = getSheetRoots(target);
+  currentRoots.rows.delete(0, currentRoots.rows.length);
+  currentRoots.cols.delete(0, currentRoots.cols.length);
+  currentRoots.cells.clear();
+  currentRoots.colMeta.clear();
+  currentRoots.rowMeta.clear();
+  currentRoots.rows.insert(0, targetRoots.rows.toArray());
+  currentRoots.cols.insert(0, targetRoots.cols.toArray());
+  for (const [key, value] of targetRoots.cells.entries())
+    currentRoots.cells.set(key, copyYMap(value));
+  for (const [key, value] of targetRoots.colMeta.entries())
+    currentRoots.colMeta.set(key, copyYMap(value));
+  for (const [key, value] of targetRoots.rowMeta.entries())
+    currentRoots.rowMeta.set(key, copyYMap(value));
 }
 
 function displayName(access: { userId: string }, name?: string | null, email?: string | null) {
@@ -245,7 +486,7 @@ async function persistHistoryCheckpoint(
   authorEmail?: string,
   label?: string,
 ) {
-  const previewText = contentFromState(state);
+  const previewText = contentFromState(state, docFileType(doc));
   const snapshotBytes = state.byteLength + byteLength(previewText);
   if (snapshotBytes > HISTORY_MAX_DOCUMENT_BYTES) {
     throw new Error("history-too-large");
@@ -355,13 +596,23 @@ export const pushUpdateV2 = mutation({
     if (args.update.byteLength > MAX_COLLAB_UPDATE_BYTES) {
       return { ok: false as const, error: "update-too-large" as const };
     }
-    const materialized = await materializedContent(ctx, doc, args.update);
+    let materialized: Awaited<ReturnType<typeof materializedContent>>;
+    try {
+      materialized = await materializedContent(ctx, doc, args.update);
+    } catch (error) {
+      if (error instanceof SheetValidationError) {
+        return { ok: false as const, error: error.code };
+      }
+      return { ok: false as const, error: "invalid-update" as const };
+    }
     if (!materialized) {
       return { ok: false as const, error: "invalid-update" as const };
     }
-    const { content, state, replayed } = materialized;
-    const newSize = byteLength(content);
-    if (newSize > MAX_FILE_BYTES) {
+    const { content, state, replayed, size: newSize, sheetMeta, cleanupUpdate } = materialized;
+    if (
+      byteLength(content) > MAX_FILE_BYTES ||
+      (doc.fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES)
+    ) {
       return { ok: false as const, error: "file-too-large" as const };
     }
     const total = await cachedProjectBytes(ctx, access.project);
@@ -384,11 +635,21 @@ export const pushUpdateV2 = mutation({
       update: args.update,
       createdAt: Date.now(),
     });
+    if (cleanupUpdate) {
+      seq = await allocateSeq(ctx, args.documentId);
+      await ctx.db.insert("yjsUpdates", {
+        documentId: args.documentId,
+        seq,
+        update: cleanupUpdate,
+        createdAt: Date.now(),
+      });
+    }
     await ctx.db.patch(doc._id, {
       content,
       contentSeq: seq,
       contentState: state,
       size: newSize,
+      sheetMeta,
       updatedAt: Date.now(),
     });
     await addProjectBytes(ctx, access.project, newSize - doc.size);
@@ -397,6 +658,105 @@ export const pushUpdateV2 = mutation({
         documentId: args.documentId,
       });
     }
+    return { ok: true as const, seq };
+  },
+});
+
+export const replaceSheetFromImport = mutation({
+  args: {
+    documentId: v.id("documents"),
+    expectedSeq: v.number(),
+    updates: v.array(v.bytes()),
+  },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file" || doc.fileType !== "sheet" || (await isInactiveTree(ctx, doc))) {
+      throw new Error("not-found");
+    }
+    const access = await requireProjectEditor(ctx, doc.projectId);
+    const allowed = await enforceWriteRateLimit(
+      ctx,
+      "collab",
+      doc._id,
+      access.userId,
+      COLLAB_WRITE_LIMIT,
+    );
+    if (!allowed) return { ok: false as const, error: "rate-limited" as const };
+    if (args.updates.length < 1 || args.updates.length > 32) {
+      return { ok: false as const, error: "invalid-update" as const };
+    }
+    if (args.updates.some((update) => update.byteLength > MAX_COLLAB_UPDATE_BYTES)) {
+      return { ok: false as const, error: "update-too-large" as const };
+    }
+    if ((await latestSeq(ctx, doc._id)) !== args.expectedSeq) {
+      return { ok: false as const, error: "import-conflict" as const };
+    }
+    const target = new Y.Doc();
+    try {
+      for (const update of args.updates) Y.applyUpdate(target, new Uint8Array(update));
+      const inspection = inspectSheet(target);
+      if (inspection.rows.length === 0 || inspection.cols.length === 0) {
+        target.destroy();
+        return { ok: false as const, error: "invalid-update" as const };
+      }
+    } catch (error) {
+      target.destroy();
+      if (error instanceof SheetValidationError) {
+        return { ok: false as const, error: error.code };
+      }
+      return { ok: false as const, error: "invalid-update" as const };
+    }
+    const targetContent = project("sheet", target);
+    const targetSize = documentSize("sheet", target);
+    if (byteLength(targetContent) > MAX_FILE_BYTES || targetSize > MAX_SHEET_STORED_BYTES) {
+      target.destroy();
+      return { ok: false as const, error: "file-too-large" as const };
+    }
+    const currentState = await materializedState(ctx, doc);
+    const current = new Y.Doc();
+    Y.applyUpdate(current, new Uint8Array(currentState));
+    let replacementUpdates: ArrayBuffer[];
+    try {
+      replacementUpdates = replaceSheetStateInChunks(current, target, "import");
+    } catch (error) {
+      current.destroy();
+      target.destroy();
+      return {
+        ok: false as const,
+        error:
+          error instanceof Error && error.message === "update-too-large"
+            ? ("update-too-large" as const)
+            : ("invalid-update" as const),
+      };
+    }
+    const content = project("sheet", current);
+    const size = documentSize("sheet", current);
+    const sheetMeta = inspectSheet(current).dimensions;
+    const state = toArrayBuffer(Y.encodeStateAsUpdate(current));
+    current.destroy();
+    target.destroy();
+    if (byteLength(content) > MAX_FILE_BYTES || size > MAX_SHEET_STORED_BYTES) {
+      return { ok: false as const, error: "file-too-large" as const };
+    }
+    const total = await cachedProjectBytes(ctx, access.project);
+    if (total - doc.size + size > (await maxProjectBytes(ctx, access.project))) {
+      return { ok: false as const, error: "project-full" as const };
+    }
+    let seq = args.expectedSeq;
+    const now = Date.now();
+    for (const update of replacementUpdates) {
+      seq = await allocateSeq(ctx, doc._id);
+      await ctx.db.insert("yjsUpdates", { documentId: doc._id, seq, update, createdAt: now });
+    }
+    await ctx.db.patch(doc._id, {
+      content,
+      contentSeq: seq,
+      contentState: state,
+      sheetMeta,
+      size,
+      updatedAt: now,
+    });
+    await addProjectBytes(ctx, access.project, size - doc.size);
     return { ok: true as const, seq };
   },
 });
@@ -474,13 +834,20 @@ export const ensureSeed = mutation({
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
       .first();
     const snapshot = await baseSnapshot(ctx, args.documentId);
-    if (existing || snapshot || doc.content.length === 0) {
+    if (existing || snapshot || (doc.fileType !== "sheet" && doc.content.length === 0)) {
       return { seeded: false };
     }
     const seedDoc = new Y.Doc();
-    seedDoc.getText("codemirror").insert(0, doc.content);
+    if (doc.fileType === "sheet") {
+      seedSheet(seedDoc);
+    } else {
+      seedDoc.getText("codemirror").insert(0, doc.content);
+    }
     const update = Y.encodeStateAsUpdate(seedDoc);
     const state = toArrayBuffer(update);
+    const content = project(docFileType(doc), seedDoc);
+    const size = documentSize(docFileType(doc), seedDoc);
+    const sheetMeta = doc.fileType === "sheet" ? inspectSheet(seedDoc).dimensions : undefined;
     seedDoc.destroy();
     await ctx.db.insert("yjsUpdates", {
       documentId: args.documentId,
@@ -491,7 +858,14 @@ export const ensureSeed = mutation({
     await ctx.db.patch(doc._id, {
       contentSeq: 1,
       contentState: state,
+      content,
+      size,
+      sheetMeta,
     });
+    if (size !== doc.size) {
+      const projectRow = await ctx.db.get(doc.projectId);
+      if (projectRow) await addProjectBytes(ctx, projectRow, size - doc.size);
+    }
     return { seeded: true };
   },
 });
@@ -626,7 +1000,9 @@ export const getHistoryPreview = query({
       return null;
     }
     return {
-      content: snapshot.previewText ?? contentFromState(snapshot.snapshot),
+      content: snapshot.previewText ?? contentFromState(snapshot.snapshot, docFileType(doc)),
+      fileType: docFileType(doc),
+      sheetPreview: doc.fileType === "sheet" ? sheetPreviewFromState(snapshot.snapshot) : undefined,
       label: snapshot.label ?? `Snapshot ${snapshot.throughSeq}`,
       authorName: snapshot.authorName ?? "Unknown",
       authorEmail: await snapshotAuthorEmail(ctx, doc, snapshot),
@@ -647,15 +1023,17 @@ export const restoreHistory = mutation({
       throw new Error("not-found");
     }
     const access = await requireProjectAdmin(ctx, doc.projectId);
-    const targetContent = snapshot.previewText ?? contentFromState(snapshot.snapshot);
-    const newSize = byteLength(targetContent);
-    if (newSize > MAX_FILE_BYTES) {
+    const fileType = docFileType(doc);
+    const targetDoc = new Y.Doc();
+    Y.applyUpdate(targetDoc, new Uint8Array(snapshot.snapshot));
+    const targetContent = project(fileType, targetDoc);
+    const newSize = documentSize(fileType, targetDoc);
+    if (
+      byteLength(targetContent) > MAX_FILE_BYTES ||
+      (fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES)
+    ) {
+      targetDoc.destroy();
       throw new Error("file-too-large");
-    }
-    const total = await cachedProjectBytes(ctx, access.project);
-    const max = await maxProjectBytes(ctx, access.project);
-    if (total - doc.size + newSize > max) {
-      throw new Error("project-full");
     }
     const currentState = await materializedState(ctx, doc);
     const currentSeq = await latestSeq(ctx, doc._id);
@@ -671,28 +1049,49 @@ export const restoreHistory = mutation({
     );
     const ydoc = new Y.Doc();
     Y.applyUpdate(ydoc, new Uint8Array(currentState));
-    const vector = Y.encodeStateVector(ydoc);
-    const ytext = ydoc.getText("codemirror");
-    ytext.delete(0, ytext.length);
-    ytext.insert(0, targetContent);
-    const update = toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector));
+    let replacementUpdates: ArrayBuffer[];
+    if (fileType === "sheet") {
+      replacementUpdates = replaceSheetStateInChunks(ydoc, targetDoc, "restore");
+    } else {
+      const vector = Y.encodeStateVector(ydoc);
+      ydoc.transact(() => replaceDocumentState(ydoc, targetDoc, fileType), "restore");
+      replacementUpdates = [toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector))];
+    }
+    const restoredContent = project(fileType, ydoc);
+    const restoredSize = documentSize(fileType, ydoc);
+    const restoredSheetMeta = fileType === "sheet" ? inspectSheet(ydoc).dimensions : undefined;
     const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
     ydoc.destroy();
-    const seq = await allocateSeq(ctx, doc._id);
-    await ctx.db.insert("yjsUpdates", {
-      documentId: doc._id,
-      seq,
-      update,
-      createdAt: Date.now(),
-    });
+    targetDoc.destroy();
+    if (
+      byteLength(restoredContent) > MAX_FILE_BYTES ||
+      (fileType === "sheet" && restoredSize > MAX_SHEET_STORED_BYTES)
+    ) {
+      throw new Error("file-too-large");
+    }
+    const total = await cachedProjectBytes(ctx, access.project);
+    const max = await maxProjectBytes(ctx, access.project);
+    if (total - doc.size + restoredSize > max) throw new Error("project-full");
+    let seq = currentSeq;
+    const now = Date.now();
+    for (const update of replacementUpdates) {
+      seq = await allocateSeq(ctx, doc._id);
+      await ctx.db.insert("yjsUpdates", {
+        documentId: doc._id,
+        seq,
+        update,
+        createdAt: now,
+      });
+    }
     await ctx.db.patch(doc._id, {
-      content: targetContent,
+      content: restoredContent,
       contentSeq: seq,
       contentState: state,
-      size: newSize,
-      updatedAt: Date.now(),
+      size: restoredSize,
+      sheetMeta: restoredSheetMeta,
+      updatedAt: now,
     });
-    await addProjectBytes(ctx, access.project, newSize - doc.size);
+    await addProjectBytes(ctx, access.project, restoredSize - doc.size);
     await pruneDocumentHistory(ctx, doc);
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,

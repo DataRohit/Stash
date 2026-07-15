@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { FileType } from "../lib/document-types";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -24,7 +25,7 @@ type SearchResult = {
   kind: "project" | "file" | "folder" | "asset" | "content";
   name: string;
   path: string;
-  fileType: "md" | "html" | null;
+  fileType: FileType | null;
   snippet: { before: string; match: string; after: string; lineNumber: number } | null;
   rank: number;
 };

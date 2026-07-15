@@ -6,6 +6,7 @@ import { accessForProject, isInactiveTree, requireProjectAdmin } from "./documen
 const MAX_TEMPLATES = 50;
 const MAX_NAME = 80;
 const MAX_BYTES = 512 * 1024;
+const MAX_SHEET_BYTES = 896 * 1024;
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const copy = new Uint8Array(bytes.byteLength);
@@ -95,9 +96,12 @@ export const saveFromDocument = mutation({
     for (const update of updates) Y.applyUpdate(ydoc, new Uint8Array(update.update));
     const state = Y.encodeStateAsUpdate(ydoc);
     ydoc.destroy();
+    const projectionBytes = new TextEncoder().encode(doc.content).byteLength;
     if (
-      state.byteLength > MAX_BYTES ||
-      new TextEncoder().encode(doc.content).byteLength > MAX_BYTES
+      projectionBytes > MAX_BYTES ||
+      (doc.fileType === "sheet"
+        ? state.byteLength + projectionBytes > MAX_SHEET_BYTES
+        : state.byteLength > MAX_BYTES)
     )
       throw new Error("template-too-large");
     const identity = await ctx.auth.getUserIdentity();

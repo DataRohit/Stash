@@ -7,6 +7,7 @@ import { pathOf, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { FileType } from "@/lib/document-types";
 import { cn } from "@/lib/utils";
 
 type Snippet = { before: string; match: string; after: string };
@@ -14,7 +15,7 @@ type ContentHit = {
   id: string;
   name: string;
   parentId: string | null;
-  fileType: "md" | "html" | null;
+  fileType: FileType | null;
   snippet: Snippet;
 };
 

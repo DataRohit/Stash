@@ -1,3 +1,4 @@
+import type * as Y from "yjs";
 import {
   injectMermaid,
   renderInner,
@@ -6,13 +7,16 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { buildZip, type ZipEntry } from "@/app/dashboard/projects/[id]/editor/lib/zip";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { sheetRenderModel } from "@/lib/doc-projection";
+import type { FileType } from "@/lib/document-types";
+import { serializeDelimited } from "@/lib/sheet-csv";
 
 export type BundleNode = {
   id: string;
   parentId: string | null;
   kind: "folder" | "file" | "asset";
   name: string;
-  fileType: "md" | "html" | null;
+  fileType: FileType | null;
   content: string;
   mimeType: string | null;
   assetUrl: string | null;
@@ -21,7 +25,7 @@ export type BundleNode = {
 const EMPTY_LINKS: Record<string, string> = {};
 
 function stem(name: string): string {
-  return name.replace(/\.(md|html)$/i, "");
+  return name.replace(/\.(md|html|sheet)$/i, "");
 }
 
 function safeFileName(title: string): string {
@@ -123,6 +127,44 @@ async function buildExportHtml(
 
 export function exportMarkdown(fileNode: TreeNode, content: string): void {
   download(`${stem(fileNode.name)}.md`, content, "text/markdown;charset=utf-8");
+}
+
+function escaped(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function sheetHtml(fileNode: TreeNode, ydoc: Y.Doc): string {
+  const model = sheetRenderModel(ydoc);
+  const header = model.columns.map((column) => `<th>${escaped(column.name)}</th>`).join("");
+  const body = model.rows
+    .map((row) => `<tr>${row.values.map((value) => `<td>${escaped(value)}</td>`).join("")}</tr>`)
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escaped(stem(fileNode.name))}</title><style>body{font:14px system-ui;margin:24px;color:#111}table{border-collapse:collapse}th,td{border:1px solid #bbb;padding:6px 9px;white-space:pre-wrap;vertical-align:top}th{background:#f3f3f3}@media print{body{margin:0}}</style></head><body><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></body></html>`;
+}
+
+export function exportSheetCsv(fileNode: TreeNode, ydoc: Y.Doc): void {
+  const model = sheetRenderModel(ydoc);
+  download(
+    `${stem(fileNode.name)}.csv`,
+    serializeDelimited(
+      model.rows.map((row) => row.values),
+      ",",
+      "\r\n",
+    ),
+    "text/csv;charset=utf-8",
+  );
+}
+
+export function exportSheetHtml(fileNode: TreeNode, ydoc: Y.Doc): void {
+  download(`${stem(fileNode.name)}.html`, sheetHtml(fileNode, ydoc), "text/html;charset=utf-8");
+}
+
+export async function exportSheetPdf(fileNode: TreeNode, ydoc: Y.Doc): Promise<void> {
+  await printHtml(sheetHtml(fileNode, ydoc));
 }
 
 export async function exportHtml(
@@ -227,7 +269,10 @@ export async function exportProjectZip(projectTitle: string, nodes: BundleNode[]
     if (node.kind === "folder") {
       entries.push({ path: `${path}/`, data: new Uint8Array(0) });
     } else if (node.kind === "file") {
-      entries.push({ path, data: encoder.encode(node.content) });
+      entries.push({
+        path: node.fileType === "sheet" ? path.replace(/\.sheet$/i, ".csv") : path,
+        data: encoder.encode(node.content),
+      });
     } else if (node.kind === "asset" && node.assetUrl) {
       try {
         const response = await fetch(node.assetUrl);

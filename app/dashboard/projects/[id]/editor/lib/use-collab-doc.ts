@@ -68,6 +68,7 @@ type CollabDoc = {
   userLabel: string;
   color: string;
   colorLight: string;
+  seq: number;
 };
 
 function colorForUser(seed: string): CursorColor {
@@ -140,6 +141,7 @@ export function useCollabDoc(
   const [blocked, setBlocked] = useState<string | null>(null);
   const [pendingEdits, setPendingEdits] = useState(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
+  const [seq, setSeq] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [pullCursor, setPullCursor] = useState<{ documentId: string | null; afterSeq: number }>({
     documentId: null,
@@ -180,6 +182,7 @@ export function useCollabDoc(
       setSyncing(false);
       setPendingEdits(0);
       setLastSyncedAt(null);
+      setSeq(0);
       return;
     }
     const ydoc = new Y.Doc();
@@ -193,6 +196,7 @@ export function useCollabDoc(
     setBlocked(null);
     setPendingEdits(0);
     setLastSyncedAt(null);
+    setSeq(0);
     setEngine({ ydoc, ytext, awareness });
     return () => {
       awareness.destroy();
@@ -313,6 +317,7 @@ export function useCollabDoc(
         setBlocked(null);
         setPendingEdits(pendingEditCount);
         setLastSyncedAt(new Date());
+        setSeq(result.seq);
         clearRecoveredEntries();
         persistOutbox();
       } catch (error) {
@@ -325,10 +330,19 @@ export function useCollabDoc(
         persistOutbox();
         const message = error instanceof Error ? error.message : "";
         const blockedByLimit =
-          message.includes("project-full") || message.includes("file-too-large");
+          message.includes("project-full") ||
+          message.includes("file-too-large") ||
+          message.includes("update-too-large") ||
+          message.includes("too-many-cells") ||
+          message.includes("invalid-update");
         if (blockedByLimit) {
+          pending = [];
+          pendingEditCount = 0;
+          localStorage.removeItem(outboxKey);
+          clearRecoveredEntries();
           setBlocked(mapDocError(error, "Your latest edit could not be synced. Please try again."));
           setPendingEdits(0);
+          setSessionId(createSessionId());
         } else {
           retryable = true;
           reconnecting = true;
@@ -442,6 +456,7 @@ export function useCollabDoc(
     if (appliedSeq.current !== queryAfterSeq) {
       setPullCursor({ documentId, afterSeq: appliedSeq.current });
     }
+    setSeq(appliedSeq.current);
   }, [engine, documentId, pullResult, queryAfterSeq, canEdit, ensureSeed]);
 
   useEffect(() => {
@@ -563,5 +578,6 @@ export function useCollabDoc(
     userLabel,
     color: userColor.color,
     colorLight: userColor.light,
+    seq,
   };
 }

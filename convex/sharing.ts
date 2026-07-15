@@ -1,4 +1,6 @@
 import { v } from "convex/values";
+import * as Y from "yjs";
+import { sheetRenderModel } from "../lib/doc-projection";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -508,6 +510,13 @@ export const redeemShare = mutation({
           includeIds.has(row.documentId),
       )
       .map((row) => ({ documentId: row.documentId, href: `/share/${row.token}` }));
+    let sheetPreview: ReturnType<typeof sheetRenderModel> | undefined;
+    if (doc.fileType === "sheet" && doc.contentState) {
+      const sheet = new Y.Doc();
+      Y.applyUpdate(sheet, new Uint8Array(doc.contentState));
+      sheetPreview = sheetRenderModel(sheet);
+      sheet.destroy();
+    }
     return {
       status: "ok" as const,
       mode: effectiveMode,
@@ -516,6 +525,7 @@ export const redeemShare = mutation({
       documentName: doc.name,
       fileType: doc.fileType,
       content: doc.content,
+      sheetPreview,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,
