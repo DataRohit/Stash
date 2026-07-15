@@ -25,12 +25,17 @@ import {
   exportSheetCsv,
   exportSheetHtml,
   exportSheetPdf,
+  exportViewCsv,
+  exportViewHtml,
+  exportViewPdf,
+  type ViewExportModel,
 } from "@/app/dashboard/projects/[id]/editor/lib/export-doc";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
+import { inspectView, type ViewFilter } from "@/lib/view-model";
 
 type ExportMenuProps = {
   projectId: Id<"projects">;
@@ -109,6 +114,129 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
   const isMd = fileNode.fileType === "md";
   const isSheet = fileNode.fileType === "sheet";
   const isBoard = fileNode.fileType === "board";
+  const isView = fileNode.fileType === "view";
+
+  const loadViewModel = async (): Promise<ViewExportModel> => {
+    if (!ydoc) throw new Error("view-not-ready");
+    const config = inspectView(ydoc);
+    const properties = await convex.query(api.structuredSurfaces.listProperties, {
+      projectId,
+      includeDeleted: true,
+    });
+    const records: ViewExportModel["records"] = [];
+    let cursor: string | null = null;
+    let done = false;
+    while (!done) {
+      const page: {
+        page: ViewExportModel["records"];
+        isDone: boolean;
+        continueCursor: string;
+      } = await convex.query(api.structuredSurfaces.listRecords, {
+        projectId,
+        paginationOpts: { numItems: 50, cursor },
+      });
+      records.push(...page.page);
+      done = page.isDone;
+      cursor = page.continueCursor;
+    }
+    if (config.datePropertyId === "boardDue") {
+      let cardCursor: string | null = null;
+      let cardsDone = false;
+      while (!cardsDone) {
+        const page: {
+          page: Array<{
+            id: string;
+            name: string;
+            fileType: "card";
+            updatedAt: number;
+            boardDue?: number;
+          }>;
+          isDone: boolean;
+          continueCursor: string;
+        } = await convex.query(api.structuredSurfaces.listBoardCardRecords, {
+          projectId,
+          paginationOpts: { numItems: 50, cursor: cardCursor },
+        });
+        records.push(
+          ...page.page.map((card) => ({
+            id: card.id,
+            name: card.name,
+            fileType: card.fileType,
+            updatedAt: card.updatedAt,
+            properties: [
+              {
+                propertyId: "boardDue",
+                displayValue: card.boardDue ? new Date(card.boardDue).toISOString() : "",
+                dateValue: card.boardDue,
+              },
+            ],
+          })),
+        );
+        cardsDone = page.isDone;
+        cardCursor = page.continueCursor;
+      }
+    }
+    const valueFor = (record: ViewExportModel["records"][number], propertyId: string) => {
+      if (propertyId === "title") return record.name;
+      if (propertyId === "fileType") return record.fileType ?? "Unknown";
+      if (propertyId === "updatedAt") return String(record.updatedAt);
+      return record.properties.find((value) => value.propertyId === propertyId)?.displayValue ?? "";
+    };
+    const matches = (record: ViewExportModel["records"][number], filter: ViewFilter) => {
+      const value = valueFor(record, filter.propertyId);
+      const left = value.toLocaleLowerCase();
+      const right = filter.value.trim().toLocaleLowerCase();
+      if (filter.operator === "is-empty") return value.length === 0;
+      if (filter.operator === "is-not-empty") return value.length > 0;
+      if (filter.operator === "contains") return left.includes(right);
+      if (filter.operator === "equals") return left === right;
+      if (filter.operator === "not-equals") return left !== right;
+      const propertyValue = record.properties.find(
+        (property) => property.propertyId === filter.propertyId,
+      );
+      const numeric =
+        filter.propertyId === "updatedAt"
+          ? record.updatedAt
+          : filter.operator === "before"
+            ? (propertyValue?.dateEndValue ?? propertyValue?.dateValue ?? Date.parse(value))
+            : (propertyValue?.dateValue ?? Date.parse(value));
+      const target = Date.parse(filter.value);
+      if (!Number.isFinite(numeric) || !Number.isFinite(target)) return false;
+      return filter.operator === "before" ? numeric < target : numeric > target;
+    };
+    const activeProperties = new Set(
+      properties.filter((property) => !property.deleted).map((property) => String(property.id)),
+    );
+    const builtinProperties = new Set([
+      "title",
+      "fileType",
+      "updatedAt",
+      "boardDue",
+      "boardColumn",
+    ]);
+    const filtered = records.filter((record) =>
+      config.filters.every(
+        (filter) =>
+          (!builtinProperties.has(filter.propertyId) && !activeProperties.has(filter.propertyId)) ||
+          matches(record, filter),
+      ),
+    );
+    filtered.sort((left, right) => {
+      for (const sort of config.sorts) {
+        if (!builtinProperties.has(sort.propertyId) && !activeProperties.has(sort.propertyId)) {
+          continue;
+        }
+        const result = valueFor(left, sort.propertyId).localeCompare(
+          valueFor(right, sort.propertyId),
+          undefined,
+          { numeric: true, sensitivity: "base" },
+        );
+        if (result !== 0) return sort.direction === "asc" ? result : -result;
+      }
+      return left.name.localeCompare(right.name);
+    });
+    return { config, properties, records: filtered };
+  };
 
   return (
     <div ref={ref} className="relative">
@@ -165,6 +293,16 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
               onClick={() => run("csv", () => exportSheetCsv(fileNode, ydoc))}
             />
           ) : null}
+          {isView && ydoc ? (
+            <ExportItem
+              icon={<FileSpreadsheet className="size-4 text-accent" aria-hidden="true" />}
+              label="View records"
+              hint=".csv"
+              loading={busy === "csv"}
+              disabled={Boolean(busy)}
+              onClick={() => run("csv", async () => exportViewCsv(fileNode, await loadViewModel()))}
+            />
+          ) : null}
           <ExportItem
             icon={<Globe className="size-4 text-info" aria-hidden="true" />}
             label="Web page"
@@ -177,7 +315,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
                   ? exportSheetHtml(fileNode, ydoc)
                   : isBoard && ydoc
                     ? exportBoardHtml(fileNode, ydoc)
-                    : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
+                    : isView && ydoc
+                      ? exportViewHtml(fileNode, await loadViewModel())
+                      : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />
@@ -193,7 +333,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
                   ? exportSheetPdf(fileNode, ydoc)
                   : isBoard && ydoc
                     ? exportBoardPdf(fileNode, ydoc)
-                    : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
+                    : isView && ydoc
+                      ? exportViewPdf(fileNode, await loadViewModel())
+                      : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />

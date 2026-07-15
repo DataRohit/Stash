@@ -73,7 +73,13 @@ const schema = defineSchema({
     clerkOrgId: v.string(),
     name: v.string(),
     normalizedName: v.string(),
-    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("sheet"), v.literal("board")),
+    fileType: v.union(
+      v.literal("md"),
+      v.literal("html"),
+      v.literal("sheet"),
+      v.literal("board"),
+      v.literal("view"),
+    ),
     content: v.string(),
     contentState: v.optional(v.bytes()),
     createdByUserId: v.string(),
@@ -95,6 +101,7 @@ const schema = defineSchema({
       v.literal("html"),
       v.literal("sheet"),
       v.literal("board"),
+      v.literal("view"),
       v.null(),
     ),
     content: v.string(),
@@ -111,6 +118,7 @@ const schema = defineSchema({
     updatedAt: v.number(),
   })
     .index("by_project", ["projectId"])
+    .index("by_project_kind", ["projectId", "kind"])
     .index("by_parent", ["projectId", "parentId"])
     .index("by_storage", ["storageId"])
     .index("by_deleting", ["deletingAt"])
@@ -123,6 +131,94 @@ const schema = defineSchema({
       searchField: "name",
       filterFields: ["clerkOrgId"],
     }),
+
+  documentProperties: defineTable({
+    projectId: v.id("projects"),
+    clerkOrgId: v.string(),
+    name: v.string(),
+    normalizedName: v.string(),
+    type: v.union(
+      v.literal("text"),
+      v.literal("number"),
+      v.literal("boolean"),
+      v.literal("date"),
+      v.literal("status"),
+      v.literal("person"),
+    ),
+    options: v.array(v.object({ id: v.string(), name: v.string(), color: v.string() })),
+    deletedAt: v.optional(v.number()),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_project_name", ["projectId", "normalizedName"])
+    .index("by_org", ["clerkOrgId"]),
+
+  documentPropertyValues: defineTable({
+    documentId: v.id("documents"),
+    propertyId: v.id("documentProperties"),
+    projectId: v.id("projects"),
+    clerkOrgId: v.string(),
+    type: v.union(
+      v.literal("text"),
+      v.literal("number"),
+      v.literal("boolean"),
+      v.literal("date"),
+      v.literal("status"),
+      v.literal("person"),
+    ),
+    displayValue: v.string(),
+    textValue: v.optional(v.string()),
+    numberValue: v.optional(v.number()),
+    booleanValue: v.optional(v.boolean()),
+    dateValue: v.optional(v.number()),
+    dateEndValue: v.optional(v.number()),
+    statusOptionId: v.optional(v.string()),
+    personUserId: v.optional(v.string()),
+    updatedBy: v.string(),
+    updatedAt: v.number(),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_document_property", ["documentId", "propertyId"])
+    .index("by_project_property", ["projectId", "propertyId"])
+    .index("by_project_property_text", ["projectId", "propertyId", "displayValue"])
+    .index("by_project_property_number", ["projectId", "propertyId", "numberValue"])
+    .index("by_project_property_date", ["projectId", "propertyId", "dateValue"])
+    .index("by_property", ["propertyId"]),
+
+  documentLinks: defineTable({
+    clerkOrgId: v.string(),
+    sourceProjectId: v.id("projects"),
+    sourceDocumentId: v.id("documents"),
+    sourceCardId: v.optional(v.string()),
+    managedByBoard: v.optional(v.boolean()),
+    targetProjectId: v.id("projects"),
+    targetDocumentId: v.id("documents"),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_source_document", ["sourceDocumentId"])
+    .index("by_source_card", ["sourceDocumentId", "sourceCardId"])
+    .index("by_target_document", ["targetDocumentId"])
+    .index("by_source_project", ["sourceProjectId"])
+    .index("by_target_project", ["targetProjectId"])
+    .index("by_org", ["clerkOrgId"]),
+
+  boardCardRecords: defineTable({
+    clerkOrgId: v.string(),
+    projectId: v.id("projects"),
+    documentId: v.id("documents"),
+    cardId: v.string(),
+    title: v.string(),
+    columnName: v.string(),
+    due: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_document", ["documentId"])
+    .index("by_document_card", ["documentId", "cardId"]),
 
   projectAccess: defineTable({
     projectId: v.id("projects"),
@@ -201,7 +297,9 @@ const schema = defineSchema({
     documentId: v.id("documents"),
     projectId: v.id("projects"),
     clerkOrgId: v.string(),
-    anchorKind: v.optional(v.union(v.literal("text"), v.literal("cell"), v.literal("card"))),
+    anchorKind: v.optional(
+      v.union(v.literal("text"), v.literal("cell"), v.literal("card"), v.literal("document")),
+    ),
     startRel: v.optional(v.bytes()),
     endRel: v.optional(v.bytes()),
     rowId: v.optional(v.string()),

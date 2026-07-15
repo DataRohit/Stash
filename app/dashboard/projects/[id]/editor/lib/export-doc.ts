@@ -10,6 +10,7 @@ import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { boardRenderModel, sheetRenderModel } from "@/lib/doc-projection";
 import type { FileType } from "@/lib/document-types";
 import { serializeDelimited } from "@/lib/sheet-csv";
+import type { ViewConfig } from "@/lib/view-model";
 
 export type BundleNode = {
   id: string;
@@ -25,8 +26,27 @@ export type BundleNode = {
 const EMPTY_LINKS: Record<string, string> = {};
 
 function stem(name: string): string {
-  return name.replace(/\.(md|html|sheet|board)$/i, "");
+  return name.replace(/\.(md|html|sheet|board|view)$/i, "");
 }
+
+export type ViewExportRecord = {
+  id: string;
+  name: string;
+  fileType: string | null;
+  updatedAt: number;
+  properties: Array<{
+    propertyId: string;
+    displayValue: string;
+    dateValue?: number;
+    dateEndValue?: number;
+  }>;
+};
+
+export type ViewExportModel = {
+  config: ViewConfig;
+  properties: Array<{ id: string; name: string; deleted?: boolean }>;
+  records: ViewExportRecord[];
+};
 
 function safeFileName(title: string): string {
   const cleaned = title
@@ -212,6 +232,61 @@ export async function exportBoardPdf(fileNode: TreeNode, ydoc: Y.Doc): Promise<v
   await printHtml(boardHtml(fileNode, ydoc));
 }
 
+function viewColumnName(model: ViewExportModel, propertyId: string): string {
+  if (propertyId === "title") return "Document";
+  if (propertyId === "fileType") return "Type";
+  if (propertyId === "updatedAt") return "Updated";
+  const property = model.properties.find((row) => row.id === propertyId);
+  return property && !property.deleted ? property.name : "Removed field";
+}
+
+function viewValue(record: ViewExportRecord, propertyId: string): string {
+  if (propertyId === "title") return record.name;
+  if (propertyId === "fileType") return record.fileType ?? "Unknown";
+  if (propertyId === "updatedAt") return new Date(record.updatedAt).toISOString();
+  return record.properties.find((row) => row.propertyId === propertyId)?.displayValue ?? "";
+}
+
+function viewCsv(model: ViewExportModel): string {
+  return serializeDelimited(
+    [
+      model.config.visibleColumns.map((propertyId) => viewColumnName(model, propertyId)),
+      ...model.records.map((record) =>
+        model.config.visibleColumns.map((propertyId) => viewValue(record, propertyId)),
+      ),
+    ],
+    ",",
+    "\r\n",
+  );
+}
+
+function viewHtml(fileNode: TreeNode, model: ViewExportModel): string {
+  const header = model.config.visibleColumns
+    .map((propertyId) => `<th>${escaped(viewColumnName(model, propertyId))}</th>`)
+    .join("");
+  const body = model.records
+    .map(
+      (record) =>
+        `<tr>${model.config.visibleColumns
+          .map((propertyId) => `<td>${escaped(viewValue(record, propertyId))}</td>`)
+          .join("")}</tr>`,
+    )
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escaped(stem(fileNode.name))}</title><style>body{font:14px system-ui;margin:24px;color:#111}h1{font-size:20px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #bbb;padding:7px 9px;text-align:left;vertical-align:top}th{background:#f3f3f3}@media print{body{margin:0}}</style></head><body><h1>${escaped(stem(fileNode.name))}</h1><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></body></html>`;
+}
+
+export function exportViewCsv(fileNode: TreeNode, model: ViewExportModel): void {
+  download(`${stem(fileNode.name)}.csv`, viewCsv(model), "text/csv;charset=utf-8");
+}
+
+export function exportViewHtml(fileNode: TreeNode, model: ViewExportModel): void {
+  download(`${stem(fileNode.name)}.html`, viewHtml(fileNode, model), "text/html;charset=utf-8");
+}
+
+export async function exportViewPdf(fileNode: TreeNode, model: ViewExportModel): Promise<void> {
+  await printHtml(viewHtml(fileNode, model));
+}
+
 export async function exportHtml(
   fileNode: TreeNode,
   content: string,
@@ -320,7 +395,9 @@ export async function exportProjectZip(projectTitle: string, nodes: BundleNode[]
             ? path.replace(/\.sheet$/i, ".csv")
             : node.fileType === "board"
               ? path.replace(/\.board$/i, ".md")
-              : path,
+              : node.fileType === "view"
+                ? path.replace(/\.view$/i, ".json")
+                : path,
         data: encoder.encode(node.content),
       });
     } else if (node.kind === "asset" && node.assetUrl) {

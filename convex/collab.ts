@@ -8,7 +8,13 @@ import {
   seedBoard,
   UNFILED_COLUMN_ID,
 } from "../lib/board-model";
-import { boardRenderModel, documentSize, project, sheetRenderModel } from "../lib/doc-projection";
+import {
+  boardRenderModel,
+  documentSize,
+  project,
+  sheetRenderModel,
+  viewRenderModel,
+} from "../lib/doc-projection";
 import type { FileType } from "../lib/document-types";
 import {
   getSheetRoots,
@@ -17,6 +23,13 @@ import {
   SheetValidationError,
   seedSheet,
 } from "../lib/sheet-model";
+import {
+  inspectView,
+  MAX_VIEW_STORED_BYTES,
+  replaceViewState,
+  seedView,
+  ViewValidationError,
+} from "../lib/view-model";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -63,7 +76,8 @@ function docFileType(doc: Doc<"documents">): FileType {
     doc.fileType === "md" ||
     doc.fileType === "html" ||
     doc.fileType === "sheet" ||
-    doc.fileType === "board"
+    doc.fileType === "board" ||
+    doc.fileType === "view"
   ) {
     return doc.fileType;
   }
@@ -360,6 +374,7 @@ async function materializedContent(
   }
   const sheetInspection = fileType === "sheet" ? inspectSheet(ydoc) : null;
   const boardInspection = fileType === "board" ? inspectBoard(ydoc) : null;
+  if (fileType === "view") inspectView(ydoc);
   if (boardInspection) {
     const roots = getBoardRoots(ydoc);
     const assignees = new Set<string>();
@@ -437,6 +452,120 @@ async function materializedState(ctx: QueryCtx, doc: Doc<"documents">): Promise<
   return state;
 }
 
+async function syncBoardLinkIndex(
+  ctx: MutationCtx,
+  doc: Doc<"documents">,
+  state: ArrayBuffer,
+  userId: string,
+): Promise<void> {
+  if (doc.fileType !== "board") return;
+  const ydoc = new Y.Doc();
+  Y.applyUpdate(ydoc, new Uint8Array(state));
+  const render = boardRenderModel(ydoc);
+  const desired = new Map<string, string>();
+  for (const card of inspectBoard(ydoc).cards.values()) {
+    if (card.linkedDocId) desired.set(card.id, card.linkedDocId);
+  }
+  const desiredCards = new Map(
+    render.columns.flatMap((column) =>
+      column.cards.map(
+        (card) =>
+          [
+            card.id,
+            { title: card.title, columnName: column.name, due: card.due ?? undefined },
+          ] as const,
+      ),
+    ),
+  );
+  ydoc.destroy();
+  const existing = (
+    await ctx.db
+      .query("documentLinks")
+      .withIndex("by_source_document", (q) => q.eq("sourceDocumentId", doc._id))
+      .collect()
+  ).filter((link) => link.managedByBoard !== false);
+  const now = Date.now();
+  for (const link of existing) {
+    const target = link.sourceCardId ? desired.get(link.sourceCardId) : undefined;
+    if (!target || target !== link.targetDocumentId) await ctx.db.delete(link._id);
+    else desired.delete(link.sourceCardId ?? "");
+  }
+  for (const [sourceCardId, target] of desired) {
+    const targetDocumentId = ctx.db.normalizeId("documents", target);
+    const targetDocument = targetDocumentId ? await ctx.db.get(targetDocumentId) : null;
+    if (!targetDocument || targetDocument.projectId !== doc.projectId) continue;
+    await ctx.db.insert("documentLinks", {
+      clerkOrgId: doc.clerkOrgId,
+      sourceProjectId: doc.projectId,
+      sourceDocumentId: doc._id,
+      sourceCardId,
+      managedByBoard: true,
+      targetProjectId: targetDocument.projectId,
+      targetDocumentId: targetDocument._id,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  const existingCards = await ctx.db
+    .query("boardCardRecords")
+    .withIndex("by_document", (q) => q.eq("documentId", doc._id))
+    .collect();
+  for (const row of existingCards) {
+    const card = desiredCards.get(row.cardId);
+    if (!card) {
+      await ctx.db.delete(row._id);
+      continue;
+    }
+    if (row.title !== card.title || row.columnName !== card.columnName || row.due !== card.due) {
+      await ctx.db.patch(row._id, { ...card, updatedAt: now });
+    }
+    desiredCards.delete(row.cardId);
+  }
+  for (const [cardId, card] of desiredCards) {
+    await ctx.db.insert("boardCardRecords", {
+      clerkOrgId: doc.clerkOrgId,
+      projectId: doc.projectId,
+      documentId: doc._id,
+      cardId,
+      ...card,
+      updatedAt: now,
+    });
+  }
+}
+
+export const rebuildBoardIndexes = internalMutation({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file" || doc.fileType !== "board" || !doc.contentState) return;
+    await syncBoardLinkIndex(ctx, doc, doc.contentState, "system");
+  },
+});
+
+export const backfillProjectBoardIndexes = internalMutation({
+  args: { projectId: v.id("projects"), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("documents")
+      .withIndex("by_project_kind", (q) => q.eq("projectId", args.projectId).eq("kind", "file"))
+      .paginate({ numItems: 50, cursor: args.cursor ?? null });
+    for (const doc of page.page) {
+      if (doc.fileType === "board") {
+        await ctx.scheduler.runAfter(0, internal.collab.rebuildBoardIndexes, {
+          documentId: doc._id,
+        });
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.collab.backfillProjectBoardIndexes, {
+        projectId: args.projectId,
+        cursor: page.continueCursor,
+      });
+    }
+  },
+});
+
 function contentFromState(state: ArrayBuffer, fileType: FileType): string {
   const ydoc = new Y.Doc();
   Y.applyUpdate(ydoc, new Uint8Array(state));
@@ -457,6 +586,14 @@ function boardPreviewFromState(state: ArrayBuffer) {
   const ydoc = new Y.Doc();
   Y.applyUpdate(ydoc, new Uint8Array(state));
   const preview = boardRenderModel(ydoc);
+  ydoc.destroy();
+  return preview;
+}
+
+function viewPreviewFromState(state: ArrayBuffer) {
+  const ydoc = new Y.Doc();
+  Y.applyUpdate(ydoc, new Uint8Array(state));
+  const preview = viewRenderModel(ydoc);
   ydoc.destroy();
   return preview;
 }
@@ -642,6 +779,10 @@ function replaceBoardStateInChunks(
 }
 
 function replaceDocumentState(current: Y.Doc, target: Y.Doc, fileType: FileType): void {
+  if (fileType === "view") {
+    replaceViewState(current, target);
+    return;
+  }
   if (fileType !== "sheet" && fileType !== "board") {
     const currentText = current.getText("codemirror");
     const targetText = target.getText("codemirror").toString();
@@ -874,6 +1015,9 @@ export const pushUpdateV2 = mutation({
       if (error instanceof SheetValidationError || error instanceof BoardValidationError) {
         return { ok: false as const, error: error.code };
       }
+      if (error instanceof ViewValidationError) {
+        return { ok: false as const, error: "invalid-update" as const };
+      }
       return { ok: false as const, error: "invalid-update" as const };
     }
     if (!materialized) {
@@ -891,7 +1035,8 @@ export const pushUpdateV2 = mutation({
     if (
       byteLength(content) > MAX_FILE_BYTES ||
       (doc.fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
-      (doc.fileType === "board" && newSize > MAX_BOARD_STORED_BYTES)
+      (doc.fileType === "board" && newSize > MAX_BOARD_STORED_BYTES) ||
+      (doc.fileType === "view" && newSize > MAX_VIEW_STORED_BYTES)
     ) {
       return { ok: false as const, error: "file-too-large" as const };
     }
@@ -924,6 +1069,7 @@ export const pushUpdateV2 = mutation({
         createdAt: Date.now(),
       });
     }
+    await syncBoardLinkIndex(ctx, doc, state, access.userId);
     await ctx.db.patch(doc._id, {
       content,
       contentSeq: seq,
@@ -1037,6 +1183,7 @@ export const replaceSheetFromImport = mutation({
       size,
       updatedAt: now,
     });
+    await syncBoardLinkIndex(ctx, doc, state, access.userId);
     await addProjectBytes(ctx, access.project, size - doc.size);
     return { ok: true as const, seq };
   },
@@ -1110,6 +1257,11 @@ export const ensureSeed = mutation({
       throw new Error("not-found");
     }
     await requireProjectEditor(ctx, doc.projectId);
+    if (doc.fileType === "view") {
+      await ctx.scheduler.runAfter(0, internal.collab.backfillProjectBoardIndexes, {
+        projectId: doc.projectId,
+      });
+    }
     const existing = await ctx.db
       .query("yjsUpdates")
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
@@ -1118,7 +1270,10 @@ export const ensureSeed = mutation({
     if (
       existing ||
       snapshot ||
-      (doc.fileType !== "sheet" && doc.fileType !== "board" && doc.content.length === 0)
+      (doc.fileType !== "sheet" &&
+        doc.fileType !== "board" &&
+        doc.fileType !== "view" &&
+        doc.content.length === 0)
     ) {
       return { seeded: false };
     }
@@ -1127,6 +1282,8 @@ export const ensureSeed = mutation({
       seedSheet(seedDoc);
     } else if (doc.fileType === "board") {
       seedBoard(seedDoc);
+    } else if (doc.fileType === "view") {
+      seedView(seedDoc);
     } else {
       seedDoc.getText("codemirror").insert(0, doc.content);
     }
@@ -1293,6 +1450,7 @@ export const getHistoryPreview = query({
       fileType: docFileType(doc),
       sheetPreview: doc.fileType === "sheet" ? sheetPreviewFromState(snapshot.snapshot) : undefined,
       boardPreview: doc.fileType === "board" ? boardPreviewFromState(snapshot.snapshot) : undefined,
+      viewPreview: doc.fileType === "view" ? viewPreviewFromState(snapshot.snapshot) : undefined,
       label: snapshot.label ?? `Snapshot ${snapshot.throughSeq}`,
       authorName: snapshot.authorName ?? "Unknown",
       authorEmail: await snapshotAuthorEmail(ctx, doc, snapshot),
@@ -1321,7 +1479,8 @@ export const restoreHistory = mutation({
     if (
       byteLength(targetContent) > MAX_FILE_BYTES ||
       (fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
-      (fileType === "board" && newSize > MAX_BOARD_STORED_BYTES)
+      (fileType === "board" && newSize > MAX_BOARD_STORED_BYTES) ||
+      (fileType === "view" && newSize > MAX_VIEW_STORED_BYTES)
     ) {
       targetDoc.destroy();
       throw new Error("file-too-large");
@@ -1360,7 +1519,8 @@ export const restoreHistory = mutation({
     if (
       byteLength(restoredContent) > MAX_FILE_BYTES ||
       (fileType === "sheet" && restoredSize > MAX_SHEET_STORED_BYTES) ||
-      (fileType === "board" && restoredSize > MAX_BOARD_STORED_BYTES)
+      (fileType === "board" && restoredSize > MAX_BOARD_STORED_BYTES) ||
+      (fileType === "view" && restoredSize > MAX_VIEW_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }
@@ -1387,6 +1547,7 @@ export const restoreHistory = mutation({
       boardMeta: restoredBoardMeta,
       updatedAt: now,
     });
+    await syncBoardLinkIndex(ctx, doc, state, access.userId);
     await addProjectBytes(ctx, access.project, restoredSize - doc.size);
     await pruneDocumentHistory(ctx, doc);
     await recordProjectEvent(ctx, {

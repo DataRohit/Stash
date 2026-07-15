@@ -4,6 +4,7 @@ import {
   FileText,
   Folder,
   Image as ImageIcon,
+  LayoutList,
   TableProperties,
 } from "lucide-react";
 import type { FileType } from "@/lib/document-types";
@@ -31,6 +32,9 @@ export function FileIcon({ kind, fileType, className }: FileIconProps) {
   }
   if (fileType === "board") {
     return <Columns3 className={cn(base, "text-accent")} aria-hidden="true" />;
+  }
+  if (fileType === "view") {
+    return <LayoutList className={cn(base, "text-info")} aria-hidden="true" />;
   }
   return <FileText className={cn(base, "text-accent")} aria-hidden="true" />;
 }

@@ -1,7 +1,15 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { Columns3, FileCode, FileText, Loader2, NotebookPen, TableProperties } from "lucide-react";
+import {
+  Columns3,
+  FileCode,
+  FileText,
+  LayoutList,
+  Loader2,
+  NotebookPen,
+  TableProperties,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import { Button } from "@/components/ui/button";
@@ -40,6 +48,12 @@ const FILE_TYPES = [
     description: "Columns and cards for collaborative work.",
     extension: ".board",
   },
+  {
+    id: "view",
+    name: "Team view",
+    description: "Table, board, and calendar over project records.",
+    extension: ".view",
+  },
 ] as const;
 
 function explicitFileType(name: string): FileType | null {
@@ -48,6 +62,7 @@ function explicitFileType(name: string): FileType | null {
   if (lower.endsWith(".html")) return "html";
   if (lower.endsWith(".sheet")) return "sheet";
   if (lower.endsWith(".board")) return "board";
+  if (lower.endsWith(".view")) return "view";
   return null;
 }
 
@@ -67,7 +82,7 @@ function fileNameWithExtension(name: string, fileType: FileType) {
   const sanitized = name.replaceAll("/", "").replaceAll("\\", "").trim();
   if (!sanitized) return "";
   if (hasUnsupportedExtension(sanitized)) return sanitized;
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|view)$/i, "");
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -109,7 +124,7 @@ export function NewDocumentDialog({
   const create = async () => {
     if (!name.trim()) return;
     if (hasUnsupportedExtension(name)) {
-      setError("Only .md, .html, .sheet, and .board file extensions are supported.");
+      setError("Only .md, .html, .sheet, .board, and .view file extensions are supported.");
       return;
     }
     if (hasMissingBaseName(name)) {
@@ -139,7 +154,9 @@ export function NewDocumentDialog({
         ? TableProperties
         : fileType === "board"
           ? Columns3
-          : FileText;
+          : fileType === "view"
+            ? LayoutList
+            : FileText;
   const finalName = fileNameWithExtension(name, fileType);
   const invalidExtension = hasUnsupportedExtension(name);
   const missingBaseName = hasMissingBaseName(name);
@@ -200,7 +217,7 @@ export function NewDocumentDialog({
           />
           {invalidExtension ? (
             <p className="mt-1.5 text-destructive text-xs">
-              Only .md, .html, .sheet, and .board file extensions are supported.
+              Only .md, .html, .sheet, .board, and .view file extensions are supported.
             </p>
           ) : missingBaseName ? (
             <p className="mt-1.5 text-destructive text-xs">

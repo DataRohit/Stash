@@ -131,6 +131,7 @@ export default async function SharedDocumentPage({
         content: result.content,
         sheetPreview: result.sheetPreview,
         boardPreview: result.boardPreview,
+        viewPreview: result.viewPreview,
         updatedAt: result.updatedAt,
         nodes: result.nodes as TreeNode[],
         fileLinks: result.fileLinks,

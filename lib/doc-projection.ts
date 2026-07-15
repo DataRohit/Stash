@@ -8,6 +8,7 @@ import {
   inspectSheet,
   readCell,
 } from "./sheet-model";
+import { inspectView, MAX_VIEW_STATE_BYTES, type ViewConfig } from "./view-model";
 
 export type SheetRenderModel = {
   columns: Array<{ id: string; name: string; width: number }>;
@@ -34,6 +35,8 @@ export type BoardRenderModel = {
   }>;
   unfiledCards: number;
 };
+
+export type ViewRenderModel = ViewConfig;
 
 function quoted(value: string, delimiter: string): string {
   return value.includes(delimiter) || /["\r\n]/.test(value)
@@ -74,6 +77,21 @@ function trimmedSheet(ydoc: Y.Doc) {
 }
 
 export function project(fileType: FileType, ydoc: Y.Doc): string {
+  if (fileType === "view") {
+    const view = inspectView(ydoc);
+    return [
+      `Layout: ${view.layout}`,
+      `Columns: ${view.visibleColumns.join(", ")}`,
+      view.groupBy ? `Grouped by: ${view.groupBy}` : "",
+      view.datePropertyId ? `Date: ${view.datePropertyId}` : "",
+      ...view.filters.map((filter) =>
+        `Filter: ${filter.propertyId} ${filter.operator} ${filter.value}`.trim(),
+      ),
+      ...view.sorts.map((sort) => `Sort: ${sort.propertyId} ${sort.direction}`),
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
   if (fileType === "board") {
     const roots = getBoardRoots(ydoc);
     const inspection = inspectBoard(ydoc);
@@ -180,7 +198,13 @@ export function sheetRenderModel(ydoc: Y.Doc): SheetRenderModel {
 export function documentSize(fileType: FileType, ydoc: Y.Doc): number {
   const projection = project(fileType, ydoc);
   const contentBytes = new TextEncoder().encode(projection).byteLength;
-  return fileType === "sheet" || fileType === "board"
-    ? contentBytes + Y.encodeStateAsUpdate(ydoc).byteLength
+  const stateBytes = Y.encodeStateAsUpdate(ydoc).byteLength;
+  if (fileType === "view" && stateBytes > MAX_VIEW_STATE_BYTES) return Number.POSITIVE_INFINITY;
+  return fileType === "sheet" || fileType === "board" || fileType === "view"
+    ? contentBytes + stateBytes
     : contentBytes;
+}
+
+export function viewRenderModel(ydoc: Y.Doc): ViewRenderModel {
+  return inspectView(ydoc);
 }

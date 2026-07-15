@@ -3,10 +3,11 @@ import * as Y from "yjs";
 import { isRasterAssetMimeType } from "../lib/asset-formats";
 import { getBoardRoots, inspectBoard, MAX_BOARD_STORED_BYTES } from "../lib/board-model";
 import { documentSize, project } from "../lib/doc-projection";
+import { getViewRoots, inspectView, MAX_VIEW_STORED_BYTES } from "../lib/view-model";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { action, internalMutation, mutation, query } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
 import {
   addProjectBytes,
@@ -234,6 +235,15 @@ export const purgeBatch = internalMutation({
     }
     if (documents.length > 0) {
       await accountFreed();
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const properties = await ctx.db
+      .query("documentProperties")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const property of properties) await ctx.db.delete(property._id);
+    if (properties.length > 0) {
       await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
       return;
     }
@@ -509,6 +519,10 @@ export const prepareDuplicate = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+    const properties = await ctx.db
+      .query("documentProperties")
+      .withIndex("by_project", (q) => q.eq("projectId", source._id))
+      .collect();
     return {
       projectId,
       sourceImageStorageId: source.imageStorageId,
@@ -526,7 +540,164 @@ export const prepareDuplicate = internalMutation({
         mimeType: doc.mimeType,
         size: doc.size,
       })),
+      properties: properties.map((property) => ({
+        id: property._id,
+        name: property.name,
+        normalizedName: property.normalizedName,
+        type: property.type,
+        options: property.options,
+        deletedAt: property.deletedAt,
+        createdAt: property.createdAt,
+        updatedAt: property.updatedAt,
+      })),
     };
+  },
+});
+
+export const insertDuplicateProperty = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    name: v.string(),
+    normalizedName: v.string(),
+    type: v.union(
+      v.literal("text"),
+      v.literal("number"),
+      v.literal("boolean"),
+      v.literal("date"),
+      v.literal("status"),
+      v.literal("person"),
+    ),
+    options: v.array(v.object({ id: v.string(), name: v.string(), color: v.string() })),
+    deletedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (project?.cloneState !== "copying") throw new Error("clone-stopped");
+    return await ctx.db.insert("documentProperties", {
+      projectId: project._id,
+      clerkOrgId: project.clerkOrgId,
+      name: args.name,
+      normalizedName: args.normalizedName,
+      type: args.type,
+      options: args.options,
+      deletedAt: args.deletedAt,
+      createdBy: project.createdBy,
+      createdAt: args.createdAt,
+      updatedAt: args.updatedAt,
+    });
+  },
+});
+
+export const structuredRowsForClone = internalQuery({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const values = await ctx.db
+      .query("documentPropertyValues")
+      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
+      .collect();
+    const links = await ctx.db
+      .query("documentLinks")
+      .withIndex("by_source_document", (q) => q.eq("sourceDocumentId", args.documentId))
+      .collect();
+    return {
+      values: values.map((value) => ({
+        propertyId: value.propertyId,
+        type: value.type,
+        displayValue: value.displayValue,
+        textValue: value.textValue,
+        numberValue: value.numberValue,
+        booleanValue: value.booleanValue,
+        dateValue: value.dateValue,
+        dateEndValue: value.dateEndValue,
+        statusOptionId: value.statusOptionId,
+        personUserId: value.personUserId,
+        updatedAt: value.updatedAt,
+      })),
+      links: links.map((link) => ({
+        sourceCardId: link.sourceCardId,
+        managedByBoard: link.managedByBoard,
+        targetDocumentId: link.targetDocumentId,
+      })),
+    };
+  },
+});
+
+export const insertDuplicateStructuredRows = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    values: v.array(
+      v.object({
+        propertyId: v.id("documentProperties"),
+        type: v.union(
+          v.literal("text"),
+          v.literal("number"),
+          v.literal("boolean"),
+          v.literal("date"),
+          v.literal("status"),
+          v.literal("person"),
+        ),
+        displayValue: v.string(),
+        textValue: v.optional(v.string()),
+        numberValue: v.optional(v.number()),
+        booleanValue: v.optional(v.boolean()),
+        dateValue: v.optional(v.number()),
+        dateEndValue: v.optional(v.number()),
+        statusOptionId: v.optional(v.string()),
+        personUserId: v.optional(v.string()),
+        updatedAt: v.number(),
+      }),
+    ),
+    links: v.array(
+      v.object({
+        sourceCardId: v.optional(v.string()),
+        managedByBoard: v.optional(v.boolean()),
+        targetDocumentId: v.id("documents"),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const document = await ctx.db.get(args.documentId);
+    if (!document) throw new Error("clone-stopped");
+    const project = await ctx.db.get(document.projectId);
+    if (project?.cloneState !== "copying") throw new Error("clone-stopped");
+    for (const value of args.values) {
+      await ctx.db.insert("documentPropertyValues", {
+        documentId: document._id,
+        propertyId: value.propertyId,
+        projectId: project._id,
+        clerkOrgId: project.clerkOrgId,
+        type: value.type,
+        displayValue: value.displayValue,
+        textValue: value.textValue,
+        numberValue: value.numberValue,
+        booleanValue: value.booleanValue,
+        dateValue: value.dateValue,
+        dateEndValue: value.dateEndValue,
+        statusOptionId: value.statusOptionId,
+        personUserId: value.personUserId,
+        updatedBy: project.createdBy,
+        updatedAt: value.updatedAt,
+      });
+    }
+    for (const link of args.links) {
+      const target = await ctx.db.get(link.targetDocumentId);
+      if (!target || target.clerkOrgId !== project.clerkOrgId) continue;
+      const now = Date.now();
+      await ctx.db.insert("documentLinks", {
+        clerkOrgId: project.clerkOrgId,
+        sourceProjectId: project._id,
+        sourceDocumentId: document._id,
+        sourceCardId: link.sourceCardId,
+        managedByBoard: link.managedByBoard,
+        targetProjectId: target.projectId,
+        targetDocumentId: target._id,
+        createdBy: project.createdBy,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
   },
 });
 
@@ -541,6 +712,7 @@ export const insertDuplicateNode = internalMutation({
       v.literal("html"),
       v.literal("sheet"),
       v.literal("board"),
+      v.literal("view"),
       v.null(),
     ),
     content: v.string(),
@@ -580,6 +752,9 @@ export const insertDuplicateNode = internalMutation({
         update: args.contentState,
         createdAt: now,
       });
+    if (args.kind === "file" && args.fileType === "board") {
+      await ctx.scheduler.runAfter(0, internal.collab.rebuildBoardIndexes, { documentId: id });
+    }
     await ctx.db.patch(project._id, {
       cloneCopied: (project.cloneCopied ?? 0) + 1,
       updatedAt: now,
@@ -624,6 +799,63 @@ export const remapDuplicateBoardLinks = internalMutation({
     const size = documentSize("board", ydoc);
     ydoc.destroy();
     if (size > MAX_BOARD_STORED_BYTES) throw new Error("file-too-large");
+    const update = updateBytes.slice().buffer;
+    const state = stateBytes.slice().buffer;
+    await ctx.db.insert("yjsUpdates", {
+      documentId: doc._id,
+      seq: 2,
+      update,
+      createdAt: Date.now(),
+    });
+    await ctx.db.patch(doc._id, { content, contentSeq: 2, contentState: state, size });
+    await ctx.scheduler.runAfter(0, internal.collab.rebuildBoardIndexes, {
+      documentId: doc._id,
+    });
+    await addProjectBytes(ctx, projectRow, size - doc.size);
+  },
+});
+
+export const remapDuplicateViewProperties = internalMutation({
+  args: {
+    documentId: v.id("documents"),
+    properties: v.array(v.object({ source: v.string(), target: v.id("documentProperties") })),
+  },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (doc?.kind !== "file" || doc.fileType !== "view" || !doc.contentState) return;
+    const projectRow = await ctx.db.get(doc.projectId);
+    if (projectRow?.cloneState !== "copying") throw new Error("clone-stopped");
+    const mapped = new Map(
+      args.properties.map((property) => [property.source, property.target as string]),
+    );
+    const ydoc = new Y.Doc();
+    Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+    const roots = getViewRoots(ydoc);
+    const vector = Y.encodeStateVector(ydoc);
+    const remap = (value: unknown) =>
+      typeof value === "string" ? (mapped.get(value) ?? value) : value;
+    ydoc.transact(() => {
+      roots.config.set("groupBy", remap(roots.config.get("groupBy")));
+      roots.config.set("datePropertyId", remap(roots.config.get("datePropertyId")));
+      const columns = roots.visibleColumns
+        .toArray()
+        .map((propertyId) => mapped.get(propertyId) ?? propertyId);
+      roots.visibleColumns.delete(0, roots.visibleColumns.length);
+      roots.visibleColumns.insert(0, columns);
+      for (const filter of roots.filters.values()) {
+        filter.set("propertyId", remap(filter.get("propertyId")));
+      }
+      for (const sort of roots.sorts.values()) {
+        sort.set("propertyId", remap(sort.get("propertyId")));
+      }
+    }, "clone-properties");
+    inspectView(ydoc);
+    const updateBytes = Y.encodeStateAsUpdate(ydoc, vector);
+    const stateBytes = Y.encodeStateAsUpdate(ydoc);
+    const content = project("view", ydoc);
+    const size = documentSize("view", ydoc);
+    ydoc.destroy();
+    if (size > MAX_VIEW_STORED_BYTES) throw new Error("file-too-large");
     const update = updateBytes.slice().buffer;
     const state = stateBytes.slice().buffer;
     await ctx.db.insert("yjsUpdates", {
@@ -706,7 +938,21 @@ export const duplicateProject = action({
   handler: async (ctx, args): Promise<string> => {
     const prepared = await ctx.runMutation(internal.projects.prepareDuplicate, args);
     const mapped = new Map<string, Doc<"documents">["_id"]>();
+    const mappedProperties = new Map<string, Doc<"documentProperties">["_id"]>();
     try {
+      for (const property of prepared.properties) {
+        const id = await ctx.runMutation(internal.projects.insertDuplicateProperty, {
+          projectId: prepared.projectId,
+          name: property.name,
+          normalizedName: property.normalizedName,
+          type: property.type,
+          options: property.options,
+          deletedAt: property.deletedAt,
+          createdAt: property.createdAt,
+          updatedAt: property.updatedAt,
+        });
+        mappedProperties.set(property.id, id);
+      }
       const pending = [...prepared.docs];
       while (pending.length > 0) {
         const index = pending.findIndex((node) => !node.parentId || mapped.has(node.parentId));
@@ -745,6 +991,37 @@ export const duplicateProject = action({
             links,
           });
         }
+      }
+      const propertyLinks = [...mappedProperties].map(([source, target]) => ({ source, target }));
+      for (const node of prepared.docs) {
+        if (node.fileType !== "view") continue;
+        const documentId = mapped.get(node.id);
+        if (documentId) {
+          await ctx.runMutation(internal.projects.remapDuplicateViewProperties, {
+            documentId,
+            properties: propertyLinks,
+          });
+        }
+      }
+      for (const node of prepared.docs) {
+        if (node.kind !== "file") continue;
+        const documentId = mapped.get(node.id);
+        if (!documentId) continue;
+        const structured = await ctx.runQuery(internal.projects.structuredRowsForClone, {
+          documentId: node.id,
+        });
+        await ctx.runMutation(internal.projects.insertDuplicateStructuredRows, {
+          documentId,
+          values: structured.values.flatMap((value) => {
+            const propertyId = mappedProperties.get(value.propertyId);
+            return propertyId ? [{ ...value, propertyId }] : [];
+          }),
+          links: structured.links.map((link) => ({
+            sourceCardId: link.sourceCardId,
+            managedByBoard: link.managedByBoard,
+            targetDocumentId: mapped.get(link.targetDocumentId) ?? link.targetDocumentId,
+          })),
+        });
       }
       let imageStorageId = null;
       if (prepared.sourceImageStorageId) {

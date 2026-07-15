@@ -31,7 +31,8 @@ export type CommentThread = {
   anchor:
     | { kind: "text"; startRel: ArrayBuffer; endRel: ArrayBuffer }
     | { kind: "cell"; rowId: string; colId: string }
-    | { kind: "card"; cardId: string };
+    | { kind: "card"; cardId: string }
+    | { kind: "document" };
   orphaned: boolean;
   quote: string;
   status: "open" | "resolved";
@@ -63,7 +64,7 @@ type CommentsRailProps = {
   ranges: Map<string, ResolvedCommentRange>;
   activeThreadId: string | null;
   selection: SelectionState | null;
-  selectionKind?: "text" | "cell" | "card";
+  selectionKind?: "text" | "cell" | "card" | "document";
   onClose: () => void;
   onCreate: (body: string, mentionUserIds: string[]) => Promise<void>;
   onReply: (threadId: string, body: string, mentionUserIds: string[]) => Promise<void>;
@@ -337,7 +338,9 @@ export function CommentsRail({
                   ? "Select a cell to start a thread."
                   : selectionKind === "card"
                     ? "Select a card to start a thread."
-                    : "Select text in the editor to start a thread."}
+                    : selectionKind === "document"
+                      ? "Start a thread about this team view."
+                      : "Select text in the editor to start a thread."}
               </p>
             )}
             <Composer

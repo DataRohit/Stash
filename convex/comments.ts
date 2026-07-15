@@ -285,19 +285,21 @@ export const listForDocument = query({
           documentId: thread.documentId,
           projectId: thread.projectId,
           anchor:
-            thread.anchorKind === "cell"
-              ? {
-                  kind: "cell" as const,
-                  rowId: thread.rowId ?? "",
-                  colId: thread.colId ?? "",
-                }
-              : thread.anchorKind === "card"
-                ? { kind: "card" as const, cardId: thread.cardId ?? "" }
-                : {
-                    kind: "text" as const,
-                    startRel: thread.startRel ?? new ArrayBuffer(0),
-                    endRel: thread.endRel ?? new ArrayBuffer(0),
-                  },
+            thread.anchorKind === "document"
+              ? { kind: "document" as const }
+              : thread.anchorKind === "cell"
+                ? {
+                    kind: "cell" as const,
+                    rowId: thread.rowId ?? "",
+                    colId: thread.colId ?? "",
+                  }
+                : thread.anchorKind === "card"
+                  ? { kind: "card" as const, cardId: thread.cardId ?? "" }
+                  : {
+                      kind: "text" as const,
+                      startRel: thread.startRel ?? new ArrayBuffer(0),
+                      endRel: thread.endRel ?? new ArrayBuffer(0),
+                    },
           orphaned:
             (thread.anchorKind === "cell" &&
               (!thread.rowId ||
@@ -373,6 +375,7 @@ export const createThread = mutation({
       v.object({ kind: v.literal("text"), startRel: v.bytes(), endRel: v.bytes() }),
       v.object({ kind: v.literal("cell"), rowId: v.string(), colId: v.string() }),
       v.object({ kind: v.literal("card"), cardId: v.string() }),
+      v.object({ kind: v.literal("document") }),
     ),
     quote: v.string(),
     body: v.string(),
@@ -381,12 +384,16 @@ export const createThread = mutation({
   handler: async (ctx, args) => {
     const { doc, access } = await fileForAccess(ctx, args.documentId);
     if (args.anchor.kind === "text") {
-      if (doc.fileType === "sheet" || doc.fileType === "board") throw new Error("invalid-anchor");
+      if (doc.fileType === "sheet" || doc.fileType === "board" || doc.fileType === "view") {
+        throw new Error("invalid-anchor");
+      }
       assertAnchor(args.anchor.startRel);
       assertAnchor(args.anchor.endRel);
     } else if (args.anchor.kind === "cell" && (doc.fileType !== "sheet" || !doc.contentState)) {
       throw new Error("invalid-anchor");
     } else if (args.anchor.kind === "card" && (doc.fileType !== "board" || !doc.contentState)) {
+      throw new Error("invalid-anchor");
+    } else if (args.anchor.kind === "document" && doc.fileType !== "view") {
       throw new Error("invalid-anchor");
     }
     if (
@@ -414,7 +421,7 @@ export const createThread = mutation({
       } catch {
         throw new Error("invalid-anchor");
       }
-    } else {
+    } else if (args.anchor.kind === "card") {
       try {
         const ydoc = new Y.Doc();
         Y.applyUpdate(ydoc, new Uint8Array(doc.contentState as ArrayBuffer));
@@ -426,6 +433,8 @@ export const createThread = mutation({
       } catch {
         throw new Error("invalid-anchor");
       }
+    } else {
+      quote = trimQuote(doc.name);
     }
     const mentionUserIds = await validatedMentionIds(ctx, access.project, args.mentionUserIds);
     const now = Date.now();
@@ -438,7 +447,9 @@ export const createThread = mutation({
         ? { startRel: args.anchor.startRel, endRel: args.anchor.endRel }
         : args.anchor.kind === "cell"
           ? { rowId: args.anchor.rowId, colId: args.anchor.colId }
-          : { cardId: args.anchor.cardId }),
+          : args.anchor.kind === "card"
+            ? { cardId: args.anchor.cardId }
+            : {}),
       quote,
       status: "open",
       authorUserId: actor.userId,

@@ -1,6 +1,6 @@
 # Stash
 
-## Collaborative document workspace for Markdown, HTML, spreadsheets, and Kanban boards
+## Collaborative documents, spreadsheets, Kanban boards, and structured team views
 
 [![Quality](https://github.com/DataRohit/Stash/actions/workflows/quality.yml/badge.svg)](https://github.com/DataRohit/Stash/actions/workflows/quality.yml)
 [![Project Status: Active](https://img.shields.io/badge/Project%20Status-Active-brightgreen)](https://github.com/DataRohit/Stash)
@@ -22,8 +22,9 @@
 ## Overview
 
 Stash is a multi-tenant, developer-first document workspace built for teams that
-maintain Markdown, HTML, structured spreadsheets, and Kanban boards together. Every document type participates in real-time
-collaboration, comments, version history, search, sharing, and export. Convex owns
+maintain Markdown, HTML, structured spreadsheets, Kanban boards, and database-style
+team views together. Every document type participates in real-time collaboration,
+history, search, sharing, and export. Convex owns
 reactive data and authorization boundaries; Clerk owns sessions, organizations,
 roles, invitations, and billing-plan data.
 
@@ -69,9 +70,9 @@ and presence motion honor the operating system's reduced-motion preference.
 
 Repository-level checks cover formatting, linting, types, dependency use,
 spelling, secrets, source policy, and production compilation. Final release
-acceptance must also exercise the authenticated editor, sheets, boards, focus order,
-screen-reader announcements, and reduced-motion behavior in the configured
-release candidate on representative mobile and desktop browsers.
+acceptance must also exercise the authenticated editor, sheets, boards, team views,
+focus order, screen-reader announcements, and reduced-motion behavior in the
+configured release candidate on representative mobile and desktop browsers.
 
 ## Resilience and observability
 
@@ -123,11 +124,12 @@ confirms that changes synchronize automatically.
 
 ### Documents and files
 
-- Nested project folders with Markdown, HTML, spreadsheets, Kanban boards, and PNG, JPEG, GIF, WebP, or AVIF
-  image nodes.
-- Document names accept `.md`, `.html`, `.sheet`, and `.board`. Entering an extension in the
-  creation dialog selects the matching format automatically; names without an
-  extension use the selected format and receive its canonical extension.
+- Nested project folders with Markdown, HTML, spreadsheets, Kanban boards, team
+  views, and PNG, JPEG, GIF, WebP, or AVIF image nodes.
+- Document names accept `.md`, `.html`, `.sheet`, `.board`, and `.view`. Entering an
+  extension in the creation dialog selects the matching format automatically;
+  names without an extension use the selected format and receive its canonical
+  extension.
 - Multi-file `.md` and `.html` import plus atomic RFC-style CSV/TSV spreadsheet import.
 - Drag-and-drop movement with cycle prevention and an accessible move dialog.
 - File duplication with collision-safe names and independent collaboration state.
@@ -143,6 +145,12 @@ confirms that changes synchronize automatically.
 - Collaborative Kanban boards with ordered columns and cards, Markdown descriptions,
   assignees, labels, due dates, project-document links, recoverable unfiled cards,
   keyboard movement controls, and remote card/drag presence.
+- Shared database-style views over canonical project documents with typed text,
+  number, checkbox, date-range, status, and person properties; table, grouped board,
+  timeline, and calendar layouts; paged records; shared filters, sorting, and fields;
+  and an unscheduled tray for records without dates.
+- First-class document and card relationships with access-safe cross-project target
+  search, maintained backlinks, opaque inaccessible targets, and purge cleanup.
 - Yjs incremental synchronization over Convex with snapshots and compaction.
 - Presence and remote cursors with session ownership protection.
 - Cross-file link completion, synchronized outlines, and image paste or drop.
@@ -170,7 +178,8 @@ confirms that changes synchronize automatically.
 - Optional expiry and share-token rotation.
 - Organization policy that degrades public links to organization access.
 - Public-edge throttling isolated by token and IP.
-- Standalone HTML, print/PDF, Markdown, canonical CSV, board Markdown, and project ZIP export.
+- Standalone HTML, print/PDF, Markdown, canonical CSV, board Markdown, view-record
+  CSV, and project ZIP export.
 
 ### Organizations and authorization
 

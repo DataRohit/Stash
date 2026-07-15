@@ -11,6 +11,7 @@ import {
   Columns2,
   Eye,
   History,
+  Link2,
   List,
   Loader2,
   MessageSquare,
@@ -64,6 +65,7 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/lib/use-collab-doc";
 import { NewDocumentDialog } from "@/app/dashboard/projects/[id]/editor/new-document-dialog";
 import { OutlinePanel } from "@/app/dashboard/projects/[id]/editor/outline-panel";
+import { RecordDetailsDialog } from "@/app/dashboard/projects/[id]/editor/record-details-dialog";
 import { SaveTemplateDialog } from "@/app/dashboard/projects/[id]/editor/save-template-dialog";
 import { SearchPanel } from "@/app/dashboard/projects/[id]/editor/search-panel";
 import {
@@ -77,6 +79,7 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/sheet-editor";
 import { TrashPanel } from "@/app/dashboard/projects/[id]/editor/trash-panel";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { ViewEditor } from "@/app/dashboard/projects/[id]/editor/view-editor";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
@@ -379,6 +382,7 @@ export function ProjectEditor({
   const [trashOpen, setTrashOpen] = useState(false);
   const [newDocumentParent, setNewDocumentParent] = useState<string | null | undefined>(undefined);
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [recordDetailsOpen, setRecordDetailsOpen] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [commentsOpen, setCommentsOpen] = useState(false);
@@ -497,7 +501,12 @@ export function ProjectEditor({
   );
   const boardMembersData = useQuery(
     api.members.listByOrg,
-    selectedNode?.fileType === "board" && !accessLost ? { clerkOrgId } : "skip",
+    (selectedNode?.fileType === "board" ||
+      selectedNode?.fileType === "view" ||
+      recordDetailsOpen) &&
+      !accessLost
+      ? { clerkOrgId }
+      : "skip",
   );
   const shareStateData = useQuery(
     api.sharing.getState,
@@ -581,9 +590,11 @@ export function ProjectEditor({
         ? boardSelection
           ? { from: 0, to: 1, text: boardSelection.quote }
           : null
-        : effectiveViewMode === "preview"
-          ? null
-          : editorSelection;
+        : selectedNode?.fileType === "view"
+          ? { from: 0, to: 1, text: selectedNode.name }
+          : effectiveViewMode === "preview"
+            ? null
+            : editorSelection;
   const outlineItems = useMemo<OutlineItem[]>(() => {
     if (!outlineOpen || !selectedFileId || selectedNode?.kind !== "file") {
       return [];
@@ -945,6 +956,25 @@ export function ProjectEditor({
       }
       return;
     }
+    if (selectedNode?.fileType === "view") {
+      if (!selectedFileId || !collab?.ready) return;
+      try {
+        const commentId = await createCommentThread({
+          documentId: selectedFileId as Id<"documents">,
+          anchor: { kind: "document" },
+          quote: selectedNode.name,
+          body,
+          mentionUserIds,
+        });
+        setCommentsOpen(true);
+        setActiveCommentId(commentId);
+        notify.success("Comment added");
+      } catch (error) {
+        notify.error("Comment failed", { description: mapDocError(error) });
+        throw error;
+      }
+      return;
+    }
     if (
       !selectedFileId ||
       !collab?.ready ||
@@ -1289,6 +1319,21 @@ export function ProjectEditor({
                   ) : null}
                 </div>
               ) : null}
+              <button
+                type="button"
+                onClick={() => setRecordDetailsOpen(true)}
+                aria-label="Properties and backlinks"
+                aria-haspopup="dialog"
+                aria-expanded={recordDetailsOpen}
+                className={cn(
+                  "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                  recordDetailsOpen
+                    ? "bg-foreground/[0.08] text-foreground"
+                    : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
+                )}
+              >
+                <Link2 className="size-4" aria-hidden="true" />
+              </button>
               {selectedNode?.fileType !== "sheet" ? (
                 <button
                   type="button"
@@ -1312,7 +1357,9 @@ export function ProjectEditor({
                   ) : null}
                 </button>
               ) : null}
-              {selectedNode?.fileType !== "sheet" && selectedNode?.fileType !== "board" ? (
+              {selectedNode?.fileType !== "sheet" &&
+              selectedNode?.fileType !== "board" &&
+              selectedNode?.fileType !== "view" ? (
                 <button
                   type="button"
                   onClick={() => setOutlineOpen((value) => !value)}
@@ -1337,7 +1384,9 @@ export function ProjectEditor({
                   content={canEdit ? buffer : doc.content}
                   nodes={nodes}
                   ydoc={
-                    doc.fileType === "sheet" || doc.fileType === "board" ? collab?.ydoc : undefined
+                    doc.fileType === "sheet" || doc.fileType === "board" || doc.fileType === "view"
+                      ? collab?.ydoc
+                      : undefined
                   }
                 />
               ) : null}
@@ -1369,7 +1418,9 @@ export function ProjectEditor({
                     className="absolute top-10 right-0 z-[80] w-48 rounded-lg border border-hairline bg-surface p-1 shadow-xl"
                     role="menu"
                   >
-                    {selectedNode?.fileType !== "sheet" && selectedNode?.fileType !== "board" ? (
+                    {selectedNode?.fileType !== "sheet" &&
+                    selectedNode?.fileType !== "board" &&
+                    selectedNode?.fileType !== "view" ? (
                       <button
                         ref={moreFirstRef}
                         type="button"
@@ -1386,7 +1437,9 @@ export function ProjectEditor({
                     ) : null}
                     <button
                       ref={
-                        selectedNode?.fileType === "sheet" || selectedNode?.fileType === "board"
+                        selectedNode?.fileType === "sheet" ||
+                        selectedNode?.fileType === "board" ||
+                        selectedNode?.fileType === "view"
                           ? moreFirstRef
                           : undefined
                       }
@@ -1424,7 +1477,9 @@ export function ProjectEditor({
               >
                 <CircleHelp className="size-4" aria-hidden="true" />
               </button>
-              {selectedNode?.fileType !== "sheet" && selectedNode?.fileType !== "board" ? (
+              {selectedNode?.fileType !== "sheet" &&
+              selectedNode?.fileType !== "board" &&
+              selectedNode?.fileType !== "view" ? (
                 <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                   <legend className="sr-only">View mode</legend>
                   {(
@@ -1612,6 +1667,19 @@ export function ProjectEditor({
                     onOpenDocument={selectNode}
                   />
                 </div>
+              ) : doc.fileType === "view" && collab?.ydoc && collab.awareness ? (
+                <div className="min-h-0 flex-1">
+                  <ViewEditor
+                    key={selectedFileId}
+                    projectId={pid}
+                    ydoc={collab.ydoc}
+                    awareness={collab.awareness}
+                    ready={collab.ready}
+                    canEdit={canEdit && !collab.blocked}
+                    members={boardMembers}
+                    onOpenDocument={selectNode}
+                  />
+                </div>
               ) : (
                 <div className="flex min-h-0 flex-1">
                   {effectiveViewMode !== "preview" ? (
@@ -1713,7 +1781,8 @@ export function ProjectEditor({
         selectedFileId &&
         selectedNode?.kind === "file" &&
         selectedNode.fileType !== "sheet" &&
-        selectedNode.fileType !== "board" ? (
+        selectedNode.fileType !== "board" &&
+        selectedNode.fileType !== "view" ? (
           <OutlinePanel
             open={outlineOpen}
             items={outlineItems}
@@ -1734,7 +1803,9 @@ export function ProjectEditor({
                 ? "cell"
                 : selectedNode?.fileType === "board"
                   ? "card"
-                  : "text"
+                  : selectedNode?.fileType === "view"
+                    ? "document"
+                    : "text"
             }
             onClose={() => setCommentsOpen(false)}
             onCreate={createThreadFromSelection}
@@ -1769,6 +1840,22 @@ export function ProjectEditor({
         isAdmin={isAdmin}
         onClose={() => setTrashOpen(false)}
       />
+      {selectedFileId && selectedNode?.kind === "file" ? (
+        <RecordDetailsDialog
+          open={recordDetailsOpen}
+          projectId={pid}
+          documentId={selectedFileId as Id<"documents">}
+          sourceCardId={selectedNode.fileType === "board" ? boardSelection?.cardId : undefined}
+          nodes={nodes}
+          members={boardMembers}
+          canEdit={canEdit}
+          onClose={() => setRecordDetailsOpen(false)}
+          onOpenDocument={(documentId) => {
+            setRecordDetailsOpen(false);
+            selectNode(documentId);
+          }}
+        />
+      ) : null}
       <Dialog
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}

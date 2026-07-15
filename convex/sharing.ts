@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
 import { boardRenderModel, sheetRenderModel } from "../lib/doc-projection";
+import { inspectView, type ViewConfig, type ViewFilter } from "../lib/view-model";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -19,6 +20,165 @@ const RATE_MAX_HITS = 60;
 const WINDOW_RETENTION_MS = 5 * 60 * 1000;
 const SHARE_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const RATE_KEY_PATTERN = /^[a-f0-9]{64}$/;
+const SHARED_VIEW_RECORD_LIMIT = 200;
+
+type SharedViewRecord = {
+  id: string;
+  name: string;
+  fileType: string | null;
+  updatedAt: number;
+  properties: Array<{
+    propertyId: string;
+    displayValue: string;
+    dateValue?: number;
+    dateEndValue?: number;
+  }>;
+};
+
+function sharedViewValue(record: SharedViewRecord, propertyId: string): string {
+  if (propertyId === "title") return record.name;
+  if (propertyId === "fileType") return record.fileType ?? "Unknown";
+  if (propertyId === "updatedAt") return String(record.updatedAt);
+  return record.properties.find((value) => value.propertyId === propertyId)?.displayValue ?? "";
+}
+
+function sharedViewMatches(record: SharedViewRecord, filter: ViewFilter): boolean {
+  const value = sharedViewValue(record, filter.propertyId);
+  const left = value.toLocaleLowerCase();
+  const right = filter.value.trim().toLocaleLowerCase();
+  if (filter.operator === "is-empty") return value.length === 0;
+  if (filter.operator === "is-not-empty") return value.length > 0;
+  if (filter.operator === "contains") return left.includes(right);
+  if (filter.operator === "equals") return left === right;
+  if (filter.operator === "not-equals") return left !== right;
+  const propertyValue = record.properties.find((row) => row.propertyId === filter.propertyId);
+  const numeric =
+    filter.propertyId === "updatedAt"
+      ? record.updatedAt
+      : filter.operator === "before"
+        ? (propertyValue?.dateEndValue ?? propertyValue?.dateValue ?? Date.parse(value))
+        : (propertyValue?.dateValue ?? Date.parse(value));
+  const target = Date.parse(filter.value);
+  if (!Number.isFinite(numeric) || !Number.isFinite(target)) return false;
+  return filter.operator === "before" ? numeric < target : numeric > target;
+}
+
+async function sharedViewPreview(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  config: ViewConfig,
+  allowedDocumentIds: Set<string>,
+) {
+  const referenced = new Set([
+    ...config.visibleColumns,
+    ...config.filters.map((filter) => filter.propertyId),
+    ...config.sorts.map((sort) => sort.propertyId),
+    ...(config.groupBy ? [config.groupBy] : []),
+    ...(config.datePropertyId ? [config.datePropertyId] : []),
+  ]);
+  const [propertyRows, documents, boardCards] = await Promise.all([
+    ctx.db
+      .query("documentProperties")
+      .withIndex("by_project", (q) => q.eq("projectId", projectId))
+      .collect(),
+    ctx.db
+      .query("documents")
+      .withIndex("by_project_kind", (q) => q.eq("projectId", projectId).eq("kind", "file"))
+      .order("desc")
+      .take(SHARED_VIEW_RECORD_LIMIT + 1),
+    config.datePropertyId === "boardDue"
+      ? ctx.db
+          .query("boardCardRecords")
+          .withIndex("by_project", (q) => q.eq("projectId", projectId))
+          .order("desc")
+          .take(SHARED_VIEW_RECORD_LIMIT + 1)
+      : Promise.resolve([]),
+  ]);
+  const records: SharedViewRecord[] = [];
+  for (const document of documents.slice(0, SHARED_VIEW_RECORD_LIMIT)) {
+    if (!allowedDocumentIds.has(document._id) || (await isInactiveTree(ctx, document))) continue;
+    const values = await ctx.db
+      .query("documentPropertyValues")
+      .withIndex("by_document", (q) => q.eq("documentId", document._id))
+      .collect();
+    records.push({
+      id: document._id,
+      name: document.name,
+      fileType: document.fileType,
+      updatedAt: document.updatedAt,
+      properties: values
+        .filter((value) => referenced.has(value.propertyId))
+        .map((value) => ({
+          propertyId: value.propertyId,
+          displayValue: value.displayValue,
+          dateValue: value.dateValue,
+          dateEndValue: value.dateEndValue,
+        })),
+    });
+  }
+  if (config.datePropertyId === "boardDue") {
+    for (const card of boardCards.slice(0, SHARED_VIEW_RECORD_LIMIT)) {
+      const source = await ctx.db.get(card.documentId);
+      if (!source || !allowedDocumentIds.has(source._id) || (await isInactiveTree(ctx, source))) {
+        continue;
+      }
+      records.push({
+        id: `card:${card.documentId}:${card.cardId}`,
+        name: card.title,
+        fileType: "card",
+        updatedAt: card.updatedAt,
+        properties: [
+          {
+            propertyId: "boardDue",
+            displayValue: card.due ? new Date(card.due).toISOString() : "",
+            dateValue: card.due,
+          },
+        ],
+      });
+    }
+  }
+  const activeProperties = new Set(
+    propertyRows
+      .filter((property) => !property.deletedAt)
+      .map((property) => property._id as string),
+  );
+  const builtinProperties = new Set(["title", "fileType", "updatedAt", "boardDue", "boardColumn"]);
+  const filtered = records.filter((record) =>
+    config.filters.every(
+      (filter) =>
+        (!builtinProperties.has(filter.propertyId) && !activeProperties.has(filter.propertyId)) ||
+        sharedViewMatches(record, filter),
+    ),
+  );
+  filtered.sort((left, right) => {
+    for (const sort of config.sorts) {
+      if (!builtinProperties.has(sort.propertyId) && !activeProperties.has(sort.propertyId)) {
+        continue;
+      }
+      const result = sharedViewValue(left, sort.propertyId).localeCompare(
+        sharedViewValue(right, sort.propertyId),
+        undefined,
+        { numeric: true, sensitivity: "base" },
+      );
+      if (result !== 0) return sort.direction === "asc" ? result : -result;
+    }
+    return left.name.localeCompare(right.name);
+  });
+  return {
+    config,
+    properties: propertyRows
+      .filter((property) => referenced.has(property._id))
+      .map((property) => ({
+        id: property._id,
+        name: property.name,
+        type: property.type,
+        deleted: Boolean(property.deletedAt),
+      })),
+    records: filtered,
+    truncated:
+      documents.length > SHARED_VIEW_RECORD_LIMIT || boardCards.length > SHARED_VIEW_RECORD_LIMIT,
+  };
+}
 
 function serviceSecretValid(provided: string): boolean {
   return secretMatches(provided, process.env.CONVEX_PURGE_SECRET);
@@ -512,6 +672,7 @@ export const redeemShare = mutation({
       .map((row) => ({ documentId: row.documentId, href: `/share/${row.token}` }));
     let sheetPreview: ReturnType<typeof sheetRenderModel> | undefined;
     let boardPreview: ReturnType<typeof boardRenderModel> | undefined;
+    let viewPreview: Awaited<ReturnType<typeof sharedViewPreview>> | undefined;
     if (doc.fileType === "sheet" && doc.contentState) {
       const sheet = new Y.Doc();
       Y.applyUpdate(sheet, new Uint8Array(doc.contentState));
@@ -530,6 +691,22 @@ export const redeemShare = mutation({
       }
       board.destroy();
     }
+    if (doc.fileType === "view" && doc.contentState) {
+      const view = new Y.Doc();
+      Y.applyUpdate(view, new Uint8Array(doc.contentState));
+      const allowedDocumentIds = new Set(
+        shares
+          .filter((row) => isShareLive(row) && modeRank(row.mode) >= modeRank(effectiveMode))
+          .map((row) => row.documentId as string),
+      );
+      viewPreview = await sharedViewPreview(
+        ctx,
+        doc.projectId,
+        inspectView(view),
+        allowedDocumentIds,
+      );
+      view.destroy();
+    }
     return {
       status: "ok" as const,
       mode: effectiveMode,
@@ -540,6 +717,7 @@ export const redeemShare = mutation({
       content: doc.content,
       sheetPreview,
       boardPreview,
+      viewPreview,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,

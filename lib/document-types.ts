@@ -1,1 +1,1 @@
-export type FileType = "md" | "html" | "sheet" | "board";
+export type FileType = "md" | "html" | "sheet" | "board" | "view";

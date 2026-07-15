@@ -12,6 +12,7 @@ import {
   SheetValidationError,
   seedSheet,
 } from "../lib/sheet-model";
+import { inspectView, MAX_VIEW_STORED_BYTES, seedView } from "../lib/view-model";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -128,6 +129,9 @@ function fileTypeFromName(name: string): FileType | null {
   if (lower.endsWith(".board")) {
     return "board";
   }
+  if (lower.endsWith(".view")) {
+    return "view";
+  }
   return null;
 }
 
@@ -149,7 +153,7 @@ function requestedFileType(raw: string, fallback: FileType): FileType {
 function nameForFileType(raw: string, fileType: FileType): string {
   const extension = `.${fileType}`;
   const sanitized = raw.replaceAll("/", "").replaceAll("\\", "").trim();
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|csv|tsv)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|view|csv|tsv)$/i, "");
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -556,7 +560,33 @@ export async function purgeDocCollabBatch(
   for (const row of comments) {
     await ctx.db.delete(row._id);
   }
-  return comments.length > 0;
+  if (comments.length > 0) {
+    return true;
+  }
+  const propertyValues = await ctx.db
+    .query("documentPropertyValues")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of propertyValues) await ctx.db.delete(row._id);
+  if (propertyValues.length > 0) return true;
+  const cardRecords = await ctx.db
+    .query("boardCardRecords")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of cardRecords) await ctx.db.delete(row._id);
+  if (cardRecords.length > 0) return true;
+  const outgoingLinks = await ctx.db
+    .query("documentLinks")
+    .withIndex("by_source_document", (q) => q.eq("sourceDocumentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of outgoingLinks) await ctx.db.delete(row._id);
+  if (outgoingLinks.length > 0) return true;
+  const incomingLinks = await ctx.db
+    .query("documentLinks")
+    .withIndex("by_target_document", (q) => q.eq("targetDocumentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of incomingLinks) await ctx.db.delete(row._id);
+  return incomingLinks.length > 0;
 }
 
 export async function purgeRecentDocumentBatch(
@@ -882,6 +912,21 @@ export const createFile = mutation({
       ) {
         throw new Error("project-full");
       }
+    } else if (fileType === "view") {
+      const ydoc = new Y.Doc();
+      seedView(ydoc);
+      content = project(fileType, ydoc);
+      size = documentSize(fileType, ydoc);
+      contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+      contentSeq = 1;
+      ydoc.destroy();
+      if (size > MAX_VIEW_STORED_BYTES) throw new Error("file-too-large");
+      if (
+        (await cachedProjectBytes(ctx, access.project)) + size >
+        (await maxProjectBytes(ctx, access.project))
+      ) {
+        throw new Error("project-full");
+      }
     }
     const now = Date.now();
     const id = await ctx.db.insert("documents", {
@@ -911,6 +956,9 @@ export const createFile = mutation({
       });
       await addProjectBytes(ctx, access.project, size);
     }
+    if (fileType === "board") {
+      await ctx.scheduler.runAfter(0, internal.collab.rebuildBoardIndexes, { documentId: id });
+    }
     await recordProjectEvent(ctx, {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -928,7 +976,13 @@ export const createFromTemplate = mutation({
     projectId: v.id("projects"),
     parentId: v.union(v.id("documents"), v.null()),
     name: v.string(),
-    fileType: v.union(v.literal("md"), v.literal("html"), v.literal("sheet"), v.literal("board")),
+    fileType: v.union(
+      v.literal("md"),
+      v.literal("html"),
+      v.literal("sheet"),
+      v.literal("board"),
+      v.literal("view"),
+    ),
     templateId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -960,6 +1014,8 @@ export const createFromTemplate = mutation({
       seedSheet(ydoc);
     } else if (fileType === "board") {
       seedBoard(ydoc);
+    } else if (fileType === "view") {
+      seedView(ydoc);
     } else if (content) {
       ydoc.getText("codemirror").insert(0, content);
     }
@@ -972,7 +1028,8 @@ export const createFromTemplate = mutation({
     if (
       byteLength(content) > MAX_FILE_BYTES ||
       (fileType === "sheet" && size > MAX_SHEET_STORED_BYTES) ||
-      (fileType === "board" && size > MAX_BOARD_STORED_BYTES)
+      (fileType === "board" && size > MAX_BOARD_STORED_BYTES) ||
+      (fileType === "view" && size > MAX_VIEW_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }
@@ -1007,6 +1064,9 @@ export const createFromTemplate = mutation({
       createdAt: now,
     });
     await addProjectBytes(ctx, access.project, size);
+    if (fileType === "board") {
+      await ctx.scheduler.runAfter(0, internal.collab.rebuildBoardIndexes, { documentId: id });
+    }
     await recordProjectEvent(ctx, {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -1210,6 +1270,7 @@ export const rename = mutation({
     let fileType = doc.fileType;
     if (doc.kind === "file") {
       fileType = requireFileTypeFromName(name);
+      if (fileType !== doc.fileType) throw new Error("file-type-change-unsupported");
     }
     if (await nameTaken(ctx, doc.projectId, doc.parentId, name, doc._id)) {
       throw new Error("name-taken");
@@ -1330,6 +1391,11 @@ export const duplicate = mutation({
       seedBoard(seedDoc);
       state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
       seedDoc.destroy();
+    } else if (!state && doc.fileType === "view") {
+      const seedDoc = new Y.Doc();
+      seedView(seedDoc);
+      state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
+      seedDoc.destroy();
     } else if (!state && doc.content.length > 0) {
       const seedDoc = new Y.Doc();
       seedDoc.getText("codemirror").insert(0, doc.content);
@@ -1359,7 +1425,51 @@ export const duplicate = mutation({
     if (state) {
       await ctx.db.insert("yjsUpdates", { documentId: id, seq: 1, update: state, createdAt: now });
     }
+    const propertyValues = await ctx.db
+      .query("documentPropertyValues")
+      .withIndex("by_document", (q) => q.eq("documentId", doc._id))
+      .collect();
+    for (const value of propertyValues) {
+      await ctx.db.insert("documentPropertyValues", {
+        documentId: id,
+        propertyId: value.propertyId,
+        projectId: doc.projectId,
+        clerkOrgId: doc.clerkOrgId,
+        type: value.type,
+        displayValue: value.displayValue,
+        textValue: value.textValue,
+        numberValue: value.numberValue,
+        booleanValue: value.booleanValue,
+        dateValue: value.dateValue,
+        dateEndValue: value.dateEndValue,
+        statusOptionId: value.statusOptionId,
+        personUserId: value.personUserId,
+        updatedBy: access.userId,
+        updatedAt: now,
+      });
+    }
+    const links = await ctx.db
+      .query("documentLinks")
+      .withIndex("by_source_document", (q) => q.eq("sourceDocumentId", doc._id))
+      .collect();
+    for (const link of links) {
+      await ctx.db.insert("documentLinks", {
+        clerkOrgId: link.clerkOrgId,
+        sourceProjectId: link.sourceProjectId,
+        sourceDocumentId: id,
+        sourceCardId: link.sourceCardId,
+        managedByBoard: link.managedByBoard,
+        targetProjectId: link.targetProjectId,
+        targetDocumentId: link.targetDocumentId,
+        createdBy: access.userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
     await addProjectBytes(ctx, access.project, doc.size);
+    if (doc.fileType === "board") {
+      await ctx.scheduler.runAfter(0, internal.collab.rebuildBoardIndexes, { documentId: id });
+    }
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -1379,7 +1489,7 @@ export const setContent = mutation({
     if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
-    if (doc.fileType === "sheet" || doc.fileType === "board") {
+    if (doc.fileType === "sheet" || doc.fileType === "board" || doc.fileType === "view") {
       throw new Error("unsupported-filetype");
     }
     const access = await requireProjectEditor(ctx, doc.projectId);
@@ -1732,6 +1842,11 @@ export const exportBundle = query({
               ].join("\n\n"),
             )
             .join("\n\n");
+          ydoc.destroy();
+        } else if (doc.kind === "file" && doc.fileType === "view" && doc.contentState) {
+          const ydoc = new Y.Doc();
+          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          content = JSON.stringify(inspectView(ydoc), null, 2);
           ydoc.destroy();
         }
         return {

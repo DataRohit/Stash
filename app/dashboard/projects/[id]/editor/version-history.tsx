@@ -26,6 +26,7 @@ import { SheetTable } from "@/components/sheet-table";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
+import { ViewPreview } from "@/components/view-preview";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
@@ -225,7 +226,8 @@ export function VersionHistoryModal({
   const docId = documentId as Id<"documents">;
   const isSheet = fileNode.fileType === "sheet";
   const isBoard = fileNode.fileType === "board";
-  const isStructured = isSheet || isBoard;
+  const isView = fileNode.fileType === "view";
+  const isStructured = isSheet || isBoard || isView;
   const snapshots = useQuery(api.collab.listHistory, { documentId: docId });
   const createCheckpoint = useMutation(api.collab.createHistoryCheckpoint);
   const restoreHistory = useMutation(api.collab.restoreHistory);
@@ -549,6 +551,11 @@ export function VersionHistoryModal({
                       <SheetTable model={preview.sheetPreview} className="size-full p-3" />
                     ) : isBoard && preview.boardPreview ? (
                       <BoardView model={preview.boardPreview} className="size-full" />
+                    ) : isView && preview.viewPreview ? (
+                      <ViewPreview
+                        model={{ config: preview.viewPreview, properties: [], records: [] }}
+                        className="size-full"
+                      />
                     ) : fileMode === "preview" ? (
                       <DocPreview fileNode={fileNode} content={preview.content} nodes={nodes} />
                     ) : (
@@ -604,6 +611,25 @@ export function VersionHistoryModal({
                             />
                             <BoardView
                               model={comparePreview.boardPreview}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                          </div>
+                        ) : isView && basePreview.viewPreview && comparePreview.viewPreview ? (
+                          <div className="grid size-full min-h-0 grid-cols-1 gap-3 overflow-auto p-3 lg:grid-cols-2">
+                            <ViewPreview
+                              model={{
+                                config: basePreview.viewPreview,
+                                properties: [],
+                                records: [],
+                              }}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                            <ViewPreview
+                              model={{
+                                config: comparePreview.viewPreview,
+                                properties: [],
+                                records: [],
+                              }}
                               className="min-h-0 rounded-md border border-hairline"
                             />
                           </div>
