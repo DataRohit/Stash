@@ -15,11 +15,17 @@ import {
   requireProjectAdmin,
   requireProjectEditor,
 } from "./documents";
+import {
+  clampInt,
+  DEFAULT_HISTORY_RETENTION_DAYS,
+  HARD_MAX_HISTORY_RETENTION_DAYS,
+  MIN_HISTORY_RETENTION_DAYS,
+} from "./limits";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const COMPACT_THRESHOLD = 200;
 const COMPACT_OVERLAP = 64;
-const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const HISTORY_MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 const MAX_HISTORY_PER_DOC = 50;
 const HISTORY_PRUNE_BATCH = 50;
@@ -244,6 +250,16 @@ async function persistHistoryCheckpoint(
   if (snapshotBytes > HISTORY_MAX_DOCUMENT_BYTES) {
     throw new Error("history-too-large");
   }
+  const organization = await ctx.db
+    .query("organizations")
+    .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", doc.clerkOrgId))
+    .unique();
+  const retentionDays = clampInt(
+    organization?.historyRetentionDays ?? DEFAULT_HISTORY_RETENTION_DAYS,
+    MIN_HISTORY_RETENTION_DAYS,
+    HARD_MAX_HISTORY_RETENTION_DAYS,
+  );
+  const now = Date.now();
   const snapshotId = await ctx.db.insert("yjsSnapshots", {
     documentId: doc._id,
     snapshot: state,
@@ -254,10 +270,10 @@ async function persistHistoryCheckpoint(
     authorName,
     authorEmail,
     previewText,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + HISTORY_RETENTION_MS,
+    createdAt: now,
+    expiresAt: now + retentionDays * DAY_MS,
     sizeBytes: snapshotBytes,
-    updatedAt: Date.now(),
+    updatedAt: now,
   });
   await pruneDocumentHistory(ctx, doc);
   return snapshotId;

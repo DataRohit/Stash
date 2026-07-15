@@ -34,6 +34,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { notify } from "@/components/ui/toast";
+import {
+  isRasterAssetMimeType,
+  RASTER_ASSET_ACCEPT,
+  RASTER_ASSET_FORMATS,
+} from "@/lib/asset-formats";
 import { MAX_DESCRIPTION_LENGTH, MAX_IMAGE_BYTES, MAX_TAG_LENGTH, MAX_TAGS } from "@/lib/org";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +46,7 @@ const LOGO_ERRORS: Record<string, string> = {
   unauthenticated: "Your session expired. Sign in again.",
   forbidden: "Only organization admins can change the icon.",
   invalid: "Choose a valid image file.",
-  "invalid-type": "Choose an image file (PNG, JPG, WEBP or SVG).",
+  "invalid-type": `Choose ${RASTER_ASSET_FORMATS}.`,
   "too-large": "Maximum size is 2 MB.",
   failed: "Something went wrong. Please try again.",
 };
@@ -147,8 +152,8 @@ export function OrgCard(props: OrgCardProps) {
     if (!file) {
       return;
     }
-    if (!file.type.startsWith("image/")) {
-      notify.error("Unsupported file", { description: "Choose an image file (PNG, JPG or SVG)." });
+    if (!isRasterAssetMimeType(file.type)) {
+      notify.error("Unsupported file", { description: `Choose ${RASTER_ASSET_FORMATS}.` });
       return;
     }
     if (file.size > MAX_IMAGE_BYTES) {
@@ -490,7 +495,7 @@ export function OrgCard(props: OrgCardProps) {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  accept={RASTER_ASSET_ACCEPT}
                   onChange={handleFile}
                   className="hidden"
                 />

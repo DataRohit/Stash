@@ -103,11 +103,13 @@ export async function reconcileOrgMembers(
   members: ReconcileMember[],
   pendingInvites: ReconcilePending[],
 ): Promise<void> {
+  const secret = process.env.CONVEX_PURGE_SECRET;
   const client = await authedClient();
-  if (!client) {
-    throw new Error("Convex is not configured");
+  if (!client || !secret) {
+    throw new Error("Convex member reconciliation is not configured");
   }
   await client.mutation(api.members.reconcile, {
+    secret,
     clerkOrgId,
     ownerUserId,
     members,
@@ -150,14 +152,6 @@ export async function mirrorDeleteMember(clerkOrgId: string, memberUserId: strin
     throw new Error("Convex is not configured");
   }
   await client.mutation(api.members.deleteByUserId, { clerkOrgId, memberUserId });
-}
-
-export async function countOrgProjects(clerkOrgId: string): Promise<number> {
-  const client = await authedClient();
-  if (!client) {
-    return 0;
-  }
-  return await client.query(api.projects.countByOrg, { clerkOrgId });
 }
 
 export async function createProjectDoc(
@@ -232,17 +226,21 @@ export async function setOrgPlanLimits(
     maxProjects: number;
     maxCollaborators: number;
     maxSizeBytes: number;
+    historyRetentionDays: number;
   },
 ): Promise<void> {
+  const secret = process.env.CONVEX_PURGE_SECRET;
   const client = await authedClient();
-  if (!client) {
-    throw new Error("Convex is not configured");
+  if (!client || !secret) {
+    throw new Error("Convex plan synchronization is not configured");
   }
   await client.mutation(api.organizations.setPlanLimits, {
+    secret,
     clerkOrgId,
     maxProjects: limits.maxProjects,
     maxCollaborators: limits.maxCollaborators,
     maxSizeBytes: limits.maxSizeBytes,
+    historyRetentionDays: limits.historyRetentionDays,
   });
 }
 

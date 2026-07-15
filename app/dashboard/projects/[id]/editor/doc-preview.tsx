@@ -20,6 +20,7 @@ type DocPreviewProps = {
   nodes: TreeNode[];
   iframeRef?: RefObject<HTMLIFrameElement | null>;
   fileLinkById?: Record<string, string>;
+  allowActiveContent?: boolean;
 };
 
 const EMPTY_FILE_LINKS: Record<string, string> = {};
@@ -30,6 +31,7 @@ export function DocPreview({
   nodes,
   iframeRef,
   fileLinkById = EMPTY_FILE_LINKS,
+  allowActiveContent = true,
 }: DocPreviewProps) {
   const noteId = useId();
   const [debounced, setDebounced] = useState(content);
@@ -69,9 +71,15 @@ export function DocPreview({
   }, [assetUrls, nodes]);
 
   const base = useMemo(() => {
-    const { inner, isMd, blocks } = renderInner(fileNode, debounced, resolvedNodes, fileLinkById);
-    return { inner, isMd, blocks, doc: previewSrcDoc(inner, isMd) };
-  }, [debounced, fileLinkById, fileNode, resolvedNodes]);
+    const { inner, isMd, blocks } = renderInner(
+      fileNode,
+      debounced,
+      resolvedNodes,
+      fileLinkById,
+      allowActiveContent,
+    );
+    return { inner, isMd, blocks, doc: previewSrcDoc(inner, isMd, allowActiveContent) };
+  }, [allowActiveContent, debounced, fileLinkById, fileNode, resolvedNodes]);
 
   useEffect(() => {
     if (base.blocks.length === 0) {
@@ -83,10 +91,13 @@ export function DocPreview({
         return;
       }
       const inner = injectMermaid(base.inner, svgs);
-      setRendered({ key: base.inner, doc: previewSrcDoc(inner, base.isMd) });
+      setRendered({
+        key: base.inner,
+        doc: previewSrcDoc(inner, base.isMd, allowActiveContent),
+      });
     });
     return () => controller.abort();
-  }, [base]);
+  }, [allowActiveContent, base]);
 
   const srcDoc = rendered?.key === base.inner ? rendered.doc : base.doc;
 
@@ -107,7 +118,11 @@ export function DocPreview({
           tabIndex={-1}
           srcDoc={srcDoc}
           onLoad={() => setReady(true)}
-          sandbox="allow-scripts allow-popups allow-top-navigation-by-user-activation"
+          sandbox={
+            allowActiveContent
+              ? "allow-scripts allow-popups allow-top-navigation-by-user-activation"
+              : "allow-scripts"
+          }
           className="editor-panel size-full border-0"
         />
         {ready ? null : (

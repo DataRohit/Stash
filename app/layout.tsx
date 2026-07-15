@@ -22,13 +22,30 @@ const instrumentSerif = Instrument_Serif({
   style: ["normal", "italic"],
 });
 
+function metadataBase(): URL {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
+  } catch {
+    return new URL("http://localhost:3000");
+  }
+}
+
 export const metadata: Metadata = {
+  metadataBase: metadataBase(),
   title: {
     default: "Stash — Collaborative Document Workspace",
     template: "%s · Stash",
   },
   description:
     "An open-source collaborative workspace for Markdown and HTML documents. Organize docs into projects and nested folders with version history, shareable links, and real-time editing.",
+  alternates: { canonical: "/" },
+  openGraph: {
+    type: "website",
+    title: "Stash — Collaborative Document Workspace",
+    description:
+      "Organize and collaboratively edit Markdown and HTML documents with version history and controlled sharing.",
+    url: "/",
+  },
 };
 
 export default function RootLayout({

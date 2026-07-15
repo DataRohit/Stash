@@ -186,14 +186,14 @@ export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProp
           <button
             type="button"
             onClick={() => setConfirmItem(null)}
-            className="h-8 rounded-sm border border-hairline px-3 text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+            className="h-8 cursor-pointer rounded-sm border border-hairline px-3 text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={() => confirmItem && void onDeleteForever(confirmItem)}
-            className="h-8 rounded-sm bg-destructive px-3 font-medium text-background text-xs hover:bg-destructive/90"
+            className="h-8 cursor-pointer rounded-sm bg-destructive px-3 font-medium text-background text-xs hover:bg-destructive/90"
           >
             Delete forever
           </button>

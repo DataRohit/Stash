@@ -6,6 +6,7 @@ export type PlanLimits = {
   maxCollaboratorsPerProject: number;
   maxMembersPerOrganization: number;
   maxProjectSizeMb: number;
+  historyRetentionDays: number;
 };
 
 const DEFAULT_LIMITS: PlanLimits = {
@@ -14,6 +15,7 @@ const DEFAULT_LIMITS: PlanLimits = {
   maxCollaboratorsPerProject: 5,
   maxMembersPerOrganization: 5,
   maxProjectSizeMb: 8,
+  historyRetentionDays: 30,
 };
 
 const ORGANIZATIONS_PATTERN = /^(\d+)_organizations?$/;
@@ -21,6 +23,7 @@ const PROJECTS_PATTERN = /^(\d+)_projects_per_organization$/;
 const COLLABORATORS_PATTERN = /^(\d+)_collaborators_per_project$/;
 const MEMBERS_PATTERN = /^(\d+)_organization_members?$/;
 const PROJECT_SIZE_PATTERN = /^(\d+)_mb_max_project_size$/;
+const HISTORY_RETENTION_PATTERN = /^(\d+)_days?_version_history$/;
 
 function firstMatch(slugs: string[], pattern: RegExp): number | null {
   for (const slug of slugs) {
@@ -48,6 +51,8 @@ export function limitsFromFeatures(featureSlugs: string[]): PlanLimits {
       firstMatch(featureSlugs, MEMBERS_PATTERN) ?? DEFAULT_LIMITS.maxMembersPerOrganization,
     maxProjectSizeMb:
       firstMatch(featureSlugs, PROJECT_SIZE_PATTERN) ?? DEFAULT_LIMITS.maxProjectSizeMb,
+    historyRetentionDays:
+      firstMatch(featureSlugs, HISTORY_RETENTION_PATTERN) ?? DEFAULT_LIMITS.historyRetentionDays,
   };
 }
 

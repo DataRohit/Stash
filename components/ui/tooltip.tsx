@@ -62,7 +62,7 @@ export function TooltipProvider() {
     ? createPortal(
         <span
           role="tooltip"
-          className="pointer-events-none fixed z-[190] max-w-56 -translate-x-1/2 rounded-sm border border-hairline bg-surface px-2 py-1 font-medium text-[11px] text-foreground shadow-xl"
+          className="pointer-events-none fixed z-[190] max-w-56 -translate-x-1/2 whitespace-nowrap rounded-sm border border-hairline bg-surface px-2 py-1 font-medium text-[11px] text-foreground shadow-xl"
           style={{ left: tip.left, top: tip.top }}
         >
           {tip.label}

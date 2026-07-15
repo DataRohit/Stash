@@ -55,12 +55,21 @@ export async function recordProjectEvent(
 export const listProjectEvents = query({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
-    if (!(await accessForProject(ctx, args.projectId))) return [];
+    const access = await accessForProject(ctx, args.projectId);
+    if (!access) return [];
     const rows = await ctx.db
       .query("projectEvents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .order("desc")
       .take(50);
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", access.project.clerkOrgId))
+      .collect();
+    const emailByUser = new Map<string, string>();
+    for (const member of members) {
+      if (member.memberUserId) emailByUser.set(member.memberUserId, member.email);
+    }
     return await Promise.all(
       rows.map(async (row) => {
         const doc = row.documentId ? await ctx.db.get(row.documentId) : null;
@@ -69,7 +78,9 @@ export const listProjectEvents = query({
           id: row._id,
           kind: row.kind,
           actorName: row.actorName,
+          actorEmail: emailByUser.get(row.actorUserId) ?? null,
           targetName: row.targetName,
+          targetEmail: row.memberUserId ? (emailByUser.get(row.memberUserId) ?? null) : null,
           detail: row.detail ?? null,
           previousValue: row.previousValue ?? null,
           nextValue: row.nextValue ?? null,

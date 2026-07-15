@@ -34,6 +34,7 @@ export default async function ProjectsPage() {
       maxProjects: limits.maxProjectsPerOrganization,
       maxCollaborators: limits.maxCollaboratorsPerProject,
       maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+      historyRetentionDays: limits.historyRetentionDays,
     });
   }
 

@@ -205,10 +205,10 @@ Trash entries show a countdown to automatic deletion after 30 days and highlight
 the final three days. Expired trash and permanent deletions drain through bounded,
 resumable purge jobs.
 
-History uses a separate per-document budget, a 50-checkpoint ceiling, and 30-day
-retention. It is pruned independently and does not consume the live project
-storage quota. Recent documents are capped at 100 entries per user and
-organization when opened, with a daily fallback prune.
+History uses a separate per-document budget, a 50-checkpoint ceiling, and
+plan-derived retention that defaults to 30 days. It is pruned independently and
+does not consume the live project storage quota. Recent documents are capped at
+100 entries per user and organization when opened, with a daily fallback prune.
 
 Scheduled maintenance also sweeps stale presence; prunes notifications, activity,
 share windows, and authenticated-write windows; reconciles project byte counters

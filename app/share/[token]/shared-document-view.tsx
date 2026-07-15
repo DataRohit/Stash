@@ -43,10 +43,16 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
           description: "The linked file exists in this project but is not part of this share link.",
         });
       }
+      if (event.data?.type === "stash-open-shared-doc") {
+        const href = fileLinkById[String(event.data.id)];
+        if (href) {
+          window.location.assign(href);
+        }
+      }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, []);
+  }, [fileLinkById]);
 
   return (
     <main className="flex h-dvh flex-col gap-3 px-3 py-3 sm:px-6 sm:py-4">
@@ -82,6 +88,7 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
             nodes={nodes}
             iframeRef={frameRef}
             fileLinkById={fileLinkById}
+            allowActiveContent={false}
           />
         ) : null}
       </section>

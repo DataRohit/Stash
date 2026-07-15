@@ -195,12 +195,14 @@ export const deleteAllByOrg = mutation({
 
 export const reconcile = mutation({
   args: {
+    secret: v.string(),
     clerkOrgId: v.string(),
     ownerUserId: v.string(),
     members: v.array(memberInput),
     pendingInvites: v.array(pendingInput),
   },
   handler: async (ctx, args) => {
+    requireWebhookSecret(args.secret);
     if (!(await requireOrgMember(ctx, args.clerkOrgId))) {
       throw new Error("Forbidden");
     }

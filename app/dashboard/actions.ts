@@ -1,6 +1,7 @@
 "use server";
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
+import { isRasterAssetMimeType } from "@/lib/asset-formats";
 import { saveOrgDetails, setOrgPublicSharing } from "@/lib/convex-server";
 import { MAX_IMAGE_BYTES, MAX_TAGS, MIN_ORG_NAME_LENGTH, sanitizeTags } from "@/lib/org";
 import { fetchOrgAvatarFile } from "@/lib/org-avatar-server";
@@ -133,7 +134,7 @@ export async function updateOrganizationLogo(formData: FormData): Promise<LogoRe
   if (!(file instanceof File) || file.size === 0) {
     return { error: "invalid" };
   }
-  if (!file.type.startsWith("image/")) {
+  if (!isRasterAssetMimeType(file.type)) {
     return { error: "invalid-type" };
   }
   if (file.size > MAX_IMAGE_BYTES) {

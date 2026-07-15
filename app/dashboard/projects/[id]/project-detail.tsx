@@ -43,6 +43,11 @@ import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import {
+  isRasterAssetMimeType,
+  RASTER_ASSET_ACCEPT,
+  RASTER_ASSET_FORMATS,
+} from "@/lib/asset-formats";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
 import { MAX_DESCRIPTION_LENGTH, MAX_IMAGE_BYTES, MAX_TAG_LENGTH, MAX_TAGS } from "@/lib/org";
 import { orgAvatarUrl } from "@/lib/org-avatar";
@@ -193,8 +198,8 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
     if (!file) {
       return;
     }
-    if (!file.type.startsWith("image/")) {
-      notify.error("Unsupported file", { description: "Choose an image file (PNG, JPG or SVG)." });
+    if (!isRasterAssetMimeType(file.type)) {
+      notify.error("Unsupported file", { description: `Choose ${RASTER_ASSET_FORMATS}.` });
       return;
     }
     if (file.size > MAX_IMAGE_BYTES) {
@@ -545,7 +550,7 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                    accept={RASTER_ASSET_ACCEPT}
                     onChange={handleFile}
                     className="hidden"
                   />

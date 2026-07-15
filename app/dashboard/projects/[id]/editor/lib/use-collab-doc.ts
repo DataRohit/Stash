@@ -37,6 +37,7 @@ const DEFAULT_CURSOR_COLOR = { color: "#1d4ed8", light: "#1d4ed833" };
 
 const FLUSH_MS = 200;
 const HEARTBEAT_MS = 5_000;
+const OUTBOX_PREFIX = "stash:collab-outbox:";
 
 export type CollabViewer = {
   sessionId: string;
@@ -212,44 +213,116 @@ export function useCollabDoc(
   }, [engine, userLabel, userColor, sessionId]);
 
   useEffect(() => {
-    if (!engine || !documentId || !canEdit) {
+    if (!engine || !documentId || !canEdit || !sessionId) {
       return;
     }
     const { ydoc } = engine;
     let pending: Uint8Array[] = [];
     let pendingEditCount = 0;
+    let inFlight: Uint8Array | null = null;
+    let inFlightEditCount = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let failureNotified = false;
     let reconnecting = false;
     let active = true;
+    const outboxPrefix = `${OUTBOX_PREFIX}${documentId}:${user.id}:`;
+    const outboxKey = `${outboxPrefix}${sessionId}`;
+    const recoveredEntries = new Map<string, string>();
+    const persistOutbox = () => {
+      try {
+        const updates = inFlight ? [inFlight, ...pending] : pending;
+        if (updates.length === 0) {
+          localStorage.removeItem(outboxKey);
+          return;
+        }
+        localStorage.setItem(outboxKey, bytesToBase64(Y.mergeUpdates(updates)));
+      } catch (error) {
+        reportAsync(error);
+      }
+    };
+    const clearRecoveredEntries = () => {
+      try {
+        for (const [key, value] of recoveredEntries) {
+          if (key !== outboxKey && localStorage.getItem(key) === value) {
+            localStorage.removeItem(key);
+          }
+        }
+        recoveredEntries.clear();
+      } catch (error) {
+        reportAsync(error);
+      }
+    };
+    try {
+      const recovered: Uint8Array[] = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (!key?.startsWith(outboxPrefix)) {
+          continue;
+        }
+        const value = localStorage.getItem(key);
+        if (!value) {
+          continue;
+        }
+        try {
+          recovered.push(base64ToBytes(value));
+          recoveredEntries.set(key, value);
+        } catch {
+          localStorage.removeItem(key);
+        }
+      }
+      if (recovered.length > 0) {
+        const update = Y.mergeUpdates(recovered);
+        Y.applyUpdate(ydoc, update, "recovery");
+        pending = [update];
+        pendingEditCount = 1;
+        reconnecting = true;
+        setSyncing(true);
+        setPendingEdits(1);
+        persistOutbox();
+      }
+    } catch (error) {
+      reportAsync(error);
+    }
     const flush = async () => {
       timer = null;
-      if (pending.length === 0) {
-        setSyncing(false);
+      if (inFlight || pending.length === 0) {
+        if (!inFlight && pending.length === 0) {
+          setSyncing(false);
+        }
         return;
       }
-      const merged = Y.mergeUpdates(pending);
-      const mergedEditCount = pendingEditCount;
+      inFlight = Y.mergeUpdates(pending);
+      inFlightEditCount = pendingEditCount;
       pending = [];
       pendingEditCount = 0;
-      let retryable = false;
+      persistOutbox();
       setSyncing(true);
+      let retryable = false;
       try {
         const result = await pushUpdateV2({
           documentId: documentId as Id<"documents">,
-          update: toArrayBuffer(merged),
+          update: toArrayBuffer(inFlight),
         });
         if (!result.ok) {
           throw new Error(result.error);
         }
+        inFlight = null;
+        inFlightEditCount = 0;
         failureNotified = false;
         reconnecting = false;
         setBlocked(null);
-        setPendingEdits(0);
+        setPendingEdits(pendingEditCount);
         setLastSyncedAt(new Date());
+        clearRecoveredEntries();
+        persistOutbox();
       } catch (error) {
-        pending = [merged, ...pending];
-        pendingEditCount += mergedEditCount;
+        if (inFlight) {
+          pending = [inFlight, ...pending];
+          pendingEditCount += inFlightEditCount;
+        }
+        inFlight = null;
+        inFlightEditCount = 0;
+        persistOutbox();
         const message = error instanceof Error ? error.message : "";
         const blockedByLimit =
           message.includes("project-full") || message.includes("file-too-large");
@@ -272,19 +345,22 @@ export function useCollabDoc(
         }
         reportAsync(error);
       } finally {
-        if (pending.length === 0) {
+        if (!inFlight && pending.length === 0) {
           setSyncing(false);
         } else if (retryable && active && timer === null) {
+          timer = setTimeout(() => void flush(), FLUSH_MS);
+        } else if (!inFlight && pending.length > 0 && active && timer === null) {
           timer = setTimeout(() => void flush(), FLUSH_MS);
         }
       }
     };
     const onUpdate = (update: Uint8Array, origin: unknown) => {
-      if (origin === "remote" || origin === "seed") {
+      if (origin === "remote" || origin === "seed" || origin === "recovery") {
         return;
       }
       pending.push(update);
       pendingEditCount += 1;
+      persistOutbox();
       if (reconnecting) {
         setPendingEdits(pendingEditCount);
       }
@@ -300,20 +376,39 @@ export function useCollabDoc(
       }
       void flush();
     };
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!inFlight && pending.length === 0) {
+        return;
+      }
+      persistOutbox();
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        onPageHide();
+      }
+    };
     ydoc.on("update", onUpdate);
     window.addEventListener("pagehide", onPageHide);
-    document.addEventListener("visibilitychange", onPageHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    if (pending.length > 0) {
+      timer = setTimeout(() => void flush(), 0);
+    }
     return () => {
       active = false;
       ydoc.off("update", onUpdate);
       window.removeEventListener("pagehide", onPageHide);
-      document.removeEventListener("visibilitychange", onPageHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       if (timer !== null) {
         clearTimeout(timer);
       }
+      persistOutbox();
       void flush();
     };
-  }, [engine, documentId, canEdit, pushUpdateV2]);
+  }, [engine, documentId, canEdit, pushUpdateV2, sessionId, user.id]);
 
   useEffect(() => {
     if (!engine || !documentId || pullResult === undefined) {

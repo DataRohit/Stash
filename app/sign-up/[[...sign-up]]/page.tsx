@@ -1,11 +1,20 @@
-import { SignUp } from "@clerk/nextjs";
+import { ClerkFailed, ClerkLoaded, ClerkLoading, SignUp } from "@clerk/nextjs";
+import { AuthCardFailed, AuthCardLoading } from "@/components/auth/auth-card-state";
 import { AuthNavbar } from "@/components/auth/auth-navbar";
 
 export default function SignUpPage() {
   return (
     <main className="aurora isolate flex min-h-screen items-center justify-center overflow-hidden px-6 py-20">
       <AuthNavbar />
-      <SignUp />
+      <ClerkLoading>
+        <AuthCardLoading />
+      </ClerkLoading>
+      <ClerkLoaded>
+        <SignUp />
+      </ClerkLoaded>
+      <ClerkFailed>
+        <AuthCardFailed />
+      </ClerkFailed>
     </main>
   );
 }

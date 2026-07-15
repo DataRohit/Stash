@@ -32,6 +32,7 @@ export default async function ProjectEditorPage({ params }: { params: Promise<{ 
         maxProjects: limits.maxProjectsPerOrganization,
         maxCollaborators: limits.maxCollaboratorsPerProject,
         maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+        historyRetentionDays: limits.historyRetentionDays,
       });
       await setProjectMaxSize(id, limits.maxProjectSizeMb * 1024 * 1024);
     }

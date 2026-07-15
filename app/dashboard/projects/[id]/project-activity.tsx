@@ -4,11 +4,19 @@ import { useMutation, useQuery } from "convex/react";
 import {
   BellOff,
   BellRing,
+  Copy,
   FileClock,
+  FilePlus,
+  FolderInput,
+  FolderPlus,
   FolderTree,
   History,
+  ImageUp,
   Loader2,
+  PenLine,
+  RotateCcw,
   Share2,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import Link from "next/link";
@@ -24,46 +32,72 @@ type EventRow = NonNullable<
   ReturnType<typeof useQuery<typeof api.activity.listProjectEvents>>
 >[number];
 
-function description(event: EventRow) {
-  const actions: Record<string, string> = {
-    node_created: "created",
-    documents_imported: "imported",
-    document_duplicated: "duplicated",
-    node_renamed: "renamed",
-    node_moved: "moved",
-    node_trashed: "moved to trash",
-    node_restored: "restored",
-    node_deleted: "permanently deleted",
-    checkpoint_created: "created a checkpoint for",
-    checkpoint_deleted: "deleted a checkpoint for",
-    checkpoint_restored: "restored a checkpoint for",
-    share_changed: "changed sharing for",
-    access_granted: "granted access to",
-    access_revoked: "revoked access from",
-  };
-  return actions[event.kind] ?? "updated";
+const MODE_LABELS: Record<string, string> = {
+  private: "Private",
+  org: "Organization",
+  public: "Public link",
+};
+
+const PHRASES: Record<string, { lead: string; trail?: string }> = {
+  documents_imported: { lead: "imported" },
+  document_duplicated: { lead: "duplicated" },
+  node_renamed: { lead: "renamed" },
+  node_moved: { lead: "moved" },
+  node_trashed: { lead: "moved", trail: "to trash" },
+  node_restored: { lead: "restored", trail: "from trash" },
+  node_deleted: { lead: "permanently deleted" },
+  checkpoint_created: { lead: "saved a checkpoint of" },
+  checkpoint_deleted: { lead: "deleted a checkpoint of" },
+  checkpoint_restored: { lead: "restored a checkpoint of" },
+  share_changed: { lead: "changed sharing for" },
+  access_granted: { lead: "granted project access to" },
+  access_revoked: { lead: "revoked project access from" },
+};
+
+function modeLabel(mode: string) {
+  return MODE_LABELS[mode] ?? mode;
 }
 
-function detailText(event: EventRow) {
+function phrase(event: EventRow): { lead: string; trail?: string } {
+  if (event.kind === "node_created") {
+    if (event.detail === "folder") return { lead: "created the folder" };
+    if (event.detail === "asset") return { lead: "uploaded" };
+    if (event.detail === "template") return { lead: "created", trail: "from a template" };
+    return { lead: "created" };
+  }
+  return PHRASES[event.kind] ?? { lead: "updated" };
+}
+
+function detailText(event: EventRow): string | null {
   if (event.kind === "node_renamed")
-    return event.previousValue && event.nextValue
-      ? `${event.previousValue} → ${event.nextValue}`
-      : null;
+    return event.previousValue ? `Renamed from ${event.previousValue}` : null;
   if (event.kind === "node_moved") return event.nextValue ? `Moved to ${event.nextValue}` : null;
   if (event.kind === "document_duplicated")
     return event.previousValue ? `Copied from ${event.previousValue}` : null;
+  if (event.kind === "documents_imported") return event.detail;
   if (event.kind === "share_changed")
     return event.previousValue && event.nextValue
-      ? `${event.previousValue} → ${event.nextValue}`
+      ? `${modeLabel(event.previousValue)} → ${modeLabel(event.nextValue)}`
       : null;
-  return event.detail ?? null;
+  return null;
 }
 
-function iconFor(kind: string) {
+function iconFor(event: EventRow) {
+  const { kind } = event;
+  if (kind === "node_created") {
+    if (event.detail === "folder") return FolderPlus;
+    if (event.detail === "asset") return ImageUp;
+    return FilePlus;
+  }
+  if (kind === "documents_imported") return FolderInput;
+  if (kind === "document_duplicated") return Copy;
+  if (kind === "node_renamed") return PenLine;
+  if (kind === "node_moved") return FolderTree;
+  if (kind === "node_trashed" || kind === "node_deleted") return Trash2;
+  if (kind === "node_restored") return RotateCcw;
   if (kind.startsWith("checkpoint")) return History;
   if (kind === "share_changed") return Share2;
   if (kind.startsWith("access")) return UserRound;
-  if (kind === "node_moved" || kind === "documents_imported") return FolderTree;
   return FileClock;
 }
 
@@ -144,9 +178,18 @@ export function ProjectActivity({ projectId }: { projectId: Id<"projects"> }) {
               <h2 className="mb-2 font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                 {day}
               </h2>
-              <ul className="flex flex-col divide-y divide-hairline">
-                {rows.map((event) => {
-                  const Icon = iconFor(event.kind);
+              <ul className="flex flex-col">
+                {rows.map((event, index) => {
+                  const Icon = iconFor(event);
+                  const { lead, trail } = phrase(event);
+                  const detail = detailText(event);
+                  const targetEmail =
+                    event.targetEmail && event.targetEmail !== event.targetName ? (
+                      <span className="font-normal text-muted-foreground">
+                        {" "}
+                        ({event.targetEmail})
+                      </span>
+                    ) : null;
                   const target = event.documentId ? (
                     <Link
                       href={`/dashboard/projects/${projectId}/editor?file=${event.documentId}`}
@@ -155,31 +198,43 @@ export function ProjectActivity({ projectId }: { projectId: Id<"projects"> }) {
                       {event.targetName}
                     </Link>
                   ) : (
-                    <span className="font-medium text-foreground">{event.targetName}</span>
+                    <span className="font-medium text-foreground">
+                      {event.targetName}
+                      {targetEmail}
+                    </span>
                   );
+                  const actorEmail =
+                    event.actorEmail && event.actorEmail !== event.actorName ? (
+                      <span className="text-muted-foreground"> ({event.actorEmail})</span>
+                    ) : null;
                   return (
-                    <li key={event.id} className="flex gap-3 py-3">
-                      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] text-muted-foreground">
+                    <li key={event.id} className="flex items-center gap-3">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] text-muted-foreground">
                         <Icon className="size-4" />
                       </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm">
-                          <span className="font-medium">{event.actorName}</span>{" "}
-                          {description(event)} {target}
-                        </p>
-                        {detailText(event) ? (
-                          <p className="mt-1 truncate text-muted-foreground text-xs">
-                            {detailText(event)}
-                          </p>
-                        ) : null}
-                      </div>
-                      <time
-                        dateTime={new Date(event.createdAt).toISOString()}
-                        title={formatDateTime(event.createdAt)}
-                        className="shrink-0 text-[10px] text-muted-foreground"
+                      <div
+                        className={`flex min-w-0 flex-1 items-start justify-between gap-3 py-3 ${
+                          index > 0 ? "border-hairline border-t" : ""
+                        }`}
                       >
-                        {formatRelativeTime(event.createdAt)}
-                      </time>
+                        <div className="min-w-0">
+                          <p className="text-sm">
+                            <span className="font-medium">{event.actorName}</span>
+                            {actorEmail} {lead} {target}
+                            {trail ? ` ${trail}` : null}
+                          </p>
+                          {detail ? (
+                            <p className="mt-1 truncate text-muted-foreground text-xs">{detail}</p>
+                          ) : null}
+                        </div>
+                        <time
+                          dateTime={new Date(event.createdAt).toISOString()}
+                          title={formatDateTime(event.createdAt)}
+                          className="mt-0.5 shrink-0 text-[10px] text-muted-foreground"
+                        >
+                          {formatRelativeTime(event.createdAt)}
+                        </time>
+                      </div>
                     </li>
                   );
                 })}

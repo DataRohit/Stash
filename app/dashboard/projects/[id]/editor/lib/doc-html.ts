@@ -126,6 +126,24 @@ function iframeCspHtml(): string {
   ].join("; ");
 }
 
+function stripActiveContent(doc: Document): void {
+  for (const element of doc.querySelectorAll(
+    "script, iframe, object, embed, form, input, button, textarea, select, base, link, meta[http-equiv]",
+  )) {
+    element.remove();
+  }
+  for (const element of doc.querySelectorAll("*")) {
+    for (const attribute of Array.from(element.attributes)) {
+      if (
+        attribute.name.toLowerCase().startsWith("on") ||
+        ["srcdoc", "action", "formaction"].includes(attribute.name.toLowerCase())
+      ) {
+        element.removeAttribute(attribute.name);
+      }
+    }
+  }
+}
+
 function previewScript(): string {
   return `
 document.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((heading, index) => {
@@ -153,6 +171,12 @@ document.addEventListener("click", (event) => {
   if (link) {
     event.preventDefault();
     parent.postMessage({ type: "stash-open-doc", id: link.getAttribute("data-doc-id") }, "*");
+    return;
+  }
+  const sharedLink = event.target.closest("a[data-shared-doc-id]");
+  if (sharedLink) {
+    event.preventDefault();
+    parent.postMessage({ type: "stash-open-shared-doc", id: sharedLink.getAttribute("data-shared-doc-id") }, "*");
   }
 });
 `;
@@ -226,8 +250,12 @@ function rewriteRefs(
   nodes: TreeNode[],
   fileLinkById: Record<string, string>,
   markMissing: boolean,
+  allowActiveContent: boolean,
 ): string {
   const doc = new DOMParser().parseFromString(rawHtml, "text/html");
+  if (!allowActiveContent) {
+    stripActiveContent(doc);
+  }
   for (const img of doc.querySelectorAll("img[src], source[src]")) {
     const src = img.getAttribute("src") ?? "";
     const target = resolveRef(fromNode, src, nodes);
@@ -245,8 +273,14 @@ function rewriteRefs(
     if (target?.kind === "file") {
       const fileLink = fileLinkById[target.id];
       if (fileLink) {
-        anchor.setAttribute("href", fileLink);
-        anchor.setAttribute("target", "_top");
+        if (allowActiveContent) {
+          anchor.setAttribute("href", fileLink);
+          anchor.setAttribute("target", "_top");
+        } else {
+          anchor.setAttribute("href", "#");
+          anchor.removeAttribute("target");
+          anchor.setAttribute("data-shared-doc-id", target.id);
+        }
       } else {
         anchor.setAttribute("href", "#");
         anchor.setAttribute("data-doc-id", target.id);
@@ -280,6 +314,7 @@ export function renderInner(
   content: string,
   nodes: TreeNode[],
   fileLinkById: Record<string, string>,
+  allowActiveContent = true,
 ): RenderedInner {
   const isMd = fileNode.fileType === "md";
   const blocks: MermaidBlock[] = [];
@@ -290,7 +325,11 @@ export function renderInner(
         return `<div class="mermaid-diagram" data-mmd="${id}"><pre class="mermaid">${escapeHtml(source)}</pre></div>`;
       }).parse(content) as string)
     : content;
-  return { inner: rewriteRefs(parsed, fileNode, nodes, fileLinkById, isMd), isMd, blocks };
+  return {
+    inner: rewriteRefs(parsed, fileNode, nodes, fileLinkById, isMd, allowActiveContent),
+    isMd,
+    blocks,
+  };
 }
 
 let mermaidModule: typeof import("mermaid")["default"] | null = null;
@@ -347,12 +386,14 @@ export function injectMermaid(inner: string, svgs: Map<string, string>): string 
   return dom.body.innerHTML;
 }
 
-export function previewSrcDoc(inner: string, isMd: boolean): string {
+export function previewSrcDoc(inner: string, isMd: boolean, allowActiveContent = true): string {
   const meta = `<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`;
   const script = previewScript();
-  if (isMd) {
+  if (isMd || !allowActiveContent) {
     const nonce = previewNonce();
-    return `<!doctype html><html><head>${meta}<meta http-equiv="Content-Security-Policy" content="${iframeCspMd(nonce)}"><style>${PREVIEW_MD_CSS}</style></head><body><div class="doc">${inner}</div><script nonce="${nonce}">${script}</script></body></html>`;
+    const css = isMd ? PREVIEW_MD_CSS : PREVIEW_HTML_CSS;
+    const body = isMd ? `<div class="doc">${inner}</div>` : inner;
+    return `<!doctype html><html><head>${meta}<meta http-equiv="Content-Security-Policy" content="${iframeCspMd(nonce)}"><style>${css}</style></head><body>${body}<script nonce="${nonce}">${script}</script></body></html>`;
   }
   return `<!doctype html><html><head>${meta}<meta http-equiv="Content-Security-Policy" content="${iframeCspHtml()}"><style>${PREVIEW_HTML_CSS}</style></head><body>${inner}<script>${script}</script></body></html>`;
 }

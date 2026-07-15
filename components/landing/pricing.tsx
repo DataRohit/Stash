@@ -17,11 +17,11 @@ export async function Pricing() {
         <SectionHeader
           kicker="Pricing"
           title="Free to self-host. Simple plans when you don't."
-          description="Self-host Stash for free with no limits at all. Or use the hosted platform — these plans are indicative while the project is in early development."
+          description="Self-host Stash for free with deployment-controlled policies. Or use the hosted platform — these plans are indicative while the project is in early development."
         />
       </Reveal>
 
-      <Panel label="Deployment option" meta="Free forever" className="glass-strong mt-12">
+      <Panel label="Deployment option" meta="Deployment controlled" className="glass-strong mt-12">
         <div className="grid gap-5 p-6 sm:grid-cols-[1fr_auto] sm:items-center">
           <div className="flex items-start gap-3">
             <span className="live-dot mt-1.5 size-1.5 shrink-0" aria-hidden="true" />
@@ -30,8 +30,8 @@ export async function Pricing() {
                 Self-hosted Stash
               </h3>
               <p className="max-w-xl text-muted-foreground text-sm leading-relaxed">
-                Run Stash on your own infrastructure with unlimited organizations, projects,
-                collaborators, and version history. No quotas, no limits.
+                Run Stash on your own infrastructure and configure organization, project,
+                collaborator, storage, and history policies for your deployment.
               </p>
             </div>
           </div>

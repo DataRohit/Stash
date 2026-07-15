@@ -4,6 +4,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { accessForProject, isInactiveTree, requireProjectEditor } from "./documents";
+import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const MAX_ANCHOR_BYTES = 4096;
 const MAX_BODY_LENGTH = 2000;
@@ -13,6 +14,10 @@ const UNREAD_SCAN_LIMIT = 60;
 const UNREAD_DISPLAY_CAP = 10;
 const NOTIFICATION_RETENTION_MS = 60 * 24 * 60 * 60 * 1000;
 const PRUNE_BATCH = 200;
+const MAX_THREADS_PER_DOCUMENT = 200;
+const MAX_MESSAGES_PER_THREAD = 200;
+const MARK_READ_BATCH = 200;
+const COMMENT_WRITE_LIMIT = { capacity: 20, refillPerSecond: 1 };
 
 type Actor = {
   userId: string;
@@ -230,14 +235,16 @@ export const listForDocument = query({
     }
     const threads = await ctx.db
       .query("comments")
-      .withIndex("by_document", (q) => q.eq("documentId", args.documentId))
-      .collect();
+      .withIndex("by_document_updated", (q) => q.eq("documentId", args.documentId))
+      .order("desc")
+      .take(MAX_THREADS_PER_DOCUMENT);
     const rows = await Promise.all(
       threads.map(async (thread) => {
         const messages = await ctx.db
           .query("commentMessages")
           .withIndex("by_comment", (q) => q.eq("commentId", thread._id))
-          .collect();
+          .order("desc")
+          .take(MAX_MESSAGES_PER_THREAD);
         return {
           id: thread._id,
           documentId: thread.documentId,
@@ -318,6 +325,11 @@ export const createThread = mutation({
     assertAnchor(args.startRel);
     assertAnchor(args.endRel);
     const { doc, access } = await fileForAccess(ctx, args.documentId);
+    if (
+      !(await enforceWriteRateLimit(ctx, "comments", doc._id, access.userId, COMMENT_WRITE_LIMIT))
+    ) {
+      throw new Error("rate-limited");
+    }
     const actor = await actorFor(ctx, access.userId);
     const body = trimBody(args.body);
     const quote = trimQuote(args.quote);
@@ -385,13 +397,25 @@ export const reply = mutation({
       throw new Error("not-found");
     }
     const access = await requireProjectEditor(ctx, thread.projectId);
+    if (
+      !(await enforceWriteRateLimit(
+        ctx,
+        "comments",
+        thread.documentId,
+        access.userId,
+        COMMENT_WRITE_LIMIT,
+      ))
+    ) {
+      throw new Error("rate-limited");
+    }
     const actor = await actorFor(ctx, access.userId);
     const body = trimBody(args.body);
     const mentionUserIds = await validatedMentionIds(ctx, access.project, args.mentionUserIds);
     const priorMessages = await ctx.db
       .query("commentMessages")
       .withIndex("by_comment", (q) => q.eq("commentId", thread._id))
-      .collect();
+      .order("desc")
+      .take(MAX_MESSAGES_PER_THREAD);
     const now = Date.now();
     const messageId = await ctx.db.insert("commentMessages", {
       commentId: thread._id,
@@ -451,12 +475,24 @@ export const setResolved = mutation({
       throw new Error("not-found");
     }
     const access = await requireProjectEditor(ctx, thread.projectId);
+    if (
+      !(await enforceWriteRateLimit(
+        ctx,
+        "comments",
+        thread.documentId,
+        access.userId,
+        COMMENT_WRITE_LIMIT,
+      ))
+    ) {
+      throw new Error("rate-limited");
+    }
     const actor = await actorFor(ctx, access.userId);
     if ((thread.status === "resolved") === args.resolved) return;
     const messages = await ctx.db
       .query("commentMessages")
       .withIndex("by_comment", (q) => q.eq("commentId", thread._id))
-      .collect();
+      .order("desc")
+      .take(MAX_MESSAGES_PER_THREAD);
     await ctx.db.patch(thread._id, {
       status: args.resolved ? "resolved" : "open",
       resolvedByUserId: args.resolved ? actor.userId : null,
@@ -587,10 +623,38 @@ export const markAllRead = mutation({
           .eq("clerkOrgId", identity.org_id as string)
           .eq("readAt", null),
       )
-      .collect();
+      .take(MARK_READ_BATCH);
     const now = Date.now();
     for (const row of rows) {
       await ctx.db.patch(row._id, { readAt: now });
+    }
+    if (rows.length === MARK_READ_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.comments.markAllReadBatch, {
+        recipientUserId: identity.subject,
+        clerkOrgId: identity.org_id as string,
+      });
+    }
+  },
+});
+
+export const markAllReadBatch = internalMutation({
+  args: { recipientUserId: v.string(), clerkOrgId: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_org_read", (q) =>
+        q
+          .eq("recipientUserId", args.recipientUserId)
+          .eq("clerkOrgId", args.clerkOrgId)
+          .eq("readAt", null),
+      )
+      .take(MARK_READ_BATCH);
+    const now = Date.now();
+    for (const row of rows) {
+      await ctx.db.patch(row._id, { readAt: now });
+    }
+    if (rows.length === MARK_READ_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.comments.markAllReadBatch, args);
     }
   },
 });

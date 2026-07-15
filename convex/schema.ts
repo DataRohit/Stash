@@ -9,6 +9,7 @@ const schema = defineSchema({
     maxProjects: v.optional(v.number()),
     maxCollaborators: v.optional(v.number()),
     maxSizeBytes: v.optional(v.number()),
+    historyRetentionDays: v.optional(v.number()),
     publicSharingEnabled: v.optional(v.boolean()),
     reconciledAt: v.optional(v.number()),
     updatedAt: v.number(),
@@ -207,6 +208,7 @@ const schema = defineSchema({
     updatedAt: v.number(),
   })
     .index("by_document", ["documentId"])
+    .index("by_document_updated", ["documentId", "updatedAt"])
     .index("by_project", ["projectId"]),
 
   commentMessages: defineTable({

@@ -5,8 +5,10 @@ import { mutation, query } from "./_generated/server";
 import {
   clampInt,
   HARD_MAX_COLLABORATORS,
+  HARD_MAX_HISTORY_RETENTION_DAYS,
   HARD_MAX_PROJECT_BYTES,
   HARD_MAX_PROJECTS,
+  MIN_HISTORY_RETENTION_DAYS,
   MIN_PROJECT_BYTES,
 } from "./limits";
 import { secretMatches } from "./secrets";
@@ -123,12 +125,17 @@ export const remove = mutation({
 
 export const setPlanLimits = mutation({
   args: {
+    secret: v.string(),
     clerkOrgId: v.string(),
     maxProjects: v.number(),
     maxCollaborators: v.number(),
     maxSizeBytes: v.number(),
+    historyRetentionDays: v.number(),
   },
   handler: async (ctx, args) => {
+    if (!secretMatches(args.secret, process.env.CONVEX_PURGE_SECRET)) {
+      throw new Error("Forbidden");
+    }
     await requireOrgAdmin(ctx, args.clerkOrgId);
     const row = await ensureRow(ctx, args.clerkOrgId);
     if (!row) {
@@ -138,6 +145,11 @@ export const setPlanLimits = mutation({
       maxProjects: clampInt(args.maxProjects, 0, HARD_MAX_PROJECTS),
       maxCollaborators: clampInt(args.maxCollaborators, 0, HARD_MAX_COLLABORATORS),
       maxSizeBytes: clampInt(args.maxSizeBytes, MIN_PROJECT_BYTES, HARD_MAX_PROJECT_BYTES),
+      historyRetentionDays: clampInt(
+        args.historyRetentionDays,
+        MIN_HISTORY_RETENTION_DAYS,
+        HARD_MAX_HISTORY_RETENTION_DAYS,
+      ),
       updatedAt: Date.now(),
     });
   },

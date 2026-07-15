@@ -1365,6 +1365,17 @@ export const createAsset = mutation({
   },
   handler: async (ctx, args) => {
     const access = await requireProjectEditor(ctx, args.projectId);
+    const documentReference = await ctx.db
+      .query("documents")
+      .withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+      .first();
+    const projectReference = await ctx.db
+      .query("projects")
+      .withIndex("by_image_storage", (q) => q.eq("imageStorageId", args.storageId))
+      .first();
+    if (documentReference || projectReference) {
+      throw new Error("storage-in-use");
+    }
     const meta = await ctx.db.system.get(args.storageId);
     if (!meta) {
       throw new Error("invalid-asset");

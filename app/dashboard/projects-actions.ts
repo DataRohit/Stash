@@ -1,8 +1,8 @@
 "use server";
 
-import { auth } from "@clerk/nextjs/server";
-import { countOrgProjects, createProjectDoc, setOrgPlanLimits } from "@/lib/convex-server";
-import { getUserPlanLimits } from "@/lib/plan-limits";
+import { auth, clerkClient } from "@clerk/nextjs/server";
+import { createProjectDoc, setOrgPlanLimits } from "@/lib/convex-server";
+import { getUserPlanLimitsForSync } from "@/lib/plan-limits";
 import { logServerError } from "@/lib/server-log";
 
 export type CreateProjectResult = { id: string } | { error: string };
@@ -26,21 +26,23 @@ export async function createProject(input: {
   }
 
   try {
-    const [count, limits] = await Promise.all([countOrgProjects(orgId), getUserPlanLimits()]);
-    if (count >= limits.maxProjectsPerOrganization) {
-      return { error: "limit-reached" };
+    const client = await clerkClient();
+    const organization = await client.organizations.getOrganization({ organizationId: orgId });
+    const limits = organization.createdBy === userId ? await getUserPlanLimitsForSync() : null;
+    if (limits) {
+      await setOrgPlanLimits(orgId, {
+        maxProjects: limits.maxProjectsPerOrganization,
+        maxCollaborators: limits.maxCollaboratorsPerProject,
+        maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+        historyRetentionDays: limits.historyRetentionDays,
+      });
     }
-    await setOrgPlanLimits(orgId, {
-      maxProjects: limits.maxProjectsPerOrganization,
-      maxCollaborators: limits.maxCollaboratorsPerProject,
-      maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
-    });
     const id = await createProjectDoc(
       orgId,
       title,
       input.description,
       input.tags,
-      limits.maxProjectsPerOrganization,
+      limits?.maxProjectsPerOrganization ?? 5,
     );
     return { id };
   } catch (error) {

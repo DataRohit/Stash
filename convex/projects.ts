@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { isRasterAssetMimeType } from "../lib/asset-formats";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -25,6 +26,7 @@ const MAX_DESCRIPTION_LENGTH = 280;
 const PURGE_GRANT_BATCH = 200;
 const PURGE_DOC_BATCH = 20;
 const STUCK_CLONE_MS = 15 * 60 * 1000;
+const MAX_PROJECT_IMAGE_BYTES = 2 * 1024 * 1024;
 
 type Caller = { userId: string; isAdmin: boolean };
 type GrantLevel = "viewer" | "editor";
@@ -743,6 +745,33 @@ export const setImage = mutation({
       throw new Error("Not found");
     }
     await requireAdmin(ctx, project.clerkOrgId);
+    const documentReference = await ctx.db
+      .query("documents")
+      .withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+      .first();
+    const projectReference = await ctx.db
+      .query("projects")
+      .withIndex("by_image_storage", (q) => q.eq("imageStorageId", args.storageId))
+      .first();
+    if (documentReference || (projectReference && projectReference._id !== project._id)) {
+      throw new Error("storage-in-use");
+    }
+    const metadata = await ctx.db.system.get(args.storageId);
+    if (!metadata) {
+      throw new Error("invalid-image");
+    }
+    if (!isRasterAssetMimeType(metadata.contentType ?? "")) {
+      if (!projectReference) {
+        await ctx.storage.delete(args.storageId);
+      }
+      throw new Error("invalid-image");
+    }
+    if (metadata.size > MAX_PROJECT_IMAGE_BYTES) {
+      if (!projectReference) {
+        await ctx.storage.delete(args.storageId);
+      }
+      throw new Error("image-too-large");
+    }
     if (project.imageStorageId && project.imageStorageId !== args.storageId) {
       await ctx.storage.delete(project.imageStorageId);
     }
