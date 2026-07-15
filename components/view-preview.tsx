@@ -230,16 +230,24 @@ export function ViewPreview({ model, className }: { model: ViewPreviewModel; cla
                         const point = date.dateOnly ? utc : local;
                         return date.start <= point && date.end >= point;
                       });
+                      const inMonth = day.getMonth() === month;
                       return (
                         <div
                           key={day.toISOString()}
                           className={cn(
                             "min-h-24 border-hairline border-r border-b p-1.5",
-                            day.getMonth() !== month &&
-                              "bg-foreground/[0.02] text-muted-foreground",
+                            !inMonth && "bg-foreground/2 text-muted-foreground",
                           )}
                         >
-                          <span className="text-xs">{day.getDate()}</span>
+                          <span
+                            className={cn(
+                              "text-xs",
+                              inMonth && day.getDay() === 0 && "text-destructive",
+                              inMonth && day.getDay() === 6 && "text-warning",
+                            )}
+                          >
+                            {day.getDate()}
+                          </span>
                           <div className="mt-1 space-y-1">
                             {records.slice(0, 3).map(({ record }) => (
                               <span

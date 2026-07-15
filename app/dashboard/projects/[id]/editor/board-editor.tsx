@@ -571,8 +571,15 @@ function DatePicker({
                 </div>
               </div>
               <div className="grid grid-cols-7 gap-1 text-center text-[10px] text-muted-foreground">
-                {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day) => (
-                  <span key={day} className="py-1">
+                {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((day, index) => (
+                  <span
+                    key={day}
+                    className={cn(
+                      "py-1",
+                      index === 0 && "text-destructive",
+                      index === 6 && "text-warning",
+                    )}
+                  >
                     {day}
                   </span>
                 ))}
@@ -588,8 +595,15 @@ function DatePicker({
                     }}
                     className={cn(
                       "flex aspect-square cursor-pointer items-center justify-center rounded-sm text-xs hover:bg-foreground/[0.08]",
-                      day.getMonth() !== month.getMonth() && "text-muted-foreground/45",
-                      sameDay(selected, day) && "bg-accent text-accent-foreground hover:bg-accent",
+                      sameDay(selected, day)
+                        ? "bg-accent text-accent-foreground hover:bg-accent"
+                        : day.getMonth() !== month.getMonth()
+                          ? "text-muted-foreground/45"
+                          : day.getDay() === 0
+                            ? "text-destructive"
+                            : day.getDay() === 6
+                              ? "text-warning"
+                              : undefined,
                     )}
                   >
                     {day.getDate()}
