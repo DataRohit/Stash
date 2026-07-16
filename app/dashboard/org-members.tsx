@@ -101,26 +101,31 @@ function RoleSelect({
         />
       </button>
       {open ? (
-        <ul className="absolute top-full left-0 z-20 mt-1 w-full overflow-hidden rounded-sm border border-hairline bg-surface p-1 shadow-glass">
+        <div
+          role="listbox"
+          aria-label="Role"
+          className="absolute top-full left-0 z-20 mt-1 w-full space-y-1 overflow-hidden rounded-sm border border-hairline bg-surface p-1 shadow-glass"
+        >
           {ROLE_OPTIONS.map((option) => {
             const selected = option.value === value;
             return (
-              <li key={option.value}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChange(option.value);
-                    setOpen(false);
-                  }}
-                  className={`flex w-full cursor-pointer items-center justify-between rounded-xs px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-foreground/[0.06] ${selected ? "text-foreground" : "text-muted-foreground"}`}
-                >
-                  {option.label}
-                  {selected ? <Check className="size-3.5 shrink-0" aria-hidden="true" /> : null}
-                </button>
-              </li>
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected}
+                key={option.value}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full cursor-pointer items-center justify-between rounded-xs px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-foreground/[0.06] ${selected ? "text-foreground" : "text-muted-foreground"}`}
+              >
+                {option.label}
+                {selected ? <Check className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+              </button>
             );
           })}
-        </ul>
+        </div>
       ) : null}
     </div>
   );

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { auth } from "@clerk/nextjs/server";
 import { ConvexHttpClient } from "convex/browser";
+import { cache } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { logServerError } from "@/lib/server-log";
@@ -14,14 +15,108 @@ export type OrgDetails = {
 const EMPTY_DETAILS: OrgDetails = { description: "", tags: [], publicSharingEnabled: true };
 const SHARE_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const MAX_SHARE_RATE_ID_LENGTH = 128;
+const CONVEX_TOKEN_REFRESH_BUFFER_MS = 5_000;
+const CONVEX_TOKEN_FALLBACK_LIFETIME_MS = 30_000;
+const CONVEX_TOKEN_ERROR_GRACE_MS = 1_000;
+const MAX_CACHED_CONVEX_TOKENS = 256;
+
+type CachedConvexToken = {
+  token: string;
+  expiresAt: number;
+};
+
+const cachedConvexTokens = new Map<string, CachedConvexToken>();
+const pendingConvexTokens = new Map<string, Promise<string | null>>();
+
+function convexTokenExpiresAt(token: string, now: number): number {
+  const payload = token.split(".")[1];
+  if (!payload) {
+    return now + CONVEX_TOKEN_FALLBACK_LIFETIME_MS;
+  }
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      exp?: unknown;
+    };
+    if (typeof claims.exp === "number" && Number.isFinite(claims.exp)) {
+      return Math.max(now, claims.exp * 1_000);
+    }
+  } catch {
+    return now + CONVEX_TOKEN_FALLBACK_LIFETIME_MS;
+  }
+  return now + CONVEX_TOKEN_FALLBACK_LIFETIME_MS;
+}
+
+function storeConvexToken(cacheKey: string, token: string, now: number): void {
+  for (const [key, cached] of cachedConvexTokens) {
+    if (cached.expiresAt <= now) {
+      cachedConvexTokens.delete(key);
+    }
+  }
+  while (cachedConvexTokens.size >= MAX_CACHED_CONVEX_TOKENS) {
+    const oldestKey = cachedConvexTokens.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    cachedConvexTokens.delete(oldestKey);
+  }
+  cachedConvexTokens.set(cacheKey, {
+    token,
+    expiresAt: convexTokenExpiresAt(token, now),
+  });
+}
+
+async function getCachedConvexToken(
+  cacheKey: string,
+  loadToken: () => Promise<string | null>,
+): Promise<string | null> {
+  const now = Date.now();
+  const cached = cachedConvexTokens.get(cacheKey);
+  if (cached && cached.expiresAt > now + CONVEX_TOKEN_REFRESH_BUFFER_MS) {
+    return cached.token;
+  }
+  const pending = pendingConvexTokens.get(cacheKey);
+  if (pending) {
+    return await pending;
+  }
+  const request = loadToken()
+    .then((token) => {
+      if (!token) {
+        cachedConvexTokens.delete(cacheKey);
+        return null;
+      }
+      storeConvexToken(cacheKey, token, Date.now());
+      return token;
+    })
+    .catch((error: unknown) => {
+      const stale = cachedConvexTokens.get(cacheKey);
+      if (stale && stale.expiresAt > Date.now() + CONVEX_TOKEN_ERROR_GRACE_MS) {
+        return stale.token;
+      }
+      throw error;
+    })
+    .finally(() => {
+      pendingConvexTokens.delete(cacheKey);
+    });
+  pendingConvexTokens.set(cacheKey, request);
+  return await request;
+}
+
+const convexToken = cache(async (): Promise<string | null> => {
+  const { getToken, isAuthenticated, orgId, orgRole, sessionClaims, sessionId, userId } =
+    await auth();
+  if (!isAuthenticated || !sessionId || !userId) {
+    return null;
+  }
+  const cacheKey = JSON.stringify([sessionId, userId, orgId, orgRole, sessionClaims.iat]);
+  return await getCachedConvexToken(cacheKey, () => getToken({ template: "convex" }));
+});
 
 async function authedClient(): Promise<ConvexHttpClient | null> {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
   if (!url) {
     return null;
   }
-  const { getToken } = await auth();
-  const token = await getToken({ template: "convex" });
+  const token = await convexToken();
   const client = new ConvexHttpClient(url);
   if (token) {
     client.setAuth(token);
@@ -204,20 +299,13 @@ export async function fetchSharedDocument(token: string, ip: string) {
 }
 
 export async function fetchProject(projectId: string) {
-  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
-  if (!url) {
+  const client = await authedClient();
+  if (!client) {
     return null;
   }
-  const { getToken } = await auth();
-  const token = await getToken({ template: "convex" });
-  const client = new ConvexHttpClient(url);
-  if (token) {
-    client.setAuth(token);
-  }
-  const result = await client.query(api.projects.get, {
+  return await client.query(api.projects.get, {
     projectId: projectId as Id<"projects">,
   });
-  return result;
 }
 
 export async function setOrgPlanLimits(

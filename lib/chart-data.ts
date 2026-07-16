@@ -35,6 +35,15 @@ function parseNumber(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
+function dataRows(config: ChartConfig, source: ChartSource): ChartSource["rows"] {
+  const body = config.headerRow ? source.rows.slice(1) : source.rows;
+  const startIndex = config.startRowId ? body.findIndex((row) => row.id === config.startRowId) : -1;
+  const endIndex = config.endRowId ? body.findIndex((row) => row.id === config.endRowId) : -1;
+  const from = startIndex >= 0 ? startIndex : 0;
+  const to = endIndex >= 0 ? endIndex : body.length - 1;
+  return from <= to ? body.slice(from, to + 1) : body.slice(to, from + 1);
+}
+
 export function resolveChartData(config: ChartConfig, source: ChartSource | null): ChartData {
   const base = {
     type: config.type,
@@ -54,13 +63,14 @@ export function resolveChartData(config: ChartConfig, source: ChartSource | null
     definition: series,
     index: columnIndex.get(series.colId) as number,
   }));
+  const header = config.headerRow ? source.rows[0] : undefined;
+  const rows = dataRows(config, source);
   const categories: string[] = [];
   const values: Array<Array<number | null>> = seriesColumns.map(() => []);
-  for (const [rowNumber, row] of source.rows.entries()) {
+  for (const [rowNumber, row] of rows.entries()) {
     const parsed = seriesColumns.map(({ index }) => parseNumber(row.values[index] ?? ""));
-    const label =
-      labelIndex !== undefined ? (row.values[labelIndex] ?? "").trim() : `Row ${rowNumber + 1}`;
-    if (parsed.every((value) => value === null) && label.length === 0) continue;
+    if (parsed.every((value) => value === null)) continue;
+    const label = labelIndex !== undefined ? (row.values[labelIndex] ?? "").trim() : "";
     categories.push(label.length > 0 ? label : `Row ${rowNumber + 1}`);
     parsed.forEach((value, seriesIndex) => {
       values[seriesIndex]?.push(value);
@@ -68,7 +78,7 @@ export function resolveChartData(config: ChartConfig, source: ChartSource | null
   }
   const series: ChartResolvedSeries[] = seriesColumns.map(({ definition, index }, seriesIndex) => ({
     id: definition.id,
-    name: source.columns[index]?.name ?? "Series",
+    name: (header?.values[index] ?? "").trim() || source.columns[index]?.name || "Series",
     color: definition.color,
     values: values[seriesIndex] ?? [],
   }));

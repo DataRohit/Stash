@@ -34,8 +34,21 @@ export type ChartConfig = {
   title: string;
   sourceDocId: string | null;
   labelColId: string | null;
+  headerRow: boolean;
+  startRowId: string | null;
+  endRowId: string | null;
   series: ChartSeries[];
 };
+
+const CONFIG_KEYS = new Set([
+  "type",
+  "title",
+  "sourceDocId",
+  "labelColId",
+  "headerRow",
+  "startRowId",
+  "endRowId",
+]);
 
 export type ChartRoots = {
   config: Y.Map<unknown>;
@@ -95,15 +108,19 @@ export function inspectChart(ydoc: Y.Doc): ChartConfig {
   const title = roots.config.get("title");
   const sourceDocId = roots.config.get("sourceDocId");
   const labelColId = roots.config.get("labelColId");
+  const headerRow = roots.config.get("headerRow") ?? true;
+  const startRowId = roots.config.get("startRowId") ?? null;
+  const endRowId = roots.config.get("endRowId") ?? null;
   if (
     !CHART_TYPES.includes(type as ChartType) ||
     typeof title !== "string" ||
     title.length > MAX_CHART_TITLE_LENGTH ||
     !(sourceDocId === null || isId(sourceDocId)) ||
     !(labelColId === null || isId(labelColId)) ||
-    [...roots.config.keys()].some(
-      (key) => key !== "type" && key !== "title" && key !== "sourceDocId" && key !== "labelColId",
-    )
+    typeof headerRow !== "boolean" ||
+    !(startRowId === null || isId(startRowId)) ||
+    !(endRowId === null || isId(endRowId)) ||
+    [...roots.config.keys()].some((key) => !CONFIG_KEYS.has(key))
   ) {
     throw new ChartValidationError();
   }
@@ -128,6 +145,9 @@ export function inspectChart(ydoc: Y.Doc): ChartConfig {
     title,
     sourceDocId: sourceDocId as string | null,
     labelColId: labelColId as string | null,
+    headerRow,
+    startRowId: startRowId as string | null,
+    endRowId: endRowId as string | null,
     series,
   };
 }
@@ -140,6 +160,9 @@ export function seedChart(ydoc: Y.Doc): void {
     roots.config.set("title", "");
     roots.config.set("sourceDocId", null);
     roots.config.set("labelColId", null);
+    roots.config.set("headerRow", true);
+    roots.config.set("startRowId", null);
+    roots.config.set("endRowId", null);
   }, "seed");
 }
 
@@ -152,6 +175,9 @@ export function replaceChartState(current: Y.Doc, target: Y.Doc): void {
     currentRoots.config.set("title", targetConfig.title);
     currentRoots.config.set("sourceDocId", targetConfig.sourceDocId);
     currentRoots.config.set("labelColId", targetConfig.labelColId);
+    currentRoots.config.set("headerRow", targetConfig.headerRow);
+    currentRoots.config.set("startRowId", targetConfig.startRowId);
+    currentRoots.config.set("endRowId", targetConfig.endRowId);
     for (const key of [...currentRoots.series.keys()]) currentRoots.series.delete(key);
     currentRoots.seriesOrder.delete(0, currentRoots.seriesOrder.length);
     for (const series of targetConfig.series) {

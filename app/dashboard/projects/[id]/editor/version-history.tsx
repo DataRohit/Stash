@@ -158,52 +158,57 @@ function VersionSelect({
         />
       </button>
       {open ? (
-        <ul className="thin-scrollbar absolute top-full left-0 z-30 mt-1 max-h-72 w-full overflow-auto rounded-sm border border-hairline bg-surface p-1 shadow-glass">
+        <div
+          role="listbox"
+          aria-label={label}
+          className="thin-scrollbar absolute top-full left-0 z-30 mt-1 max-h-72 w-full space-y-1 overflow-auto rounded-sm border border-hairline bg-surface p-1 shadow-glass"
+        >
           {snapshots.map((snapshot) => {
             const selected = snapshot.id === value;
             return (
-              <li key={snapshot.id}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChange(snapshot.id);
-                    setOpen(false);
-                  }}
-                  className={cn(
-                    "flex w-full cursor-pointer items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-left transition-colors hover:bg-foreground/[0.06]",
-                    selected ? "bg-foreground/[0.06]" : "",
-                  )}
-                >
-                  <span className="flex min-w-0 flex-col">
-                    <span
-                      className={cn(
-                        "truncate text-xs",
-                        selected ? "text-foreground" : "text-muted-foreground",
-                      )}
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected}
+                key={snapshot.id}
+                onClick={() => {
+                  onChange(snapshot.id);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "flex w-full cursor-pointer items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-left transition-colors hover:bg-foreground/[0.06]",
+                  selected ? "bg-foreground/[0.06]" : "",
+                )}
+              >
+                <span className="flex min-w-0 flex-col">
+                  <span
+                    className={cn(
+                      "truncate text-xs",
+                      selected ? "text-foreground" : "text-muted-foreground",
+                    )}
+                  >
+                    v{snapshot.versionNumber}
+                    <span className="text-muted-foreground/70"> · </span>
+                    <time
+                      dateTime={new Date(snapshot.createdAt).toISOString()}
+                      title={formatDateTime(snapshot.createdAt)}
                     >
-                      v{snapshot.versionNumber}
-                      <span className="text-muted-foreground/70"> · </span>
-                      <time
-                        dateTime={new Date(snapshot.createdAt).toISOString()}
-                        title={formatDateTime(snapshot.createdAt)}
-                      >
-                        {formatRelativeTime(snapshot.createdAt)}
-                      </time>
-                      <span className="text-muted-foreground/70"> · </span>
-                      {snapshot.authorName}
-                    </span>
-                    <span className="truncate text-[11px] text-muted-foreground leading-snug">
-                      {historyEmail(snapshot.authorEmail)}
-                    </span>
+                      {formatRelativeTime(snapshot.createdAt)}
+                    </time>
+                    <span className="text-muted-foreground/70"> · </span>
+                    {snapshot.authorName}
                   </span>
-                  {selected ? (
-                    <Check className="size-3.5 shrink-0 text-foreground" aria-hidden="true" />
-                  ) : null}
-                </button>
-              </li>
+                  <span className="truncate text-[11px] text-muted-foreground leading-snug">
+                    {historyEmail(snapshot.authorEmail)}
+                  </span>
+                </span>
+                {selected ? (
+                  <Check className="size-3.5 shrink-0 text-foreground" aria-hidden="true" />
+                ) : null}
+              </button>
             );
           })}
-        </ul>
+        </div>
       ) : null}
     </div>
   );

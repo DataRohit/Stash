@@ -16,6 +16,7 @@ import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { ChartView } from "@/components/chart-view";
+import { ColorPicker } from "@/components/ui/color-picker";
 import { DataLoader } from "@/components/ui/data-state";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -72,6 +73,7 @@ function Select({
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
+        title={selected?.label ?? label}
         onClick={() => setOpen((current) => !current)}
         className={cn(
           fieldClass,
@@ -87,7 +89,7 @@ function Select({
         <div
           role="listbox"
           aria-label={label}
-          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-56 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
+          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-56 space-y-1 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
         >
           {options.map((option) => (
             <button
@@ -95,6 +97,7 @@ function Select({
               role="option"
               aria-selected={option.value === value}
               key={option.value}
+              title={option.label}
               onClick={() => {
                 onChange(option.value);
                 setOpen(false);
@@ -187,6 +190,14 @@ export function ChartEditor({
       roots.seriesOrder.delete(0, roots.seriesOrder.length);
     });
   const setLabel = (colId: string) => edit(() => roots.config.set("labelColId", colId || null));
+  const setHeaderRow = (value: boolean) =>
+    edit(() => {
+      roots.config.set("headerRow", value);
+      roots.config.set("startRowId", null);
+      roots.config.set("endRowId", null);
+    });
+  const setRowBound = (key: "startRowId" | "endRowId", rowId: string) =>
+    edit(() => roots.config.set(key, rowId || null));
   const addSeries = () => {
     if (config.series.length >= MAX_CHART_SERIES) return;
     const usedColumns = new Set(config.series.map((series) => series.colId));
@@ -226,6 +237,19 @@ export function ChartEditor({
     label: column.name || "Column",
   }));
   const labelOptions: SelectOption[] = [{ value: "", label: "Row number" }, ...columnOptions];
+  const bodyRows = source ? (config.headerRow ? source.rows.slice(1) : source.rows) : [];
+  const labelColumnIndex = source?.columns.findIndex((column) => column.id === config.labelColId);
+  const rowOptions: SelectOption[] = bodyRows.map((row, index) => {
+    const offset = config.headerRow ? 2 : 1;
+    const text =
+      labelColumnIndex !== undefined && labelColumnIndex >= 0
+        ? (row.values[labelColumnIndex] ?? "").trim()
+        : "";
+    return {
+      value: row.id,
+      label: text ? `Row ${index + offset} — ${text}` : `Row ${index + offset}`,
+    };
+  });
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background lg:flex-row">
@@ -276,6 +300,30 @@ export function ChartEditor({
           />
         </div>
         <div>
+          <button
+            type="button"
+            disabled={!canEdit || !source}
+            aria-pressed={config.headerRow}
+            onClick={() => setHeaderRow(!config.headerRow)}
+            className="flex w-full cursor-pointer items-start gap-2.5 rounded-md border border-hairline p-2.5 text-left transition-colors hover:bg-foreground/[0.03] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <span
+              className={cn(
+                "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-xs border border-hairline",
+                config.headerRow && "border-accent bg-accent text-accent-foreground",
+              )}
+            >
+              {config.headerRow ? <Check className="size-3" /> : null}
+            </span>
+            <span className="min-w-0">
+              <span className="block font-medium text-xs">First row is a header</span>
+              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                Excludes row 1 from the chart and names each series after its header cell.
+              </span>
+            </span>
+          </button>
+        </div>
+        <div>
           <PanelLabel>{config.type === "pie" ? "Slice labels" : "Category axis"}</PanelLabel>
           <Select
             label="Category axis"
@@ -284,6 +332,38 @@ export function ChartEditor({
             disabled={!canEdit || !source}
             onChange={setLabel}
           />
+        </div>
+        <div>
+          <PanelLabel>Rows to plot</PanelLabel>
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="w-8 shrink-0 text-[11px] text-muted-foreground">From</span>
+              <div className="min-w-0 flex-1">
+                <Select
+                  label="First row to plot"
+                  value={config.startRowId ?? ""}
+                  options={[{ value: "", label: "First row" }, ...rowOptions]}
+                  disabled={!canEdit || !source}
+                  onChange={(rowId) => setRowBound("startRowId", rowId)}
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-8 shrink-0 text-[11px] text-muted-foreground">To</span>
+              <div className="min-w-0 flex-1">
+                <Select
+                  label="Last row to plot"
+                  value={config.endRowId ?? ""}
+                  options={[{ value: "", label: "Last row" }, ...rowOptions]}
+                  disabled={!canEdit || !source}
+                  onChange={(rowId) => setRowBound("endRowId", rowId)}
+                />
+              </div>
+            </div>
+          </div>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Narrow the range to leave out totals or notes below your data.
+          </p>
         </div>
         <div>
           <div className="mb-1.5 flex items-center justify-between">
@@ -304,37 +384,40 @@ export function ChartEditor({
           ) : (
             <div className="space-y-2">
               {config.series.map((series, index) => (
-                <div key={series.id} className="flex items-center gap-2">
-                  <input
-                    type="color"
+                <div
+                  key={series.id}
+                  className="space-y-2 rounded-md border border-hairline bg-surface/40 p-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <Select
+                        label={`Series ${index + 1} column`}
+                        value={series.colId}
+                        options={
+                          columnOptions.some((option) => option.value === series.colId)
+                            ? columnOptions
+                            : [...columnOptions, { value: series.colId, label: "Removed column" }]
+                        }
+                        disabled={!canEdit || !source}
+                        onChange={(colId) => setSeriesColumn(series.id, colId)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!canEdit}
+                      onClick={() => removeSeries(series.id)}
+                      aria-label={`Remove series ${index + 1}`}
+                      className="flex size-9 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                  <ColorPicker
+                    label={`Series ${index + 1} color`}
                     value={series.color}
                     disabled={!canEdit}
-                    aria-label={`Series ${index + 1} color`}
-                    onChange={(event) => setSeriesColor(series.id, event.currentTarget.value)}
-                    className="size-8 shrink-0 cursor-pointer rounded-sm border border-hairline bg-transparent p-0.5 disabled:cursor-not-allowed"
+                    onChange={(color) => setSeriesColor(series.id, color)}
                   />
-                  <div className="min-w-0 flex-1">
-                    <Select
-                      label={`Series ${index + 1} column`}
-                      value={series.colId}
-                      options={
-                        columnOptions.some((option) => option.value === series.colId)
-                          ? columnOptions
-                          : [...columnOptions, { value: series.colId, label: "Removed column" }]
-                      }
-                      disabled={!canEdit || !source}
-                      onChange={(colId) => setSeriesColumn(series.id, colId)}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!canEdit}
-                    onClick={() => removeSeries(series.id)}
-                    aria-label={`Remove series ${index + 1}`}
-                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed"
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
                 </div>
               ))}
             </div>

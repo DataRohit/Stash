@@ -137,7 +137,7 @@ function MenuSelect({
         <div
           role="listbox"
           aria-label={label}
-          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-56 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
+          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-56 space-y-1 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
         >
           {options.map((option) => (
             <button

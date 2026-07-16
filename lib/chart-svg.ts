@@ -60,11 +60,28 @@ export type ChartSceneNode =
       weight?: number;
     };
 
+type MarkMeta = { category: string; series: string; value: number; color: string };
+
+export type ChartMark =
+  | ({ kind: "rect"; x: number; y: number; w: number; h: number } & MarkMeta)
+  | ({ kind: "point"; x: number; y: number } & MarkMeta)
+  | ({
+      kind: "slice";
+      cx: number;
+      cy: number;
+      r0: number;
+      r1: number;
+      a0: number;
+      a1: number;
+      percent: number;
+    } & MarkMeta);
+
 export type ChartScene = {
   width: number;
   height: number;
   label: string;
   nodes: ChartSceneNode[];
+  marks: ChartMark[];
 };
 
 function round(value: number): number {
@@ -160,11 +177,32 @@ function legendNodes(entries: Array<{ name: string; color: string }>, y: number)
   return nodes;
 }
 
+export function slicePath(slice: {
+  cx: number;
+  cy: number;
+  r0: number;
+  r1: number;
+  a0: number;
+  a1: number;
+}): string {
+  const { cx, cy, r0, r1, a0, a1 } = slice;
+  const large = a1 - a0 > Math.PI ? 1 : 0;
+  const x0 = cx + r1 * Math.cos(a0);
+  const y0 = cy + r1 * Math.sin(a0);
+  const x1 = cx + r1 * Math.cos(a1);
+  const y1 = cy + r1 * Math.sin(a1);
+  const xi0 = cx + r0 * Math.cos(a1);
+  const yi0 = cy + r0 * Math.sin(a1);
+  const xi1 = cx + r0 * Math.cos(a0);
+  const yi1 = cy + r0 * Math.sin(a0);
+  return `M${round(x0)} ${round(y0)} A${r1} ${r1} 0 ${large} 1 ${round(x1)} ${round(y1)} L${round(xi0)} ${round(yi0)} A${r0} ${r0} 0 ${large} 0 ${round(xi1)} ${round(yi1)} Z`;
+}
+
 function emptyScene(title: string, message: string): ChartScene {
   const nodes: ChartSceneNode[] = [];
   if (title) nodes.push(textNode(CHART_WIDTH / 2, 40, title, { size: 17, weight: 600 }));
   nodes.push(textNode(CHART_WIDTH / 2, CHART_HEIGHT / 2, message, { size: 14, opacity: 0.6 }));
-  return { width: CHART_WIDTH, height: CHART_HEIGHT, label: title || "Chart", nodes };
+  return { width: CHART_WIDTH, height: CHART_HEIGHT, label: title || "Chart", nodes, marks: [] };
 }
 
 type Plot = { left: number; right: number; top: number; bottom: number };
@@ -209,30 +247,37 @@ function barNodes(
   data: ChartData,
   plot: Plot,
   scaleY: (value: number) => number,
-): ChartSceneNode[] {
+): { nodes: ChartSceneNode[]; marks: ChartMark[] } {
   const nodes: ChartSceneNode[] = [];
+  const marks: ChartMark[] = [];
   const step = (plot.right - plot.left) / data.categories.length;
   const groupWidth = step * 0.7;
   const barWidth = groupWidth / data.series.length;
   const zero = scaleY(0);
-  data.categories.forEach((_, categoryIndex) => {
+  data.categories.forEach((category, categoryIndex) => {
     const groupStart = plot.left + step * categoryIndex + (step - groupWidth) / 2;
     data.series.forEach((series, seriesIndex) => {
       const value = series.values[categoryIndex];
       if (value === null || value === undefined) return;
       const y = scaleY(value);
-      nodes.push({
-        t: "rect",
+      const rect = {
         x: round(groupStart + barWidth * seriesIndex),
         y: round(Math.min(y, zero)),
         w: round(Math.max(1, barWidth - 1.5)),
         h: round(Math.max(1, Math.abs(y - zero))),
-        rx: 2,
-        fill: series.color,
+      };
+      nodes.push({ t: "rect", ...rect, rx: 2, fill: series.color });
+      marks.push({
+        kind: "rect",
+        ...rect,
+        category,
+        series: series.name,
+        value,
+        color: series.color,
       });
     });
   });
-  return nodes;
+  return { nodes, marks };
 }
 
 function lineNodes(
@@ -240,8 +285,9 @@ function lineNodes(
   plot: Plot,
   scaleY: (value: number) => number,
   area: boolean,
-): ChartSceneNode[] {
+): { nodes: ChartSceneNode[]; marks: ChartMark[] } {
   const nodes: ChartSceneNode[] = [];
+  const marks: ChartMark[] = [];
   const step = (plot.right - plot.left) / data.categories.length;
   const zero = scaleY(0);
   for (const series of data.series) {
@@ -282,18 +328,29 @@ function lineNodes(
       strokeWidth: 2.5,
       round: true,
     });
-    for (const point of points) {
-      if (point)
-        nodes.push({
-          t: "circle",
-          cx: round(point.x),
-          cy: round(point.y),
-          r: 3,
-          fill: series.color,
-        });
-    }
+    points.forEach((point, index) => {
+      if (!point) return;
+      nodes.push({
+        t: "circle",
+        cx: round(point.x),
+        cy: round(point.y),
+        r: 3,
+        fill: series.color,
+      });
+      const value = series.values[index];
+      if (value === null || value === undefined) return;
+      marks.push({
+        kind: "point",
+        x: round(point.x),
+        y: round(point.y),
+        category: data.categories[index] ?? "",
+        series: series.name,
+        value,
+        color: series.color,
+      });
+    });
   }
-  return nodes;
+  return { nodes, marks };
 }
 
 function pieScene(data: ChartData): ChartScene {
@@ -316,23 +373,29 @@ function pieScene(data: ChartData): ChartScene {
   const radius = 150;
   const inner = 78;
   const nodes: ChartSceneNode[] = [];
+  const marks: ChartMark[] = [];
   if (data.title) nodes.push(textNode(CHART_WIDTH / 2, 34, data.title, { size: 17, weight: 600 }));
   let angle = -Math.PI / 2;
   for (const slice of slices) {
     const sweep = (slice.value / total) * Math.PI * 2;
     const end = angle + sweep;
-    const large = sweep > Math.PI ? 1 : 0;
-    const x0 = cx + radius * Math.cos(angle);
-    const y0 = cy + radius * Math.sin(angle);
-    const x1 = cx + radius * Math.cos(end);
-    const y1 = cy + radius * Math.sin(end);
-    const xi0 = cx + inner * Math.cos(end);
-    const yi0 = cy + inner * Math.sin(end);
-    const xi1 = cx + inner * Math.cos(angle);
-    const yi1 = cy + inner * Math.sin(angle);
+    marks.push({
+      kind: "slice",
+      cx,
+      cy,
+      r0: inner,
+      r1: radius,
+      a0: angle,
+      a1: end,
+      percent: (slice.value / total) * 100,
+      category: slice.label,
+      series: series.name,
+      value: slice.value,
+      color: slice.color,
+    });
     nodes.push({
       t: "path",
-      d: `M${round(x0)} ${round(y0)} A${radius} ${radius} 0 ${large} 1 ${round(x1)} ${round(y1)} L${round(xi0)} ${round(yi0)} A${inner} ${inner} 0 ${large} 0 ${round(xi1)} ${round(yi1)} Z`,
+      d: slicePath({ cx, cy, r0: inner, r1: radius, a0: angle, a1: end }),
       fill: slice.color,
     });
     if (sweep > 0.25) {
@@ -355,7 +418,13 @@ function pieScene(data: ChartData): ChartScene {
       CHART_HEIGHT - 20,
     ),
   );
-  return { width: CHART_WIDTH, height: CHART_HEIGHT, label: data.title || "Pie chart", nodes };
+  return {
+    width: CHART_WIDTH,
+    height: CHART_HEIGHT,
+    label: data.title || "Pie chart",
+    nodes,
+    marks,
+  };
 }
 
 export function buildChartScene(data: ChartData): ChartScene {
@@ -392,11 +461,11 @@ export function buildChartScene(data: ChartData): ChartScene {
   const nodes: ChartSceneNode[] = [];
   if (data.title) nodes.push(textNode(CHART_WIDTH / 2, 32, data.title, { size: 17, weight: 600 }));
   nodes.push(...axisNodes(data, plot, scaleY, ticks));
-  nodes.push(
-    ...(data.type === "bar"
+  const body =
+    data.type === "bar"
       ? barNodes(data, plot, scaleY)
-      : lineNodes(data, plot, scaleY, data.type === "area")),
-  );
+      : lineNodes(data, plot, scaleY, data.type === "area");
+  nodes.push(...body.nodes);
   nodes.push(
     ...legendNodes(
       data.series.map((series) => ({ name: series.name, color: series.color })),
@@ -408,6 +477,7 @@ export function buildChartScene(data: ChartData): ChartScene {
     height: CHART_HEIGHT,
     label: data.title || `${data.type} chart`,
     nodes,
+    marks: body.marks,
   };
 }
 
