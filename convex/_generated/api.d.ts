@@ -9,6 +9,7 @@
  */
 
 import type * as activity from "../activity.js";
+import type * as charts from "../charts.js";
 import type * as collab from "../collab.js";
 import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
@@ -35,6 +36,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   activity: typeof activity;
+  charts: typeof charts;
   collab: typeof collab;
   comments: typeof comments;
   crons: typeof crons;

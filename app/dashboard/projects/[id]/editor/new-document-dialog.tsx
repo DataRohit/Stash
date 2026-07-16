@@ -2,6 +2,7 @@
 
 import { useQuery } from "convex/react";
 import {
+  BarChart3,
   Columns3,
   FileCode,
   FileText,
@@ -54,6 +55,12 @@ const FILE_TYPES = [
     description: "Table, board, and calendar over project records.",
     extension: ".view",
   },
+  {
+    id: "chart",
+    name: "Chart",
+    description: "Line, bar, area, and pie charts over a spreadsheet.",
+    extension: ".chart",
+  },
 ] as const;
 
 function explicitFileType(name: string): FileType | null {
@@ -63,6 +70,7 @@ function explicitFileType(name: string): FileType | null {
   if (lower.endsWith(".sheet")) return "sheet";
   if (lower.endsWith(".board")) return "board";
   if (lower.endsWith(".view")) return "view";
+  if (lower.endsWith(".chart")) return "chart";
   return null;
 }
 
@@ -82,7 +90,7 @@ function fileNameWithExtension(name: string, fileType: FileType) {
   const sanitized = name.replaceAll("/", "").replaceAll("\\", "").trim();
   if (!sanitized) return "";
   if (hasUnsupportedExtension(sanitized)) return sanitized;
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|view)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|view|chart)$/i, "");
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -124,7 +132,7 @@ export function NewDocumentDialog({
   const create = async () => {
     if (!name.trim()) return;
     if (hasUnsupportedExtension(name)) {
-      setError("Only .md, .html, .sheet, .board, and .view file extensions are supported.");
+      setError("Only .md, .html, .sheet, .board, .view, and .chart file extensions are supported.");
       return;
     }
     if (hasMissingBaseName(name)) {
@@ -156,7 +164,9 @@ export function NewDocumentDialog({
           ? Columns3
           : fileType === "view"
             ? LayoutList
-            : FileText;
+            : fileType === "chart"
+              ? BarChart3
+              : FileText;
   const finalName = fileNameWithExtension(name, fileType);
   const invalidExtension = hasUnsupportedExtension(name);
   const missingBaseName = hasMissingBaseName(name);
@@ -217,7 +227,7 @@ export function NewDocumentDialog({
           />
           {invalidExtension ? (
             <p className="mt-1.5 text-destructive text-xs">
-              Only .md, .html, .sheet, .board, and .view file extensions are supported.
+              Only .md, .html, .sheet, .board, .view, and .chart file extensions are supported.
             </p>
           ) : missingBaseName ? (
             <p className="mt-1.5 text-destructive text-xs">

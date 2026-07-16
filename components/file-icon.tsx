@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Columns3,
   FileCode,
   FileText,
@@ -35,6 +36,9 @@ export function FileIcon({ kind, fileType, className }: FileIconProps) {
   }
   if (fileType === "view") {
     return <LayoutList className={cn(base, "text-info")} aria-hidden="true" />;
+  }
+  if (fileType === "chart") {
+    return <BarChart3 className={cn(base, "text-warning")} aria-hidden="true" />;
   }
   return <FileText className={cn(base, "text-accent")} aria-hidden="true" />;
 }

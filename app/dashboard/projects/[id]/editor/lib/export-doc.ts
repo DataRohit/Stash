@@ -7,6 +7,8 @@ import {
 } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { buildZip, type ZipEntry } from "@/app/dashboard/projects/[id]/editor/lib/zip";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import type { ChartData } from "@/lib/chart-data";
+import { renderChartSvg } from "@/lib/chart-svg";
 import { boardRenderModel, sheetRenderModel } from "@/lib/doc-projection";
 import type { FileType } from "@/lib/document-types";
 import { serializeDelimited } from "@/lib/sheet-csv";
@@ -26,7 +28,7 @@ export type BundleNode = {
 const EMPTY_LINKS: Record<string, string> = {};
 
 function stem(name: string): string {
-  return name.replace(/\.(md|html|sheet|board|view)$/i, "");
+  return name.replace(/\.(md|html|sheet|board|view|chart)$/i, "");
 }
 
 export type ViewExportRecord = {
@@ -287,6 +289,22 @@ export async function exportViewPdf(fileNode: TreeNode, model: ViewExportModel):
   await printHtml(viewHtml(fileNode, model));
 }
 
+function chartHtml(fileNode: TreeNode, model: ChartData): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escaped(stem(fileNode.name))}</title><style>body{margin:0;color:#111;background:#fff;font:14px system-ui}main{max-width:900px;margin:24px auto;padding:0 24px}svg{width:100%;height:auto}@media print{main{margin:0}}</style></head><body><main>${renderChartSvg(model)}</main></body></html>`;
+}
+
+export function exportChartSvg(fileNode: TreeNode, model: ChartData): void {
+  download(`${stem(fileNode.name)}.svg`, renderChartSvg(model), "image/svg+xml;charset=utf-8");
+}
+
+export function exportChartHtml(fileNode: TreeNode, model: ChartData): void {
+  download(`${stem(fileNode.name)}.html`, chartHtml(fileNode, model), "text/html;charset=utf-8");
+}
+
+export async function exportChartPdf(fileNode: TreeNode, model: ChartData): Promise<void> {
+  await printHtml(chartHtml(fileNode, model));
+}
+
 export async function exportHtml(
   fileNode: TreeNode,
   content: string,
@@ -397,7 +415,9 @@ export async function exportProjectZip(projectTitle: string, nodes: BundleNode[]
               ? path.replace(/\.board$/i, ".md")
               : node.fileType === "view"
                 ? path.replace(/\.view$/i, ".json")
-                : path,
+                : node.fileType === "chart"
+                  ? path.replace(/\.chart$/i, ".svg")
+                  : path,
         data: encoder.encode(node.content),
       });
     } else if (node.kind === "asset" && node.assetUrl) {

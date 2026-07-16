@@ -2,7 +2,17 @@ import { v } from "convex/values";
 import * as Y from "yjs";
 import { isRasterAssetMimeType } from "../lib/asset-formats";
 import { inspectBoard, MAX_BOARD_STORED_BYTES, seedBoard } from "../lib/board-model";
-import { boardRenderModel, documentSize, project, sheetRenderModel } from "../lib/doc-projection";
+import { type ChartSource, resolveChartData } from "../lib/chart-data";
+import { MAX_CHART_STORED_BYTES, seedChart } from "../lib/chart-model";
+import { renderChartSvg } from "../lib/chart-svg";
+import {
+  boardRenderModel,
+  chartRenderModel,
+  chartSourceFromSheet,
+  documentSize,
+  project,
+  sheetRenderModel,
+} from "../lib/doc-projection";
 import type { FileType } from "../lib/document-types";
 import { TRASH_RETENTION_MS } from "../lib/lifecycle";
 import { serializeDelimited } from "../lib/sheet-csv";
@@ -132,6 +142,9 @@ function fileTypeFromName(name: string): FileType | null {
   if (lower.endsWith(".view")) {
     return "view";
   }
+  if (lower.endsWith(".chart")) {
+    return "chart";
+  }
   return null;
 }
 
@@ -153,7 +166,10 @@ function requestedFileType(raw: string, fallback: FileType): FileType {
 function nameForFileType(raw: string, fileType: FileType): string {
   const extension = `.${fileType}`;
   const sanitized = raw.replaceAll("/", "").replaceAll("\\", "").trim();
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|view|csv|tsv)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(
+    /\.(md|html|sheet|board|view|chart|csv|tsv)$/i,
+    "",
+  );
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -927,6 +943,21 @@ export const createFile = mutation({
       ) {
         throw new Error("project-full");
       }
+    } else if (fileType === "chart") {
+      const ydoc = new Y.Doc();
+      seedChart(ydoc);
+      content = project(fileType, ydoc);
+      size = documentSize(fileType, ydoc);
+      contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+      contentSeq = 1;
+      ydoc.destroy();
+      if (size > MAX_CHART_STORED_BYTES) throw new Error("file-too-large");
+      if (
+        (await cachedProjectBytes(ctx, access.project)) + size >
+        (await maxProjectBytes(ctx, access.project))
+      ) {
+        throw new Error("project-full");
+      }
     }
     const now = Date.now();
     const id = await ctx.db.insert("documents", {
@@ -982,6 +1013,7 @@ export const createFromTemplate = mutation({
       v.literal("sheet"),
       v.literal("board"),
       v.literal("view"),
+      v.literal("chart"),
     ),
     templateId: v.optional(v.string()),
   },
@@ -1016,6 +1048,8 @@ export const createFromTemplate = mutation({
       seedBoard(ydoc);
     } else if (fileType === "view") {
       seedView(ydoc);
+    } else if (fileType === "chart") {
+      seedChart(ydoc);
     } else if (content) {
       ydoc.getText("codemirror").insert(0, content);
     }
@@ -1029,7 +1063,8 @@ export const createFromTemplate = mutation({
       byteLength(content) > MAX_FILE_BYTES ||
       (fileType === "sheet" && size > MAX_SHEET_STORED_BYTES) ||
       (fileType === "board" && size > MAX_BOARD_STORED_BYTES) ||
-      (fileType === "view" && size > MAX_VIEW_STORED_BYTES)
+      (fileType === "view" && size > MAX_VIEW_STORED_BYTES) ||
+      (fileType === "chart" && size > MAX_CHART_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }
@@ -1396,6 +1431,11 @@ export const duplicate = mutation({
       seedView(seedDoc);
       state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
       seedDoc.destroy();
+    } else if (!state && doc.fileType === "chart") {
+      const seedDoc = new Y.Doc();
+      seedChart(seedDoc);
+      state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
+      seedDoc.destroy();
     } else if (!state && doc.content.length > 0) {
       const seedDoc = new Y.Doc();
       seedDoc.getText("codemirror").insert(0, doc.content);
@@ -1489,7 +1529,12 @@ export const setContent = mutation({
     if (doc?.kind !== "file" || isInactive(doc)) {
       throw new Error("not-found");
     }
-    if (doc.fileType === "sheet" || doc.fileType === "board" || doc.fileType === "view") {
+    if (
+      doc.fileType === "sheet" ||
+      doc.fileType === "board" ||
+      doc.fileType === "view" ||
+      doc.fileType === "chart"
+    ) {
       throw new Error("unsupported-filetype");
     }
     const access = await requireProjectEditor(ctx, doc.projectId);
@@ -1815,8 +1860,10 @@ export const exportBundle = query({
       .query("documents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
+    const visible = visibleDocuments(docs);
+    const visibleById = new Map(visible.map((doc) => [doc._id, doc]));
     const nodes = await Promise.all(
-      visibleDocuments(docs).map(async (doc) => {
+      visible.map(async (doc) => {
         let content = doc.kind === "file" ? doc.content : "";
         if (doc.kind === "file" && doc.fileType === "sheet" && doc.contentState) {
           const ydoc = new Y.Doc();
@@ -1848,6 +1895,23 @@ export const exportBundle = query({
           Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
           content = JSON.stringify(inspectView(ydoc), null, 2);
           ydoc.destroy();
+        } else if (doc.kind === "file" && doc.fileType === "chart" && doc.contentState) {
+          const ydoc = new Y.Doc();
+          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          const config = chartRenderModel(ydoc);
+          ydoc.destroy();
+          const sourceId = config.sourceDocId
+            ? ctx.db.normalizeId("documents", config.sourceDocId)
+            : null;
+          const sourceDoc = sourceId ? visibleById.get(sourceId) : undefined;
+          let source: ChartSource | null = null;
+          if (sourceDoc?.fileType === "sheet" && sourceDoc.contentState) {
+            const sheet = new Y.Doc();
+            Y.applyUpdate(sheet, new Uint8Array(sourceDoc.contentState));
+            source = chartSourceFromSheet(sheet, sourceDoc._id, sourceDoc.name);
+            sheet.destroy();
+          }
+          content = renderChartSvg(resolveChartData(config, source));
         }
         return {
           id: doc._id,

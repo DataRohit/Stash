@@ -2,6 +2,7 @@
 
 import { useConvex } from "convex/react";
 import {
+  BarChart3,
   Download,
   FileSpreadsheet,
   FileText,
@@ -18,6 +19,9 @@ import {
   exportBoardHtml,
   exportBoardMarkdown,
   exportBoardPdf,
+  exportChartHtml,
+  exportChartPdf,
+  exportChartSvg,
   exportHtml,
   exportMarkdown,
   exportPdf,
@@ -34,6 +38,8 @@ import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { type ChartData, resolveChartData } from "@/lib/chart-data";
+import { inspectChart } from "@/lib/chart-model";
 import { cn } from "@/lib/utils";
 import { inspectView, type ViewFilter } from "@/lib/view-model";
 
@@ -45,7 +51,7 @@ type ExportMenuProps = {
   ydoc?: Y.Doc;
 };
 
-type Action = "md" | "csv" | "html" | "pdf" | "zip";
+type Action = "md" | "csv" | "svg" | "html" | "pdf" | "zip";
 
 export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: ExportMenuProps) {
   const convex = useConvex();
@@ -115,6 +121,17 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
   const isSheet = fileNode.fileType === "sheet";
   const isBoard = fileNode.fileType === "board";
   const isView = fileNode.fileType === "view";
+  const isChart = fileNode.fileType === "chart";
+
+  const loadChartModel = async (): Promise<ChartData> => {
+    if (!ydoc) throw new Error("chart-not-ready");
+    const config = inspectChart(ydoc);
+    const result = await convex.query(api.charts.sourceData, {
+      projectId,
+      sourceDocId: config.sourceDocId,
+    });
+    return resolveChartData(config, result.source);
+  };
 
   const loadViewModel = async (): Promise<ViewExportModel> => {
     if (!ydoc) throw new Error("view-not-ready");
@@ -303,6 +320,18 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
               onClick={() => run("csv", async () => exportViewCsv(fileNode, await loadViewModel()))}
             />
           ) : null}
+          {isChart && ydoc ? (
+            <ExportItem
+              icon={<BarChart3 className="size-4 text-warning" aria-hidden="true" />}
+              label="Chart image"
+              hint=".svg"
+              loading={busy === "svg"}
+              disabled={Boolean(busy)}
+              onClick={() =>
+                run("svg", async () => exportChartSvg(fileNode, await loadChartModel()))
+              }
+            />
+          ) : null}
           <ExportItem
             icon={<Globe className="size-4 text-info" aria-hidden="true" />}
             label="Web page"
@@ -317,7 +346,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
                     ? exportBoardHtml(fileNode, ydoc)
                     : isView && ydoc
                       ? exportViewHtml(fileNode, await loadViewModel())
-                      : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
+                      : isChart && ydoc
+                        ? exportChartHtml(fileNode, await loadChartModel())
+                        : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />
@@ -335,7 +366,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
                     ? exportBoardPdf(fileNode, ydoc)
                     : isView && ydoc
                       ? exportViewPdf(fileNode, await loadViewModel())
-                      : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
+                      : isChart && ydoc
+                        ? exportChartPdf(fileNode, await loadChartModel())
+                        : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
               )
             }
           />

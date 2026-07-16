@@ -22,6 +22,7 @@ import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { historyEmail, mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { BoardView } from "@/components/board-view";
+import { ChartView } from "@/components/chart-view";
 import { SheetTable } from "@/components/sheet-table";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { notify } from "@/components/ui/toast";
@@ -227,7 +228,8 @@ export function VersionHistoryModal({
   const isSheet = fileNode.fileType === "sheet";
   const isBoard = fileNode.fileType === "board";
   const isView = fileNode.fileType === "view";
-  const isStructured = isSheet || isBoard || isView;
+  const isChart = fileNode.fileType === "chart";
+  const isStructured = isSheet || isBoard || isView || isChart;
   const snapshots = useQuery(api.collab.listHistory, { documentId: docId });
   const createCheckpoint = useMutation(api.collab.createHistoryCheckpoint);
   const restoreHistory = useMutation(api.collab.restoreHistory);
@@ -556,6 +558,8 @@ export function VersionHistoryModal({
                         model={{ config: preview.viewPreview, properties: [], records: [] }}
                         className="size-full"
                       />
+                    ) : isChart && preview.chartPreview ? (
+                      <ChartView model={preview.chartPreview} className="size-full" />
                     ) : fileMode === "preview" ? (
                       <DocPreview fileNode={fileNode} content={preview.content} nodes={nodes} />
                     ) : (
@@ -630,6 +634,17 @@ export function VersionHistoryModal({
                                 properties: [],
                                 records: [],
                               }}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                          </div>
+                        ) : isChart && basePreview.chartPreview && comparePreview.chartPreview ? (
+                          <div className="grid size-full min-h-0 grid-cols-1 gap-3 overflow-auto p-3 lg:grid-cols-2">
+                            <ChartView
+                              model={basePreview.chartPreview}
+                              className="min-h-0 rounded-md border border-hairline"
+                            />
+                            <ChartView
+                              model={comparePreview.chartPreview}
                               className="min-h-0 rounded-md border border-hairline"
                             />
                           </div>

@@ -8,8 +8,18 @@ import {
   seedBoard,
   UNFILED_COLUMN_ID,
 } from "../lib/board-model";
+import { resolveChartData } from "../lib/chart-data";
+import {
+  ChartValidationError,
+  inspectChart,
+  MAX_CHART_STORED_BYTES,
+  replaceChartState,
+  seedChart,
+} from "../lib/chart-model";
 import {
   boardRenderModel,
+  chartRenderModel,
+  chartSourceFromSheet,
   documentSize,
   project,
   sheetRenderModel,
@@ -77,7 +87,8 @@ function docFileType(doc: Doc<"documents">): FileType {
     doc.fileType === "html" ||
     doc.fileType === "sheet" ||
     doc.fileType === "board" ||
-    doc.fileType === "view"
+    doc.fileType === "view" ||
+    doc.fileType === "chart"
   ) {
     return doc.fileType;
   }
@@ -195,6 +206,7 @@ async function materializedContent(
   const priorBoardLinks = new Set<string>();
   const priorBoardLabels = new Set<string>();
   const duplicateBoardColumns = new Set<string>();
+  let priorChartSource: string | null = null;
   if (fileType === "sheet") {
     const inspection = inspectSheet(ydoc);
     const roots = getSheetRoots(ydoc);
@@ -251,6 +263,9 @@ async function materializedContent(
         seen.add(cardId);
       }
     }
+  }
+  if (fileType === "chart") {
+    priorChartSource = inspectChart(ydoc).sourceDocId;
   }
   try {
     Y.applyUpdate(ydoc, new Uint8Array(pendingUpdate));
@@ -375,6 +390,23 @@ async function materializedContent(
   const sheetInspection = fileType === "sheet" ? inspectSheet(ydoc) : null;
   const boardInspection = fileType === "board" ? inspectBoard(ydoc) : null;
   if (fileType === "view") inspectView(ydoc);
+  if (fileType === "chart") {
+    const config = inspectChart(ydoc);
+    if (config.sourceDocId && config.sourceDocId !== priorChartSource) {
+      const id = ctx.db.normalizeId("documents", config.sourceDocId);
+      const source = id ? await ctx.db.get(id) : null;
+      if (
+        !source ||
+        source.projectId !== doc.projectId ||
+        source.kind !== "file" ||
+        source.fileType !== "sheet" ||
+        source.trashedAt ||
+        source.deletingAt
+      ) {
+        throw new ChartValidationError();
+      }
+    }
+  }
   if (boardInspection) {
     const roots = getBoardRoots(ydoc);
     const assignees = new Set<string>();
@@ -598,6 +630,39 @@ function viewPreviewFromState(state: ArrayBuffer) {
   return preview;
 }
 
+async function chartSourceForConfig(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+  sourceDocId: string | null,
+) {
+  if (!sourceDocId) return null;
+  const id = ctx.db.normalizeId("documents", sourceDocId);
+  const source = id ? await ctx.db.get(id) : null;
+  if (
+    source?.kind !== "file" ||
+    source.projectId !== projectId ||
+    source.fileType !== "sheet" ||
+    !source.contentState ||
+    (await isInactiveTree(ctx, source))
+  ) {
+    return null;
+  }
+  const sheet = new Y.Doc();
+  Y.applyUpdate(sheet, new Uint8Array(source.contentState));
+  const result = chartSourceFromSheet(sheet, source._id, source.name);
+  sheet.destroy();
+  return result;
+}
+
+async function chartPreviewFromState(ctx: QueryCtx, doc: Doc<"documents">, state: ArrayBuffer) {
+  const ydoc = new Y.Doc();
+  Y.applyUpdate(ydoc, new Uint8Array(state));
+  const config = chartRenderModel(ydoc);
+  ydoc.destroy();
+  const source = await chartSourceForConfig(ctx, doc.projectId, config.sourceDocId);
+  return resolveChartData(config, source);
+}
+
 function copyYMap(source: Y.Map<unknown>): Y.Map<unknown> {
   const target = new Y.Map<unknown>();
   for (const [key, value] of source.entries()) target.set(key, value);
@@ -781,6 +846,10 @@ function replaceBoardStateInChunks(
 function replaceDocumentState(current: Y.Doc, target: Y.Doc, fileType: FileType): void {
   if (fileType === "view") {
     replaceViewState(current, target);
+    return;
+  }
+  if (fileType === "chart") {
+    replaceChartState(current, target);
     return;
   }
   if (fileType !== "sheet" && fileType !== "board") {
@@ -1015,7 +1084,7 @@ export const pushUpdateV2 = mutation({
       if (error instanceof SheetValidationError || error instanceof BoardValidationError) {
         return { ok: false as const, error: error.code };
       }
-      if (error instanceof ViewValidationError) {
+      if (error instanceof ViewValidationError || error instanceof ChartValidationError) {
         return { ok: false as const, error: "invalid-update" as const };
       }
       return { ok: false as const, error: "invalid-update" as const };
@@ -1036,7 +1105,8 @@ export const pushUpdateV2 = mutation({
       byteLength(content) > MAX_FILE_BYTES ||
       (doc.fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
       (doc.fileType === "board" && newSize > MAX_BOARD_STORED_BYTES) ||
-      (doc.fileType === "view" && newSize > MAX_VIEW_STORED_BYTES)
+      (doc.fileType === "view" && newSize > MAX_VIEW_STORED_BYTES) ||
+      (doc.fileType === "chart" && newSize > MAX_CHART_STORED_BYTES)
     ) {
       return { ok: false as const, error: "file-too-large" as const };
     }
@@ -1273,6 +1343,7 @@ export const ensureSeed = mutation({
       (doc.fileType !== "sheet" &&
         doc.fileType !== "board" &&
         doc.fileType !== "view" &&
+        doc.fileType !== "chart" &&
         doc.content.length === 0)
     ) {
       return { seeded: false };
@@ -1284,6 +1355,8 @@ export const ensureSeed = mutation({
       seedBoard(seedDoc);
     } else if (doc.fileType === "view") {
       seedView(seedDoc);
+    } else if (doc.fileType === "chart") {
+      seedChart(seedDoc);
     } else {
       seedDoc.getText("codemirror").insert(0, doc.content);
     }
@@ -1451,6 +1524,10 @@ export const getHistoryPreview = query({
       sheetPreview: doc.fileType === "sheet" ? sheetPreviewFromState(snapshot.snapshot) : undefined,
       boardPreview: doc.fileType === "board" ? boardPreviewFromState(snapshot.snapshot) : undefined,
       viewPreview: doc.fileType === "view" ? viewPreviewFromState(snapshot.snapshot) : undefined,
+      chartPreview:
+        doc.fileType === "chart"
+          ? await chartPreviewFromState(ctx, doc, snapshot.snapshot)
+          : undefined,
       label: snapshot.label ?? `Snapshot ${snapshot.throughSeq}`,
       authorName: snapshot.authorName ?? "Unknown",
       authorEmail: await snapshotAuthorEmail(ctx, doc, snapshot),
@@ -1480,7 +1557,8 @@ export const restoreHistory = mutation({
       byteLength(targetContent) > MAX_FILE_BYTES ||
       (fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
       (fileType === "board" && newSize > MAX_BOARD_STORED_BYTES) ||
-      (fileType === "view" && newSize > MAX_VIEW_STORED_BYTES)
+      (fileType === "view" && newSize > MAX_VIEW_STORED_BYTES) ||
+      (fileType === "chart" && newSize > MAX_CHART_STORED_BYTES)
     ) {
       targetDoc.destroy();
       throw new Error("file-too-large");
@@ -1520,7 +1598,8 @@ export const restoreHistory = mutation({
       byteLength(restoredContent) > MAX_FILE_BYTES ||
       (fileType === "sheet" && restoredSize > MAX_SHEET_STORED_BYTES) ||
       (fileType === "board" && restoredSize > MAX_BOARD_STORED_BYTES) ||
-      (fileType === "view" && restoredSize > MAX_VIEW_STORED_BYTES)
+      (fileType === "view" && restoredSize > MAX_VIEW_STORED_BYTES) ||
+      (fileType === "chart" && restoredSize > MAX_CHART_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }

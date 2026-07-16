@@ -40,7 +40,7 @@ const DOC_ERROR_MESSAGES: ReadonlyArray<readonly [string, string]> = [
   ["invalid-target", "You can’t move a folder into itself."],
   ["invalid-tree", "The project tree could not be processed safely."],
   ["invalid-title", "Enter a project title with at least 2 characters."],
-  ["invalid-type", "Document names must end in .md, .html, .sheet, .board, or .view."],
+  ["invalid-type", "Document names must end in .md, .html, .sheet, .board, .view, or .chart."],
   ["file-type-change-unsupported", "Renaming cannot change a document's file type."],
   ["invalid-name", "That name isn’t allowed."],
   ["name-taken", "A file or folder with that name already exists here."],

@@ -108,7 +108,10 @@ export const saveFromDocument = mutation({
     const projectionBytes = new TextEncoder().encode(doc.content).byteLength;
     if (
       projectionBytes > MAX_BYTES ||
-      (doc.fileType === "sheet" || doc.fileType === "board" || doc.fileType === "view"
+      (doc.fileType === "sheet" ||
+      doc.fileType === "board" ||
+      doc.fileType === "view" ||
+      doc.fileType === "chart"
         ? state.byteLength + projectionBytes > MAX_STRUCTURED_BYTES
         : state.byteLength > MAX_BYTES)
     )

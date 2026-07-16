@@ -6,9 +6,11 @@ import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { BoardView } from "@/components/board-view";
+import { ChartView } from "@/components/chart-view";
 import { SheetTable } from "@/components/sheet-table";
 import { notify } from "@/components/ui/toast";
 import { ViewPreview, type ViewPreviewModel } from "@/components/view-preview";
+import type { ChartData } from "@/lib/chart-data";
 import type { BoardRenderModel, SheetRenderModel } from "@/lib/doc-projection";
 import type { FileType } from "@/lib/document-types";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
@@ -23,6 +25,7 @@ export type SharedDocument = {
   sheetPreview?: SheetRenderModel;
   boardPreview?: BoardRenderModel;
   viewPreview?: ViewPreviewModel;
+  chartPreview?: ChartData;
   updatedAt: number;
   nodes: TreeNode[];
   fileLinks: { documentId: string; href: string }[];
@@ -95,6 +98,8 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
           <BoardView model={shared.boardPreview} className="h-full bg-background" />
         ) : shared.fileType === "view" && shared.viewPreview ? (
           <ViewPreview model={shared.viewPreview} className="h-full" />
+        ) : shared.fileType === "chart" && shared.chartPreview ? (
+          <ChartView model={shared.chartPreview} className="h-full" />
         ) : fileNode ? (
           <DocPreview
             fileNode={fileNode}

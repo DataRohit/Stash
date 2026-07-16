@@ -713,6 +713,7 @@ export const insertDuplicateNode = internalMutation({
       v.literal("sheet"),
       v.literal("board"),
       v.literal("view"),
+      v.literal("chart"),
       v.null(),
     ),
     content: v.string(),

@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
-import { boardRenderModel, sheetRenderModel } from "../lib/doc-projection";
+import { resolveChartData } from "../lib/chart-data";
+import { type ChartConfig, inspectChart } from "../lib/chart-model";
+import { boardRenderModel, chartSourceFromSheet, sheetRenderModel } from "../lib/doc-projection";
 import { inspectView, type ViewConfig, type ViewFilter } from "../lib/view-model";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -178,6 +180,32 @@ async function sharedViewPreview(
     truncated:
       documents.length > SHARED_VIEW_RECORD_LIMIT || boardCards.length > SHARED_VIEW_RECORD_LIMIT,
   };
+}
+
+async function sharedChartPreview(
+  ctx: MutationCtx,
+  projectId: Id<"projects">,
+  config: ChartConfig,
+  allowedDocumentIds: Set<string>,
+) {
+  let source = null;
+  if (config.sourceDocId && allowedDocumentIds.has(config.sourceDocId)) {
+    const id = ctx.db.normalizeId("documents", config.sourceDocId);
+    const sourceDoc = id ? await ctx.db.get(id) : null;
+    if (
+      sourceDoc?.kind === "file" &&
+      sourceDoc.projectId === projectId &&
+      sourceDoc.fileType === "sheet" &&
+      sourceDoc.contentState &&
+      !(await isInactiveTree(ctx, sourceDoc))
+    ) {
+      const sheet = new Y.Doc();
+      Y.applyUpdate(sheet, new Uint8Array(sourceDoc.contentState));
+      source = chartSourceFromSheet(sheet, sourceDoc._id, sourceDoc.name);
+      sheet.destroy();
+    }
+  }
+  return resolveChartData(config, source);
 }
 
 function serviceSecretValid(provided: string): boolean {
@@ -673,6 +701,7 @@ export const redeemShare = mutation({
     let sheetPreview: ReturnType<typeof sheetRenderModel> | undefined;
     let boardPreview: ReturnType<typeof boardRenderModel> | undefined;
     let viewPreview: Awaited<ReturnType<typeof sharedViewPreview>> | undefined;
+    let chartPreview: Awaited<ReturnType<typeof sharedChartPreview>> | undefined;
     if (doc.fileType === "sheet" && doc.contentState) {
       const sheet = new Y.Doc();
       Y.applyUpdate(sheet, new Uint8Array(doc.contentState));
@@ -707,6 +736,18 @@ export const redeemShare = mutation({
       );
       view.destroy();
     }
+    if (doc.fileType === "chart" && doc.contentState) {
+      const chart = new Y.Doc();
+      Y.applyUpdate(chart, new Uint8Array(doc.contentState));
+      const config = inspectChart(chart);
+      chart.destroy();
+      const allowedDocumentIds = new Set(
+        shares
+          .filter((row) => isShareLive(row) && modeRank(row.mode) >= modeRank(effectiveMode))
+          .map((row) => row.documentId as string),
+      );
+      chartPreview = await sharedChartPreview(ctx, doc.projectId, config, allowedDocumentIds);
+    }
     return {
       status: "ok" as const,
       mode: effectiveMode,
@@ -718,6 +759,7 @@ export const redeemShare = mutation({
       sheetPreview,
       boardPreview,
       viewPreview,
+      chartPreview,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,

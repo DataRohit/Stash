@@ -37,6 +37,7 @@ import {
   type BoardCardSelection,
   BoardEditor,
 } from "@/app/dashboard/projects/[id]/editor/board-editor";
+import { ChartEditor } from "@/app/dashboard/projects/[id]/editor/chart-editor";
 import {
   CommentsRail,
   type CommentThread,
@@ -1359,7 +1360,8 @@ export function ProjectEditor({
               ) : null}
               {selectedNode?.fileType !== "sheet" &&
               selectedNode?.fileType !== "board" &&
-              selectedNode?.fileType !== "view" ? (
+              selectedNode?.fileType !== "view" &&
+              selectedNode?.fileType !== "chart" ? (
                 <button
                   type="button"
                   onClick={() => setOutlineOpen((value) => !value)}
@@ -1384,7 +1386,10 @@ export function ProjectEditor({
                   content={canEdit ? buffer : doc.content}
                   nodes={nodes}
                   ydoc={
-                    doc.fileType === "sheet" || doc.fileType === "board" || doc.fileType === "view"
+                    doc.fileType === "sheet" ||
+                    doc.fileType === "board" ||
+                    doc.fileType === "view" ||
+                    doc.fileType === "chart"
                       ? collab?.ydoc
                       : undefined
                   }
@@ -1420,7 +1425,8 @@ export function ProjectEditor({
                   >
                     {selectedNode?.fileType !== "sheet" &&
                     selectedNode?.fileType !== "board" &&
-                    selectedNode?.fileType !== "view" ? (
+                    selectedNode?.fileType !== "view" &&
+                    selectedNode?.fileType !== "chart" ? (
                       <button
                         ref={moreFirstRef}
                         type="button"
@@ -1439,7 +1445,8 @@ export function ProjectEditor({
                       ref={
                         selectedNode?.fileType === "sheet" ||
                         selectedNode?.fileType === "board" ||
-                        selectedNode?.fileType === "view"
+                        selectedNode?.fileType === "view" ||
+                        selectedNode?.fileType === "chart"
                           ? moreFirstRef
                           : undefined
                       }
@@ -1479,7 +1486,8 @@ export function ProjectEditor({
               </button>
               {selectedNode?.fileType !== "sheet" &&
               selectedNode?.fileType !== "board" &&
-              selectedNode?.fileType !== "view" ? (
+              selectedNode?.fileType !== "view" &&
+              selectedNode?.fileType !== "chart" ? (
                 <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                   <legend className="sr-only">View mode</legend>
                   {(
@@ -1678,6 +1686,18 @@ export function ProjectEditor({
                     canEdit={canEdit && !collab.blocked}
                     members={boardMembers}
                     onOpenDocument={selectNode}
+                  />
+                </div>
+              ) : doc.fileType === "chart" && collab?.ydoc && collab.awareness ? (
+                <div className="min-h-0 flex-1">
+                  <ChartEditor
+                    key={selectedFileId}
+                    projectId={pid}
+                    ydoc={collab.ydoc}
+                    awareness={collab.awareness}
+                    ready={collab.ready}
+                    canEdit={canEdit && !collab.blocked}
+                    nodes={nodes}
                   />
                 </div>
               ) : (

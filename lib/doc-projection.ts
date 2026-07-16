@@ -1,5 +1,7 @@
 import * as Y from "yjs";
 import { getBoardRoots, inspectBoard, orderedCards, UNFILED_COLUMN_ID } from "./board-model";
+import { type ChartSource, MAX_CHART_SOURCE_ROWS } from "./chart-data";
+import { type ChartConfig, inspectChart, MAX_CHART_STATE_BYTES } from "./chart-model";
 import type { FileType } from "./document-types";
 import {
   DEFAULT_COLUMN_WIDTH,
@@ -37,6 +39,8 @@ export type BoardRenderModel = {
 };
 
 export type ViewRenderModel = ViewConfig;
+
+export type ChartRenderModel = ChartConfig;
 
 function quoted(value: string, delimiter: string): string {
   return value.includes(delimiter) || /["\r\n]/.test(value)
@@ -77,6 +81,16 @@ function trimmedSheet(ydoc: Y.Doc) {
 }
 
 export function project(fileType: FileType, ydoc: Y.Doc): string {
+  if (fileType === "chart") {
+    const chart = inspectChart(ydoc);
+    return [
+      chart.title,
+      `${chart.type} chart`,
+      chart.series.length > 0 ? `${chart.series.length} series` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
   if (fileType === "view") {
     const view = inspectView(ydoc);
     return [
@@ -200,11 +214,29 @@ export function documentSize(fileType: FileType, ydoc: Y.Doc): number {
   const contentBytes = new TextEncoder().encode(projection).byteLength;
   const stateBytes = Y.encodeStateAsUpdate(ydoc).byteLength;
   if (fileType === "view" && stateBytes > MAX_VIEW_STATE_BYTES) return Number.POSITIVE_INFINITY;
-  return fileType === "sheet" || fileType === "board" || fileType === "view"
+  if (fileType === "chart" && stateBytes > MAX_CHART_STATE_BYTES) return Number.POSITIVE_INFINITY;
+  return fileType === "sheet" || fileType === "board" || fileType === "view" || fileType === "chart"
     ? contentBytes + stateBytes
     : contentBytes;
 }
 
 export function viewRenderModel(ydoc: Y.Doc): ViewRenderModel {
   return inspectView(ydoc);
+}
+
+export function chartRenderModel(ydoc: Y.Doc): ChartRenderModel {
+  return inspectChart(ydoc);
+}
+
+export function chartSourceFromSheet(ydoc: Y.Doc, documentId: string, name: string): ChartSource {
+  const model = sheetRenderModel(ydoc);
+  return {
+    documentId,
+    name,
+    columns: model.columns.map((column) => ({ id: column.id, name: column.name })),
+    rows: model.rows
+      .slice(0, MAX_CHART_SOURCE_ROWS)
+      .map((row) => ({ id: row.id, values: row.values })),
+    truncated: model.rows.length > MAX_CHART_SOURCE_ROWS,
+  };
 }

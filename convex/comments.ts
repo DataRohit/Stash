@@ -384,7 +384,12 @@ export const createThread = mutation({
   handler: async (ctx, args) => {
     const { doc, access } = await fileForAccess(ctx, args.documentId);
     if (args.anchor.kind === "text") {
-      if (doc.fileType === "sheet" || doc.fileType === "board" || doc.fileType === "view") {
+      if (
+        doc.fileType === "sheet" ||
+        doc.fileType === "board" ||
+        doc.fileType === "view" ||
+        doc.fileType === "chart"
+      ) {
         throw new Error("invalid-anchor");
       }
       assertAnchor(args.anchor.startRel);
