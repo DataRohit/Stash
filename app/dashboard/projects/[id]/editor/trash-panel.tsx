@@ -29,7 +29,7 @@ type TrashItem = {
 type TrashPanelProps = {
   open: boolean;
   projectId: Id<"projects">;
-  canPurge: boolean;
+  isAdmin: boolean;
   onClose: () => void;
 };
 
@@ -52,7 +52,7 @@ function retentionLabel(trashedAt: number, now: number): { label: string; immine
   };
 }
 
-export function TrashPanel({ open, projectId, canPurge, onClose }: TrashPanelProps) {
+export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProps) {
   const [confirmItem, setConfirmItem] = useState<TrashItem | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const itemsData = useQuery(api.documents.listTrash, open ? { projectId } : "skip");
@@ -146,7 +146,7 @@ export function TrashPanel({ open, projectId, canPurge, onClose }: TrashPanelPro
                       <RotateCcw className="size-3.5" aria-hidden="true" />
                       Restore
                     </button>
-                    {canPurge ? (
+                    {isAdmin ? (
                       <button
                         type="button"
                         onClick={() => setConfirmItem(item)}

@@ -1802,7 +1802,7 @@ export const deleteForever = mutation({
     if (!doc?.trashedAt || doc.deletingAt) {
       throw new Error("not-found");
     }
-    const access = await requireProjectEditor(ctx, doc.projectId);
+    const access = await requireProjectAdmin(ctx, doc.projectId);
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
       clerkOrgId: access.project.clerkOrgId,

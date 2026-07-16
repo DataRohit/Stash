@@ -35,6 +35,16 @@ async function primaryEmailForUser(userId: string, fallback: string): Promise<st
   }
 }
 
+async function revokeOrganizationSessions(userId: string, clerkOrgId: string): Promise<void> {
+  const client = await clerkClient();
+  const sessions = await client.sessions.getSessionList({ userId, status: "active", limit: 100 });
+  await Promise.all(
+    sessions.data
+      .filter((session) => session.lastActiveOrganizationId === clerkOrgId)
+      .map((session) => client.sessions.revokeSession(session.id)),
+  );
+}
+
 export async function POST(req: NextRequest) {
   let event: Awaited<ReturnType<typeof verifyWebhook>>;
   try {
@@ -86,6 +96,7 @@ export async function POST(req: NextRequest) {
         const userId = event.data.public_user_data.user_id;
         if (orgId && userId) {
           await webhookDeleteAcceptedMember(orgId, userId);
+          await revokeOrganizationSessions(userId, orgId);
         }
         break;
       }
