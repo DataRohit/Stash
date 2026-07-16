@@ -17,7 +17,7 @@ export function Hero() {
           <h1 className="max-w-3xl font-serif text-4xl leading-[0.98] tracking-display sm:text-6xl md:text-7xl">
             A workspace for
             <br />
-            docs &amp; spreadsheets.
+            docs &amp; structured data.
           </h1>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -27,9 +27,9 @@ export function Hero() {
           </div>
 
           <p className="max-w-xl text-base text-muted-foreground leading-relaxed">
-            Host documentation, plans, and structured data in projects with nested folders. Invite
-            collaborators, share read-only links, keep full version history, and edit the same file
-            together in real time.
+            Build documents, spreadsheets, Kanban boards, team views, and charts in projects with
+            nested folders. Collaborate in real time, keep full history, and share controlled
+            read-only links.
           </p>
 
           <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">

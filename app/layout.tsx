@@ -32,19 +32,43 @@ function metadataBase(): URL {
 
 export const metadata: Metadata = {
   metadataBase: metadataBase(),
+  applicationName: "Stash",
   title: {
-    default: "Stash — Collaborative Document Workspace",
+    default: "Stash — Collaborative Workspace",
     template: "%s · Stash",
   },
   description:
-    "An open-source collaborative workspace for Markdown and HTML documents. Organize docs into projects and nested folders with version history, shareable links, and real-time editing.",
+    "An open-source collaborative workspace for documents, spreadsheets, Kanban boards, structured team views, and charts with real-time editing, history, and controlled sharing.",
+  keywords: [
+    "collaborative workspace",
+    "document management",
+    "Markdown",
+    "spreadsheet",
+    "Kanban",
+    "team views",
+    "charts",
+    "real-time collaboration",
+    "self-hosted",
+  ],
+  authors: [{ name: "Rohit Vilas Ingole", url: "https://github.com/DataRohit" }],
+  creator: "Rohit Vilas Ingole",
+  publisher: "Rohit Vilas Ingole",
+  category: "technology",
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
-    title: "Stash — Collaborative Document Workspace",
+    title: "Stash — Collaborative Workspace",
     description:
-      "Organize and collaboratively edit Markdown and HTML documents with version history and controlled sharing.",
+      "Collaborate on documents, spreadsheets, Kanban boards, structured team views, and charts with version history and controlled sharing.",
     url: "/",
+    siteName: "Stash",
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary",
+    title: "Stash — Collaborative Workspace",
+    description:
+      "Collaborate on documents, spreadsheets, Kanban boards, structured team views, and charts with version history and controlled sharing.",
   },
 };
 

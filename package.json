@@ -2,39 +2,42 @@
   "name": "stash",
   "version": "0.1.0",
   "private": true,
-  "description": "Host, organize, and collaboratively edit Markdown, HTML, and spreadsheet documents in nested projects with Convex-backed real-time collaboration, comments, history, search, and sharing.",
+  "description": "Open-source collaborative workspace for Markdown, HTML, spreadsheets, Kanban boards, structured team views, and charts, powered by Next.js, Convex, Clerk, and Yjs.",
   "keywords": [
     "authentication",
-    "backend",
-    "billing",
+    "charts",
     "clerk",
     "collaboration",
     "convex",
-    "csv",
     "database",
     "document-management",
-    "documentation",
     "html",
+    "kanban",
+    "knowledge-base",
     "markdown",
     "multi-tenant",
     "nextjs",
+    "open-source",
     "organizations",
+    "project-management",
     "real-time",
+    "self-hosted",
     "spreadsheet",
     "typescript",
     "version-control",
-    "workspace"
+    "workspace",
+    "yjs"
   ],
-  "homepage": "https://github.com/datarohit/stash#readme",
+  "homepage": "https://github.com/DataRohit/Stash#readme",
   "bugs": {
-    "url": "https://github.com/datarohit/stash/issues"
+    "url": "https://github.com/DataRohit/Stash/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/datarohit/stash.git"
+    "url": "git+https://github.com/DataRohit/Stash.git"
   },
   "license": "MIT",
-  "author": "Rohit Vilas Ingole (https://github.com/datarohit)",
+  "author": "Rohit Vilas Ingole (https://github.com/DataRohit)",
   "scripts": {
     "build": "next build",
     "check": "pnpm package:check && pnpm format:check && pnpm lint && pnpm typecheck && pnpm knip && pnpm spellcheck && pnpm secrets && pnpm markdownlint && pnpm comments:check && pnpm build",
@@ -132,6 +135,6 @@
   },
   "packageManager": "pnpm@11.9.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

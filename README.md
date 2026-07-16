@@ -1,6 +1,6 @@
 # Stash
 
-## Collaborative documents, spreadsheets, Kanban boards, and structured team views
+## Collaborative documents, spreadsheets, Kanban boards, structured team views, and charts
 
 [![Quality](https://github.com/DataRohit/Stash/actions/workflows/quality.yml/badge.svg)](https://github.com/DataRohit/Stash/actions/workflows/quality.yml)
 [![Project Status: Active](https://img.shields.io/badge/Project%20Status-Active-brightgreen)](https://github.com/DataRohit/Stash)
@@ -13,7 +13,7 @@
 [![Clerk](https://img.shields.io/badge/Clerk-Identity-6C47FF?logo=clerk&logoColor=white)](https://clerk.com)
 [![pnpm 11](https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white)](https://pnpm.io)
 
-**Stash organizes collaborative documents, assets, discussion, history, search, and controlled sharing inside organization-scoped projects.**
+**Stash brings collaborative documents, structured data, visualizations, discussion, history, search, and controlled sharing into organization-scoped projects.**
 
 [Features](#key-features) · [Architecture](#architecture) · [Technology](#technology-stack) · [Setup](#local-development) · [Quality](#quality-verification) · [Production](#production-deployment)
 
@@ -22,9 +22,9 @@
 ## Overview
 
 Stash is a multi-tenant, developer-first document workspace built for teams that
-maintain Markdown, HTML, structured spreadsheets, Kanban boards, and database-style
-team views together. Every document type participates in real-time collaboration,
-history, search, sharing, and export. Convex owns
+maintain Markdown, HTML, structured spreadsheets, Kanban boards, database-style
+team views, and charts together. Every document type participates in real-time
+collaboration, history, search, sharing, and export. Convex owns
 reactive data and authorization boundaries; Clerk owns sessions, organizations,
 roles, invitations, and billing-plan data.
 
@@ -125,8 +125,8 @@ confirms that changes synchronize automatically.
 ### Documents and files
 
 - Nested project folders with Markdown, HTML, spreadsheets, Kanban boards, team
-  views, and PNG, JPEG, GIF, WebP, or AVIF image nodes.
-- Document names accept `.md`, `.html`, `.sheet`, `.board`, and `.view`. Entering an
+  views, charts, and PNG, JPEG, GIF, WebP, or AVIF image nodes.
+- Document names accept `.md`, `.html`, `.sheet`, `.board`, `.view`, and `.chart`. Entering an
   extension in the creation dialog selects the matching format automatically;
   names without an extension use the selected format and receive its canonical
   extension.
@@ -149,6 +149,9 @@ confirms that changes synchronize automatically.
   number, checkbox, date-range, status, and person properties; table, grouped board,
   timeline, and calendar layouts; paged records; shared filters, sorting, and fields;
   and an unscheduled tray for records without dates.
+- Collaborative line, bar, area, and pie charts backed by spreadsheet data, with
+  configurable series, ranges, labels, colors, legends, hover inspection, and
+  version-aware previews.
 - First-class document and card relationships with access-safe cross-project target
   search, maintained backlinks, opaque inaccessible targets, and purge cleanup.
 - Yjs incremental synchronization over Convex with snapshots and compaction.
@@ -179,7 +182,7 @@ confirms that changes synchronize automatically.
 - Organization policy that degrades public links to organization access.
 - Public-edge throttling isolated by token and IP.
 - Standalone HTML, print/PDF, Markdown, canonical CSV, board Markdown, view-record
-  CSV, and project ZIP export.
+  CSV, chart SVG, and project ZIP export.
 
 ### Organizations and authorization
 

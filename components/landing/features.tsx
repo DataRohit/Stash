@@ -9,9 +9,9 @@ const features = [
   {
     icon: FileText,
     category: "Authoring",
-    title: "Markdown & HTML",
+    title: "Documents & structured data",
     description:
-      "Host documentation, plans, notes, or anything written in Markdown or HTML — rendered cleanly.",
+      "Create Markdown, HTML, spreadsheets, Kanban boards, team views, and charts in one workspace.",
   },
   {
     icon: FolderTree,
@@ -57,7 +57,7 @@ export function Features() {
         <SectionHeader
           kicker="Features"
           title="Everything a document workspace needs."
-          description="A focused set of primitives for hosting, organizing, and collaborating on written documents."
+          description="A focused set of primitives for organizing and collaborating on written and structured work."
         />
       </Reveal>
 
