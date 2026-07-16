@@ -12,12 +12,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { ChartView } from "@/components/chart-view";
 import { ColorPicker } from "@/components/ui/color-picker";
 import { DataLoader } from "@/components/ui/data-state";
+import { useAnchoredPosition, useOutsideClose } from "@/components/ui/floating";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { resolveChartData } from "@/lib/chart-data";
@@ -55,15 +57,9 @@ function Select({
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, [open]);
+  const floatingRef = useRef<HTMLDivElement>(null);
+  const ref = useOutsideClose(() => setOpen(false), floatingRef);
+  const position = useAnchoredPosition({ open, anchorRef: ref, floatingRef, estimatedHeight: 224 });
   const selected = options.find((option) => option.value === value);
   return (
     <div ref={ref} className="relative">
@@ -85,34 +81,41 @@ function Select({
           className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")}
         />
       </button>
-      {open ? (
-        <div
-          role="listbox"
-          aria-label={label}
-          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-56 space-y-1 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
-        >
-          {options.map((option) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              key={option.value}
-              title={option.label}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left text-xs hover:bg-foreground/[0.06]",
-                option.value === value && "bg-foreground/[0.08]",
-              )}
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={floatingRef}
+              role="listbox"
+              aria-label={label}
+              className="fixed z-[180] max-h-56 space-y-1 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
+              style={position}
             >
-              <Check className={cn("size-3.5 shrink-0", option.value !== value && "opacity-0")} />
-              <span className="truncate">{option.label}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
+              {options.map((option) => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={option.value === value}
+                  key={option.value}
+                  title={option.label}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left text-xs hover:bg-foreground/[0.06]",
+                    option.value === value && "bg-foreground/[0.08]",
+                  )}
+                >
+                  <Check
+                    className={cn("size-3.5 shrink-0", option.value !== value && "opacity-0")}
+                  />
+                  <span className="truncate">{option.label}</span>
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

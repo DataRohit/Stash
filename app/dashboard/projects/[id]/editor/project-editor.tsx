@@ -32,6 +32,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import * as Y from "yjs";
 import {
   type BoardCardSelection,
@@ -83,6 +84,7 @@ import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { ViewEditor } from "@/app/dashboard/projects/[id]/editor/view-editor";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
+import { useAnchoredPosition } from "@/components/ui/floating";
 import { notify } from "@/components/ui/toast";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { useMediaQuery } from "@/components/ui/use-media-query";
@@ -200,6 +202,14 @@ function ViewerPresence({ viewers, canOpen }: { viewers: CollabViewer[]; canOpen
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
+  const position = useAnchoredPosition({
+    open: open && canOpen,
+    anchorRef: wrapperRef,
+    floatingRef: panelRef,
+    estimatedHeight: 320,
+    requestedWidth: 384,
+    align: "end",
+  });
 
   useDialogA11y({
     open: open && canOpen,
@@ -214,7 +224,12 @@ function ViewerPresence({ viewers, canOpen }: { viewers: CollabViewer[]; canOpen
       return;
     }
     const onPointer = (event: MouseEvent) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(target) &&
+        !panelRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     };
@@ -246,55 +261,61 @@ function ViewerPresence({ viewers, canOpen }: { viewers: CollabViewer[]; canOpen
       >
         <ViewerStack viewers={viewers} />
       </button>
-      {open ? (
-        <div
-          ref={panelRef}
-          tabIndex={-1}
-          role="dialog"
-          aria-modal="false"
-          aria-labelledby={titleId}
-          className="absolute top-9 right-0 z-[80] w-96 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-hairline bg-surface p-1 shadow-xl"
-        >
-          <div className="flex min-h-9 items-center justify-between gap-2 px-2 py-1">
-            <p
-              id={titleId}
-              className="font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest"
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={panelRef}
+              tabIndex={-1}
+              role="dialog"
+              aria-modal="false"
+              aria-labelledby={titleId}
+              className="fixed z-[180] overflow-hidden rounded-lg border border-hairline bg-surface p-1 shadow-xl"
+              style={position}
             >
-              {viewers.length} {viewers.length === 1 ? "person here" : "people here"}
-            </p>
-            <button
-              ref={closeRef}
-              type="button"
-              onClick={() => setOpen(false)}
-              aria-label="Close presence details"
-              className="flex size-7 items-center justify-center rounded-xs text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
-            >
-              <X className="size-3.5" aria-hidden="true" />
-            </button>
-          </div>
-          <ul className="flex max-h-64 flex-col overflow-auto">
-            {viewers.map((viewer) => (
-              <li
-                key={viewer.sessionId}
-                className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-foreground/[0.04]"
-              >
-                <ViewerAvatar viewer={viewer} size={22} />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs">{viewer.name}</span>
-                  {viewer.email ? (
-                    <span className="block break-all text-[11px] text-muted-foreground leading-snug">
-                      {viewer.email}
+              <div className="flex min-h-9 items-center justify-between gap-2 px-2 py-1">
+                <p
+                  id={titleId}
+                  className="font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest"
+                >
+                  {viewers.length} {viewers.length === 1 ? "person here" : "people here"}
+                </p>
+                <button
+                  ref={closeRef}
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  aria-label="Close presence details"
+                  className="flex size-7 items-center justify-center rounded-xs text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+                >
+                  <X className="size-3.5" aria-hidden="true" />
+                </button>
+              </div>
+              <ul className="flex max-h-64 flex-col overflow-auto">
+                {viewers.map((viewer) => (
+                  <li
+                    key={viewer.sessionId}
+                    className="flex items-center gap-2 rounded-md px-2 py-2 hover:bg-foreground/[0.04]"
+                  >
+                    <ViewerAvatar viewer={viewer} size={22} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs">{viewer.name}</span>
+                      {viewer.email ? (
+                        <span className="block break-all text-[11px] text-muted-foreground leading-snug">
+                          {viewer.email}
+                        </span>
+                      ) : null}
                     </span>
-                  ) : null}
-                </span>
-                {viewer.isSelf ? (
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">You</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+                    {viewer.isSelf ? (
+                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                        You
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -409,6 +430,14 @@ export function ProjectEditor({
   const moreRef = useRef<HTMLDivElement>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const moreFirstRef = useRef<HTMLButtonElement>(null);
+  const morePosition = useAnchoredPosition({
+    open: moreOpen,
+    anchorRef: moreRef,
+    floatingRef: moreMenuRef,
+    estimatedHeight: 120,
+    requestedWidth: 192,
+    align: "end",
+  });
   const compactView = useMediaQuery("(max-width: 767px)");
   const compactActions = useMediaQuery("(max-width: 1023px)");
   const effectiveViewMode = compactView ? mobileViewMode : viewMode;
@@ -1416,65 +1445,69 @@ export function ProjectEditor({
                 >
                   <MoreHorizontal className="size-4" aria-hidden="true" />
                 </button>
-                {moreOpen ? (
-                  <div
-                    ref={moreMenuRef}
-                    tabIndex={-1}
-                    className="absolute top-10 right-0 z-[80] w-48 rounded-lg border border-hairline bg-surface p-1 shadow-xl"
-                    role="menu"
-                  >
-                    {selectedNode?.fileType !== "sheet" &&
-                    selectedNode?.fileType !== "board" &&
-                    selectedNode?.fileType !== "view" &&
-                    selectedNode?.fileType !== "chart" ? (
-                      <button
-                        ref={moreFirstRef}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setMoreOpen(false);
-                          setOutlineOpen(true);
-                        }}
-                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                {moreOpen && typeof document !== "undefined"
+                  ? createPortal(
+                      <div
+                        ref={moreMenuRef}
+                        tabIndex={-1}
+                        className="fixed z-[180] rounded-lg border border-hairline bg-surface p-1 shadow-xl"
+                        style={morePosition}
+                        role="menu"
                       >
-                        <List className="size-4" aria-hidden="true" />
-                        Document outline
-                      </button>
-                    ) : null}
-                    <button
-                      ref={
-                        selectedNode?.fileType === "sheet" ||
-                        selectedNode?.fileType === "board" ||
-                        selectedNode?.fileType === "view" ||
-                        selectedNode?.fileType === "chart"
-                          ? moreFirstRef
-                          : undefined
-                      }
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setMoreOpen(false);
-                        setHistoryState({ documentId: selectedFileId, open: true });
-                      }}
-                      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
-                    >
-                      <History className="size-4" aria-hidden="true" />
-                      Version history
-                    </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setMoreOpen(false);
-                        setShortcutsOpen(true);
-                      }}
-                      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
-                    >
-                      <CircleHelp className="size-4" aria-hidden="true" />
-                      Keyboard shortcuts
-                    </button>
-                  </div>
-                ) : null}
+                        {selectedNode?.fileType !== "sheet" &&
+                        selectedNode?.fileType !== "board" &&
+                        selectedNode?.fileType !== "view" &&
+                        selectedNode?.fileType !== "chart" ? (
+                          <button
+                            ref={moreFirstRef}
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setMoreOpen(false);
+                              setOutlineOpen(true);
+                            }}
+                            className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                          >
+                            <List className="size-4" aria-hidden="true" />
+                            Document outline
+                          </button>
+                        ) : null}
+                        <button
+                          ref={
+                            selectedNode?.fileType === "sheet" ||
+                            selectedNode?.fileType === "board" ||
+                            selectedNode?.fileType === "view" ||
+                            selectedNode?.fileType === "chart"
+                              ? moreFirstRef
+                              : undefined
+                          }
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setMoreOpen(false);
+                            setHistoryState({ documentId: selectedFileId, open: true });
+                          }}
+                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                        >
+                          <History className="size-4" aria-hidden="true" />
+                          Version history
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setMoreOpen(false);
+                            setShortcutsOpen(true);
+                          }}
+                          className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-muted-foreground text-xs hover:bg-foreground/[0.06] hover:text-foreground"
+                        >
+                          <CircleHelp className="size-4" aria-hidden="true" />
+                          Keyboard shortcuts
+                        </button>
+                      </div>,
+                      document.body,
+                    )
+                  : null}
               </div>
               <button
                 type="button"

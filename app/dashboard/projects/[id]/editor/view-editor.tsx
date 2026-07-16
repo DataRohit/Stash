@@ -16,12 +16,14 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
 import type { MentionCandidate } from "@/app/dashboard/projects/[id]/editor/comments-rail";
 import { Button } from "@/components/ui/button";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
+import { useAnchoredPosition, useOutsideClose } from "@/components/ui/floating";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -104,15 +106,9 @@ function MenuSelect({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, [open]);
+  const floatingRef = useRef<HTMLDivElement>(null);
+  const ref = useOutsideClose(() => setOpen(false), floatingRef);
+  const position = useAnchoredPosition({ open, anchorRef: ref, floatingRef, estimatedHeight: 224 });
   const selected = options.find((option) => option.value === value);
   return (
     <div ref={ref} className={cn("relative", className)}>
@@ -133,33 +129,39 @@ function MenuSelect({
           className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-180")}
         />
       </button>
-      {open ? (
-        <div
-          role="listbox"
-          aria-label={label}
-          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-56 space-y-1 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
-        >
-          {options.map((option) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              key={option.value}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-              className={cn(
-                "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left text-xs hover:bg-foreground/[0.06]",
-                option.value === value && "bg-foreground/[0.08]",
-              )}
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={floatingRef}
+              data-view-menu-listbox="true"
+              role="listbox"
+              aria-label={label}
+              className="fixed z-[180] max-h-56 space-y-1 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
+              style={position}
             >
-              <Check className={cn("size-3.5", option.value !== value && "opacity-0")} />
-              <span className="truncate">{option.label}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
+              {options.map((option) => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={option.value === value}
+                  key={option.value}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    "flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left text-xs hover:bg-foreground/[0.06]",
+                    option.value === value && "bg-foreground/[0.08]",
+                  )}
+                >
+                  <Check className={cn("size-3.5", option.value !== value && "opacity-0")} />
+                  <span className="truncate">{option.label}</span>
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -394,9 +396,37 @@ export function ViewEditor({
   const [propertyType, setPropertyType] = useState<PropertyType>("text");
   const [openMenu, setOpenMenu] = useState<"filter" | "sort" | "column" | null>(null);
   const toolbarMenuRef = useRef<HTMLDivElement>(null);
+  const toolbarFloatingRef = useRef<HTMLDivElement>(null);
+  const filterAnchorRef = useRef<HTMLDivElement>(null);
+  const sortAnchorRef = useRef<HTMLDivElement>(null);
+  const columnAnchorRef = useRef<HTMLDivElement>(null);
   const filterOpen = openMenu === "filter";
   const sortOpen = openMenu === "sort";
   const columnOpen = openMenu === "column";
+  const filterPosition = useAnchoredPosition({
+    open: filterOpen,
+    anchorRef: filterAnchorRef,
+    floatingRef: toolbarFloatingRef,
+    estimatedHeight: 360,
+    requestedWidth: 512,
+    align: "end",
+  });
+  const sortPosition = useAnchoredPosition({
+    open: sortOpen,
+    anchorRef: sortAnchorRef,
+    floatingRef: toolbarFloatingRef,
+    estimatedHeight: 320,
+    requestedWidth: 448,
+    align: "end",
+  });
+  const columnPosition = useAnchoredPosition({
+    open: columnOpen,
+    anchorRef: columnAnchorRef,
+    floatingRef: toolbarFloatingRef,
+    estimatedHeight: 320,
+    requestedWidth: 256,
+    align: "end",
+  });
   const toggleMenu = (menu: "filter" | "sort" | "column") =>
     setOpenMenu((current) => (current === menu ? null : menu));
   const [month, setMonth] = useState(() => {
@@ -434,7 +464,16 @@ export function ViewEditor({
   useEffect(() => {
     if (!openMenu) return;
     const close = (event: PointerEvent) => {
-      if (!toolbarMenuRef.current?.contains(event.target as Node)) setOpenMenu(null);
+      const target = event.target as Node;
+      const insideNestedListbox =
+        target instanceof Element && target.closest('[data-view-menu-listbox="true"]');
+      if (
+        !toolbarMenuRef.current?.contains(target) &&
+        !toolbarFloatingRef.current?.contains(target) &&
+        !insideNestedListbox
+      ) {
+        setOpenMenu(null);
+      }
     };
     const onEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setOpenMenu(null);
@@ -682,177 +721,200 @@ export function ViewEditor({
           />
         </label>
         <div ref={toolbarMenuRef} className="flex flex-wrap items-center gap-2">
-          <div className="relative">
+          <div ref={filterAnchorRef} className="relative">
             <Button variant="secondary" size="sm" onClick={() => toggleMenu("filter")}>
               <Filter className="size-3.5" />
               Filters{config.filters.length ? ` (${config.filters.length})` : ""}
             </Button>
-            {filterOpen ? (
-              <div className="absolute top-10 right-0 z-40 w-[min(32rem,calc(100vw-2rem))] rounded-lg border border-hairline bg-surface p-3 shadow-xl">
-                <div className="mb-3 flex items-center justify-between">
-                  <span className="font-medium text-sm">Shared filters</span>
-                  <Button size="sm" variant="secondary" disabled={!canEdit} onClick={addFilter}>
-                    <Plus className="size-3.5" /> Add
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {config.filters.length === 0 ? (
-                    <p className="py-3 text-center text-muted-foreground text-xs">No filters</p>
-                  ) : null}
-                  {config.filters.map((filter) => (
-                    <div key={filter.id} className="grid grid-cols-[1fr_8rem_1fr_auto] gap-2">
-                      <MenuSelect
-                        label="Filter property"
-                        value={filter.propertyId}
-                        options={propertyOptions}
-                        disabled={!canEdit}
-                        onChange={(propertyId) =>
-                          roots.filters.get(filter.id)?.set("propertyId", propertyId)
-                        }
-                      />
-                      <MenuSelect
-                        label="Filter operator"
-                        value={filter.operator}
-                        disabled={!canEdit}
-                        options={[
-                          { value: "contains", label: "Contains" },
-                          { value: "equals", label: "Equals" },
-                          { value: "not-equals", label: "Not equal" },
-                          { value: "is-empty", label: "Is empty" },
-                          { value: "is-not-empty", label: "Not empty" },
-                          { value: "before", label: "Before" },
-                          { value: "after", label: "After" },
-                        ]}
-                        onChange={(operator) =>
-                          roots.filters.get(filter.id)?.set("operator", operator)
-                        }
-                      />
-                      <input
-                        defaultValue={filter.value}
-                        disabled={
-                          !canEdit ||
-                          filter.operator === "is-empty" ||
-                          filter.operator === "is-not-empty"
-                        }
-                        onBlur={(event) =>
-                          roots.filters
-                            .get(filter.id)
-                            ?.set("value", event.currentTarget.value.slice(0, 500))
-                        }
-                        className={cn(fieldClass, "h-9 min-w-0 text-xs")}
-                        placeholder="Value"
-                      />
-                      <button
-                        type="button"
-                        disabled={!canEdit}
-                        onClick={() => removeFilter(filter.id)}
-                        className="flex size-9 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed"
-                        aria-label="Remove filter"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+            {filterOpen && typeof document !== "undefined"
+              ? createPortal(
+                  <div
+                    ref={toolbarFloatingRef}
+                    className="fixed z-[170] rounded-lg border border-hairline bg-surface p-3 shadow-xl"
+                    style={filterPosition}
+                  >
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="font-medium text-sm">Shared filters</span>
+                      <Button size="sm" variant="secondary" disabled={!canEdit} onClick={addFilter}>
+                        <Plus className="size-3.5" /> Add
+                      </Button>
                     </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+                    <div className="space-y-2">
+                      {config.filters.length === 0 ? (
+                        <p className="py-3 text-center text-muted-foreground text-xs">No filters</p>
+                      ) : null}
+                      {config.filters.map((filter) => (
+                        <div key={filter.id} className="grid grid-cols-[1fr_8rem_1fr_auto] gap-2">
+                          <MenuSelect
+                            label="Filter property"
+                            value={filter.propertyId}
+                            options={propertyOptions}
+                            disabled={!canEdit}
+                            onChange={(propertyId) =>
+                              roots.filters.get(filter.id)?.set("propertyId", propertyId)
+                            }
+                          />
+                          <MenuSelect
+                            label="Filter operator"
+                            value={filter.operator}
+                            disabled={!canEdit}
+                            options={[
+                              { value: "contains", label: "Contains" },
+                              { value: "equals", label: "Equals" },
+                              { value: "not-equals", label: "Not equal" },
+                              { value: "is-empty", label: "Is empty" },
+                              { value: "is-not-empty", label: "Not empty" },
+                              { value: "before", label: "Before" },
+                              { value: "after", label: "After" },
+                            ]}
+                            onChange={(operator) =>
+                              roots.filters.get(filter.id)?.set("operator", operator)
+                            }
+                          />
+                          <input
+                            defaultValue={filter.value}
+                            disabled={
+                              !canEdit ||
+                              filter.operator === "is-empty" ||
+                              filter.operator === "is-not-empty"
+                            }
+                            onBlur={(event) =>
+                              roots.filters
+                                .get(filter.id)
+                                ?.set("value", event.currentTarget.value.slice(0, 500))
+                            }
+                            className={cn(fieldClass, "h-9 min-w-0 text-xs")}
+                            placeholder="Value"
+                          />
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => removeFilter(filter.id)}
+                            className="flex size-9 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed"
+                            aria-label="Remove filter"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>,
+                  document.body,
+                )
+              : null}
           </div>
-          <div className="relative">
+          <div ref={sortAnchorRef} className="relative">
             <Button variant="secondary" size="sm" onClick={() => toggleMenu("sort")}>
               <ArrowUpDown className="size-3.5" />
               Sort{config.sorts.length ? ` (${config.sorts.length})` : ""}
             </Button>
-            {sortOpen ? (
-              <div className="absolute top-10 right-0 z-40 w-[min(28rem,calc(100vw-2rem))] rounded-lg border border-hairline bg-surface p-3 shadow-xl">
-                <div className="mb-3 flex items-center justify-between">
-                  <span className="font-medium text-sm">Shared sort</span>
-                  <Button size="sm" variant="secondary" disabled={!canEdit} onClick={addSort}>
-                    <Plus className="size-3.5" /> Add
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {config.sorts.length === 0 ? (
-                    <p className="py-3 text-center text-muted-foreground text-xs">No sort rules</p>
-                  ) : null}
-                  {config.sorts.map((sort) => (
-                    <div key={sort.id} className="grid grid-cols-[1fr_8rem_auto] gap-2">
-                      <MenuSelect
-                        label="Sort property"
-                        value={sort.propertyId}
-                        options={propertyOptions}
-                        disabled={!canEdit}
-                        onChange={(propertyId) =>
-                          roots.sorts.get(sort.id)?.set("propertyId", propertyId)
-                        }
-                      />
-                      <MenuSelect
-                        label="Sort direction"
-                        value={sort.direction}
-                        options={[
-                          { value: "asc", label: "Ascending" },
-                          { value: "desc", label: "Descending" },
-                        ]}
-                        disabled={!canEdit}
-                        onChange={(direction) =>
-                          roots.sorts.get(sort.id)?.set("direction", direction)
-                        }
-                      />
-                      <button
-                        type="button"
-                        disabled={!canEdit}
-                        onClick={() => removeSort(sort.id)}
-                        className="flex size-9 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed"
-                        aria-label="Remove sort"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+            {sortOpen && typeof document !== "undefined"
+              ? createPortal(
+                  <div
+                    ref={toolbarFloatingRef}
+                    className="fixed z-[170] rounded-lg border border-hairline bg-surface p-3 shadow-xl"
+                    style={sortPosition}
+                  >
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="font-medium text-sm">Shared sort</span>
+                      <Button size="sm" variant="secondary" disabled={!canEdit} onClick={addSort}>
+                        <Plus className="size-3.5" /> Add
+                      </Button>
                     </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
+                    <div className="space-y-2">
+                      {config.sorts.length === 0 ? (
+                        <p className="py-3 text-center text-muted-foreground text-xs">
+                          No sort rules
+                        </p>
+                      ) : null}
+                      {config.sorts.map((sort) => (
+                        <div key={sort.id} className="grid grid-cols-[1fr_8rem_auto] gap-2">
+                          <MenuSelect
+                            label="Sort property"
+                            value={sort.propertyId}
+                            options={propertyOptions}
+                            disabled={!canEdit}
+                            onChange={(propertyId) =>
+                              roots.sorts.get(sort.id)?.set("propertyId", propertyId)
+                            }
+                          />
+                          <MenuSelect
+                            label="Sort direction"
+                            value={sort.direction}
+                            options={[
+                              { value: "asc", label: "Ascending" },
+                              { value: "desc", label: "Descending" },
+                            ]}
+                            disabled={!canEdit}
+                            onChange={(direction) =>
+                              roots.sorts.get(sort.id)?.set("direction", direction)
+                            }
+                          />
+                          <button
+                            type="button"
+                            disabled={!canEdit}
+                            onClick={() => removeSort(sort.id)}
+                            className="flex size-9 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed"
+                            aria-label="Remove sort"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>,
+                  document.body,
+                )
+              : null}
           </div>
-          <div className="relative">
+          <div ref={columnAnchorRef} className="relative">
             <Button variant="secondary" size="sm" onClick={() => toggleMenu("column")}>
               <LayoutList className="size-3.5" /> Fields
             </Button>
-            {columnOpen ? (
-              <div className="absolute top-10 right-0 z-40 w-64 rounded-lg border border-hairline bg-surface p-2 shadow-xl">
-                {propertyOptions.map((property) => {
-                  const checked = config.visibleColumns.includes(property.value);
-                  return (
+            {columnOpen && typeof document !== "undefined"
+              ? createPortal(
+                  <div
+                    ref={toolbarFloatingRef}
+                    className="fixed z-[170] rounded-lg border border-hairline bg-surface p-2 shadow-xl"
+                    style={columnPosition}
+                  >
+                    {propertyOptions.map((property) => {
+                      const checked = config.visibleColumns.includes(property.value);
+                      return (
+                        <button
+                          type="button"
+                          key={property.value}
+                          disabled={!canEdit || (property.value === "title" && checked)}
+                          onClick={() => setVisible(property.value, !checked)}
+                          className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left text-xs hover:bg-foreground/[0.05] disabled:cursor-not-allowed"
+                        >
+                          <span
+                            className={cn(
+                              "flex size-4 items-center justify-center rounded-xs border border-hairline",
+                              checked && "border-accent bg-accent text-accent-foreground",
+                            )}
+                          >
+                            {checked ? <Check className="size-3" /> : null}
+                          </span>
+                          <span className="truncate">{property.label}</span>
+                        </button>
+                      );
+                    })}
                     <button
                       type="button"
-                      key={property.value}
-                      disabled={!canEdit || (property.value === "title" && checked)}
-                      onClick={() => setVisible(property.value, !checked)}
-                      className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-2 text-left text-xs hover:bg-foreground/[0.05] disabled:cursor-not-allowed"
+                      disabled={!canEdit}
+                      onClick={() => {
+                        setOpenMenu(null);
+                        setPropertyDialog(true);
+                      }}
+                      className="mt-1 flex w-full cursor-pointer items-center gap-2 border-hairline border-t px-2 pt-2 text-accent text-xs disabled:cursor-not-allowed"
                     >
-                      <span
-                        className={cn(
-                          "flex size-4 items-center justify-center rounded-xs border border-hairline",
-                          checked && "border-accent bg-accent text-accent-foreground",
-                        )}
-                      >
-                        {checked ? <Check className="size-3" /> : null}
-                      </span>
-                      <span className="truncate">{property.label}</span>
+                      <Plus className="size-3.5" /> New property
                     </button>
-                  );
-                })}
-                <button
-                  type="button"
-                  disabled={!canEdit}
-                  onClick={() => {
-                    setOpenMenu(null);
-                    setPropertyDialog(true);
-                  }}
-                  className="mt-1 flex w-full cursor-pointer items-center gap-2 border-hairline border-t px-2 pt-2 text-accent text-xs disabled:cursor-not-allowed"
-                >
-                  <Plus className="size-3.5" /> New property
-                </button>
-              </div>
-            ) : null}
+                  </div>,
+                  document.body,
+                )
+              : null}
           </div>
         </div>
         <span className="rounded-full border border-info/30 bg-info/8 px-2 py-1 text-[10px] text-info">

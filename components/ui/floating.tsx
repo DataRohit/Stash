@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export function useOutsideClose(
   onClose: () => void,
@@ -42,4 +42,53 @@ export function anchoredPosition(
       ? below
       : Math.max(margin, rect.top - height - gap);
   return { left, top, width };
+}
+
+export function useAnchoredPosition({
+  open,
+  anchorRef,
+  floatingRef,
+  estimatedHeight = 320,
+  requestedWidth,
+  align = "start",
+}: {
+  open: boolean;
+  anchorRef: RefObject<HTMLElement | null>;
+  floatingRef: RefObject<HTMLElement | null>;
+  estimatedHeight?: number;
+  requestedWidth?: number;
+  align?: "start" | "end";
+}) {
+  const [position, setPosition] = useState({ left: 8, top: 8, width: requestedWidth ?? 240 });
+  const updatePosition = useCallback(() => {
+    const rect = anchorRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPosition(
+      anchoredPosition(
+        rect,
+        floatingRef.current?.offsetHeight ?? estimatedHeight,
+        requestedWidth ?? rect.width,
+        align,
+      ),
+    );
+  }, [align, anchorRef, estimatedHeight, floatingRef, requestedWidth]);
+
+  useLayoutEffect(() => {
+    if (open) updatePosition();
+  }, [open, updatePosition]);
+
+  useEffect(() => {
+    if (!open) return;
+    const observer = new ResizeObserver(updatePosition);
+    if (floatingRef.current) observer.observe(floatingRef.current);
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [floatingRef, open, updatePosition]);
+
+  return position;
 }

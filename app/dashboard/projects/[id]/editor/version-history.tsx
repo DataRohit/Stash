@@ -14,7 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DiffView } from "@/app/dashboard/projects/[id]/editor/diff-view";
 import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
@@ -25,6 +25,7 @@ import { BoardView } from "@/components/board-view";
 import { ChartView } from "@/components/chart-view";
 import { SheetTable } from "@/components/sheet-table";
 import { DataLoader, DataState } from "@/components/ui/data-state";
+import { useAnchoredPosition, useOutsideClose } from "@/components/ui/floating";
 import { notify } from "@/components/ui/toast";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { ViewPreview } from "@/components/view-preview";
@@ -100,24 +101,13 @@ function VersionSelect({
   onChange: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const floatingRef = useRef<HTMLDivElement>(null);
+  const ref = useOutsideClose(() => setOpen(false), floatingRef);
+  const position = useAnchoredPosition({ open, anchorRef: ref, floatingRef, estimatedHeight: 288 });
   const current = snapshots.find((snapshot) => snapshot.id === value) ?? null;
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (!target?.closest("[data-version-select]")) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
-
   return (
-    <div data-version-select className="relative min-w-0 flex-1">
+    <div ref={ref} className="relative min-w-0 flex-1">
       <span className="mb-1 block font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
         {label}
       </span>
@@ -157,59 +147,64 @@ function VersionSelect({
           aria-hidden="true"
         />
       </button>
-      {open ? (
-        <div
-          role="listbox"
-          aria-label={label}
-          className="thin-scrollbar absolute top-full left-0 z-30 mt-1 max-h-72 w-full space-y-1 overflow-auto rounded-sm border border-hairline bg-surface p-1 shadow-glass"
-        >
-          {snapshots.map((snapshot) => {
-            const selected = snapshot.id === value;
-            return (
-              <button
-                type="button"
-                role="option"
-                aria-selected={selected}
-                key={snapshot.id}
-                onClick={() => {
-                  onChange(snapshot.id);
-                  setOpen(false);
-                }}
-                className={cn(
-                  "flex w-full cursor-pointer items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-left transition-colors hover:bg-foreground/[0.06]",
-                  selected ? "bg-foreground/[0.06]" : "",
-                )}
-              >
-                <span className="flex min-w-0 flex-col">
-                  <span
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={floatingRef}
+              role="listbox"
+              aria-label={label}
+              className="thin-scrollbar fixed z-[180] max-h-72 space-y-1 overflow-auto rounded-sm border border-hairline bg-surface p-1 shadow-glass"
+              style={position}
+            >
+              {snapshots.map((snapshot) => {
+                const selected = snapshot.id === value;
+                return (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    key={snapshot.id}
+                    onClick={() => {
+                      onChange(snapshot.id);
+                      setOpen(false);
+                    }}
                     className={cn(
-                      "truncate text-xs",
-                      selected ? "text-foreground" : "text-muted-foreground",
+                      "flex w-full cursor-pointer items-center justify-between gap-2 rounded-xs px-2.5 py-1.5 text-left transition-colors hover:bg-foreground/[0.06]",
+                      selected ? "bg-foreground/[0.06]" : "",
                     )}
                   >
-                    v{snapshot.versionNumber}
-                    <span className="text-muted-foreground/70"> · </span>
-                    <time
-                      dateTime={new Date(snapshot.createdAt).toISOString()}
-                      title={formatDateTime(snapshot.createdAt)}
-                    >
-                      {formatRelativeTime(snapshot.createdAt)}
-                    </time>
-                    <span className="text-muted-foreground/70"> · </span>
-                    {snapshot.authorName}
-                  </span>
-                  <span className="truncate text-[11px] text-muted-foreground leading-snug">
-                    {historyEmail(snapshot.authorEmail)}
-                  </span>
-                </span>
-                {selected ? (
-                  <Check className="size-3.5 shrink-0 text-foreground" aria-hidden="true" />
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
+                    <span className="flex min-w-0 flex-col">
+                      <span
+                        className={cn(
+                          "truncate text-xs",
+                          selected ? "text-foreground" : "text-muted-foreground",
+                        )}
+                      >
+                        v{snapshot.versionNumber}
+                        <span className="text-muted-foreground/70"> · </span>
+                        <time
+                          dateTime={new Date(snapshot.createdAt).toISOString()}
+                          title={formatDateTime(snapshot.createdAt)}
+                        >
+                          {formatRelativeTime(snapshot.createdAt)}
+                        </time>
+                        <span className="text-muted-foreground/70"> · </span>
+                        {snapshot.authorName}
+                      </span>
+                      <span className="truncate text-[11px] text-muted-foreground leading-snug">
+                        {historyEmail(snapshot.authorEmail)}
+                      </span>
+                    </span>
+                    {selected ? (
+                      <Check className="size-3.5 shrink-0 text-foreground" aria-hidden="true" />
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

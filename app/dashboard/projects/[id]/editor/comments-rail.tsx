@@ -2,7 +2,9 @@
 
 import { Check, CornerDownRight, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { DataLoader, DataState } from "@/components/ui/data-state";
+import { useAnchoredPosition } from "@/components/ui/floating";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
@@ -106,6 +108,7 @@ function Composer({
   const [cursor, setCursor] = useState(0);
   const [pending, setPending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const floatingRef = useRef<HTMLUListElement>(null);
   const pendingCaret = useRef<number | null>(null);
   const token = mentionToken(body, cursor);
 
@@ -132,6 +135,12 @@ function Composer({
       )
       .slice(0, 6);
   }, [candidates, token]);
+  const position = useAnchoredPosition({
+    open: options.length > 0,
+    anchorRef: textareaRef,
+    floatingRef,
+    estimatedHeight: 192,
+  });
 
   const addMention = (candidate: MentionCandidate) => {
     if (!token) {
@@ -187,29 +196,36 @@ function Composer({
         aria-disabled={disabled || pending}
         className="min-h-20 resize-none rounded-md border border-hairline bg-[var(--editor-control)] px-3 py-2 text-foreground text-xs outline-none transition-colors placeholder:text-muted-foreground/45 focus:border-accent/50 focus:ring-1 focus:ring-ring disabled:opacity-60"
       />
-      {options.length > 0 ? (
-        <ul className="absolute top-20 right-2 left-2 z-20 max-h-48 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl">
-          {options.map((candidate) => (
-            <li key={candidate.userId}>
-              <button
-                type="button"
-                onClick={() => addMention(candidate)}
-                className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-foreground/[0.06]"
-              >
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/10 font-medium font-mono text-[10px] text-muted-foreground">
-                  {initials(candidate.name)}
-                </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-xs">{candidate.name}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    {candidate.email}
-                  </span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      {options.length > 0 && typeof document !== "undefined"
+        ? createPortal(
+            <ul
+              ref={floatingRef}
+              className="fixed z-[180] max-h-48 overflow-auto rounded-md border border-hairline bg-surface p-1 shadow-xl"
+              style={position}
+            >
+              {options.map((candidate) => (
+                <li key={candidate.userId}>
+                  <button
+                    type="button"
+                    onClick={() => addMention(candidate)}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors hover:bg-foreground/[0.06]"
+                  >
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-foreground/10 font-medium font-mono text-[10px] text-muted-foreground">
+                      {initials(candidate.name)}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs">{candidate.name}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {candidate.email}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>,
+            document.body,
+          )
+        : null}
       <button
         type="submit"
         disabled={disabled || pending || body.trim().length === 0}

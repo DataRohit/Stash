@@ -11,7 +11,8 @@ import {
   Package,
   Printer,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type * as Y from "yjs";
 import { referencedAssetIds } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import {
@@ -35,6 +36,7 @@ import {
   type ViewExportModel,
 } from "@/app/dashboard/projects/[id]/editor/lib/export-doc";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { useAnchoredPosition, useOutsideClose } from "@/components/ui/floating";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -57,20 +59,16 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
   const convex = useConvex();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<Action | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onPointer = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", onPointer);
-    return () => window.removeEventListener("mousedown", onPointer);
-  }, [open]);
+  const floatingRef = useRef<HTMLDivElement>(null);
+  const ref = useOutsideClose(() => setOpen(false), floatingRef);
+  const position = useAnchoredPosition({
+    open,
+    anchorRef: ref,
+    floatingRef,
+    estimatedHeight: 400,
+    requestedWidth: 240,
+    align: "end",
+  });
 
   const run = async (action: Action, task: () => Promise<void> | void) => {
     if (busy) {
@@ -275,117 +273,126 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
           <Download className="size-4" aria-hidden="true" />
         )}
       </button>
-      {open ? (
-        <div className="absolute top-9 right-0 z-[80] w-60 overflow-hidden rounded-lg border border-hairline bg-surface p-1 shadow-xl">
-          <p className="px-2 py-1.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
-            Export this file
-          </p>
-          {isMd ? (
-            <ExportItem
-              icon={<FileText className="size-4 text-accent" aria-hidden="true" />}
-              label="Markdown"
-              hint=".md"
-              loading={busy === "md"}
-              disabled={Boolean(busy)}
-              onClick={() => run("md", () => exportMarkdown(fileNode, content))}
-            />
-          ) : null}
-          {isBoard && ydoc ? (
-            <ExportItem
-              icon={<FileText className="size-4 text-accent" aria-hidden="true" />}
-              label="Board as Markdown"
-              hint=".md"
-              loading={busy === "md"}
-              disabled={Boolean(busy)}
-              onClick={() => run("md", () => exportBoardMarkdown(fileNode, ydoc))}
-            />
-          ) : null}
-          {isSheet && ydoc ? (
-            <ExportItem
-              icon={<FileSpreadsheet className="size-4 text-accent" aria-hidden="true" />}
-              label="Spreadsheet"
-              hint=".csv"
-              loading={busy === "csv"}
-              disabled={Boolean(busy)}
-              onClick={() => run("csv", () => exportSheetCsv(fileNode, ydoc))}
-            />
-          ) : null}
-          {isView && ydoc ? (
-            <ExportItem
-              icon={<FileSpreadsheet className="size-4 text-accent" aria-hidden="true" />}
-              label="View records"
-              hint=".csv"
-              loading={busy === "csv"}
-              disabled={Boolean(busy)}
-              onClick={() => run("csv", async () => exportViewCsv(fileNode, await loadViewModel()))}
-            />
-          ) : null}
-          {isChart && ydoc ? (
-            <ExportItem
-              icon={<BarChart3 className="size-4 text-warning" aria-hidden="true" />}
-              label="Chart image"
-              hint=".svg"
-              loading={busy === "svg"}
-              disabled={Boolean(busy)}
-              onClick={() =>
-                run("svg", async () => exportChartSvg(fileNode, await loadChartModel()))
-              }
-            />
-          ) : null}
-          <ExportItem
-            icon={<Globe className="size-4 text-info" aria-hidden="true" />}
-            label="Web page"
-            hint=".html"
-            loading={busy === "html"}
-            disabled={Boolean(busy)}
-            onClick={() =>
-              run("html", async () =>
-                isSheet && ydoc
-                  ? exportSheetHtml(fileNode, ydoc)
-                  : isBoard && ydoc
-                    ? exportBoardHtml(fileNode, ydoc)
-                    : isView && ydoc
-                      ? exportViewHtml(fileNode, await loadViewModel())
-                      : isChart && ydoc
-                        ? exportChartHtml(fileNode, await loadChartModel())
-                        : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
-              )
-            }
-          />
-          <ExportItem
-            icon={<Printer className="size-4 text-warning" aria-hidden="true" />}
-            label="Print / PDF"
-            hint="print"
-            loading={busy === "pdf"}
-            disabled={Boolean(busy)}
-            onClick={() =>
-              run("pdf", async () =>
-                isSheet && ydoc
-                  ? exportSheetPdf(fileNode, ydoc)
-                  : isBoard && ydoc
-                    ? exportBoardPdf(fileNode, ydoc)
-                    : isView && ydoc
-                      ? exportViewPdf(fileNode, await loadViewModel())
-                      : isChart && ydoc
-                        ? exportChartPdf(fileNode, await loadChartModel())
-                        : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
-              )
-            }
-          />
-          <div className="my-1 h-px bg-hairline" />
-          <p className="px-2 py-1.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
-            Export project
-          </p>
-          <ExportItem
-            icon={<Package className="size-4 text-muted-foreground" aria-hidden="true" />}
-            label="Whole project"
-            hint=".zip"
-            loading={busy === "zip"}
-            disabled={Boolean(busy)}
-            onClick={exportZip}
-          />
-        </div>
-      ) : null}
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={floatingRef}
+              className="fixed z-[180] overflow-hidden rounded-lg border border-hairline bg-surface p-1 shadow-xl"
+              style={position}
+            >
+              <p className="px-2 py-1.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+                Export this file
+              </p>
+              {isMd ? (
+                <ExportItem
+                  icon={<FileText className="size-4 text-accent" aria-hidden="true" />}
+                  label="Markdown"
+                  hint=".md"
+                  loading={busy === "md"}
+                  disabled={Boolean(busy)}
+                  onClick={() => run("md", () => exportMarkdown(fileNode, content))}
+                />
+              ) : null}
+              {isBoard && ydoc ? (
+                <ExportItem
+                  icon={<FileText className="size-4 text-accent" aria-hidden="true" />}
+                  label="Board as Markdown"
+                  hint=".md"
+                  loading={busy === "md"}
+                  disabled={Boolean(busy)}
+                  onClick={() => run("md", () => exportBoardMarkdown(fileNode, ydoc))}
+                />
+              ) : null}
+              {isSheet && ydoc ? (
+                <ExportItem
+                  icon={<FileSpreadsheet className="size-4 text-accent" aria-hidden="true" />}
+                  label="Spreadsheet"
+                  hint=".csv"
+                  loading={busy === "csv"}
+                  disabled={Boolean(busy)}
+                  onClick={() => run("csv", () => exportSheetCsv(fileNode, ydoc))}
+                />
+              ) : null}
+              {isView && ydoc ? (
+                <ExportItem
+                  icon={<FileSpreadsheet className="size-4 text-accent" aria-hidden="true" />}
+                  label="View records"
+                  hint=".csv"
+                  loading={busy === "csv"}
+                  disabled={Boolean(busy)}
+                  onClick={() =>
+                    run("csv", async () => exportViewCsv(fileNode, await loadViewModel()))
+                  }
+                />
+              ) : null}
+              {isChart && ydoc ? (
+                <ExportItem
+                  icon={<BarChart3 className="size-4 text-warning" aria-hidden="true" />}
+                  label="Chart image"
+                  hint=".svg"
+                  loading={busy === "svg"}
+                  disabled={Boolean(busy)}
+                  onClick={() =>
+                    run("svg", async () => exportChartSvg(fileNode, await loadChartModel()))
+                  }
+                />
+              ) : null}
+              <ExportItem
+                icon={<Globe className="size-4 text-info" aria-hidden="true" />}
+                label="Web page"
+                hint=".html"
+                loading={busy === "html"}
+                disabled={Boolean(busy)}
+                onClick={() =>
+                  run("html", async () =>
+                    isSheet && ydoc
+                      ? exportSheetHtml(fileNode, ydoc)
+                      : isBoard && ydoc
+                        ? exportBoardHtml(fileNode, ydoc)
+                        : isView && ydoc
+                          ? exportViewHtml(fileNode, await loadViewModel())
+                          : isChart && ydoc
+                            ? exportChartHtml(fileNode, await loadChartModel())
+                            : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
+                  )
+                }
+              />
+              <ExportItem
+                icon={<Printer className="size-4 text-warning" aria-hidden="true" />}
+                label="Print / PDF"
+                hint="print"
+                loading={busy === "pdf"}
+                disabled={Boolean(busy)}
+                onClick={() =>
+                  run("pdf", async () =>
+                    isSheet && ydoc
+                      ? exportSheetPdf(fileNode, ydoc)
+                      : isBoard && ydoc
+                        ? exportBoardPdf(fileNode, ydoc)
+                        : isView && ydoc
+                          ? exportViewPdf(fileNode, await loadViewModel())
+                          : isChart && ydoc
+                            ? exportChartPdf(fileNode, await loadChartModel())
+                            : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
+                  )
+                }
+              />
+              <div className="my-1 h-px bg-hairline" />
+              <p className="px-2 py-1.5 font-medium font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+                Export project
+              </p>
+              <ExportItem
+                icon={<Package className="size-4 text-muted-foreground" aria-hidden="true" />}
+                label="Whole project"
+                hint=".zip"
+                loading={busy === "zip"}
+                disabled={Boolean(busy)}
+                onClick={exportZip}
+              />
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

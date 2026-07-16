@@ -4,7 +4,8 @@ import { useQuery } from "convex/react";
 import { Check, ChevronDown, Loader2, Send, Trash2, UserPlus, X } from "lucide-react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useEffect, useRef, useState, useTransition } from "react";
+import { type FormEvent, useRef, useState, useTransition } from "react";
+import { createPortal } from "react-dom";
 import {
   cancelInvitation,
   inviteMember,
@@ -15,6 +16,7 @@ import { RoleBadge } from "@/components/dashboard/role-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataLoader } from "@/components/ui/data-state";
+import { useAnchoredPosition, useOutsideClose } from "@/components/ui/floating";
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 
@@ -68,21 +70,15 @@ function RoleSelect({
   disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const floatingRef = useRef<HTMLDivElement>(null);
+  const ref = useOutsideClose(() => setOpen(false), floatingRef);
+  const position = useAnchoredPosition({
+    open,
+    anchorRef: ref,
+    floatingRef,
+    estimatedHeight: 96,
+  });
   const currentLabel = value === "org:admin" ? "Admin" : "Member";
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
 
   return (
     <div ref={ref} className="relative w-36">
@@ -100,33 +96,38 @@ function RoleSelect({
           aria-hidden="true"
         />
       </button>
-      {open ? (
-        <div
-          role="listbox"
-          aria-label="Role"
-          className="absolute top-full left-0 z-20 mt-1 w-full space-y-1 overflow-hidden rounded-sm border border-hairline bg-surface p-1 shadow-glass"
-        >
-          {ROLE_OPTIONS.map((option) => {
-            const selected = option.value === value;
-            return (
-              <button
-                type="button"
-                role="option"
-                aria-selected={selected}
-                key={option.value}
-                onClick={() => {
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-                className={`flex w-full cursor-pointer items-center justify-between rounded-xs px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-foreground/[0.06] ${selected ? "text-foreground" : "text-muted-foreground"}`}
-              >
-                {option.label}
-                {selected ? <Check className="size-3.5 shrink-0" aria-hidden="true" /> : null}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={floatingRef}
+              role="listbox"
+              aria-label="Role"
+              className="fixed z-[180] space-y-1 overflow-hidden rounded-sm border border-hairline bg-surface p-1 shadow-glass"
+              style={position}
+            >
+              {ROLE_OPTIONS.map((option) => {
+                const selected = option.value === value;
+                return (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    key={option.value}
+                    onClick={() => {
+                      onChange(option.value);
+                      setOpen(false);
+                    }}
+                    className={`flex w-full cursor-pointer items-center justify-between rounded-xs px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-foreground/[0.06] ${selected ? "text-foreground" : "text-muted-foreground"}`}
+                  >
+                    {option.label}
+                    {selected ? <Check className="size-3.5 shrink-0" aria-hidden="true" /> : null}
+                  </button>
+                );
+              })}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
