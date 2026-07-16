@@ -54,6 +54,7 @@ import {
   maxProjectBytes,
   requireProjectAdmin,
   requireProjectEditor,
+  syncDocumentNode,
 } from "./documents";
 import {
   clampInt,
@@ -63,8 +64,8 @@ import {
 } from "./limits";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
-const COMPACT_THRESHOLD = 200;
 const COMPACT_OVERLAP = 64;
+const COMPACT_DELAY_MS = 2_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HISTORY_MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 const MAX_HISTORY_PER_DOC = 50;
@@ -463,15 +464,15 @@ async function materializedContent(
 }
 
 async function materializedState(ctx: QueryCtx, doc: Doc<"documents">): Promise<ArrayBuffer> {
-  if (doc.contentState) {
-    return doc.contentState;
-  }
   const ydoc = new Y.Doc();
-  const snapshot = await baseSnapshot(ctx, doc._id);
-  if (snapshot) {
-    Y.applyUpdate(ydoc, new Uint8Array(snapshot.snapshot));
+  let baseSeq = doc.contentSeq ?? 0;
+  if (doc.contentState) {
+    Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+  } else {
+    const snapshot = await baseSnapshot(ctx, doc._id);
+    if (snapshot) Y.applyUpdate(ydoc, new Uint8Array(snapshot.snapshot));
+    baseSeq = snapshot?.throughSeq ?? 0;
   }
-  const baseSeq = snapshot?.throughSeq ?? 0;
   const updates = await ctx.db
     .query("yjsUpdates")
     .withIndex("by_document", (q) => q.eq("documentId", doc._id).gt("seq", baseSeq))
@@ -570,8 +571,8 @@ export const rebuildBoardIndexes = internalMutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (doc?.kind !== "file" || doc.fileType !== "board" || !doc.contentState) return;
-    await syncBoardLinkIndex(ctx, doc, doc.contentState, "system");
+    if (doc?.kind !== "file" || doc.fileType !== "board") return;
+    await syncBoardLinkIndex(ctx, doc, await materializedState(ctx, doc), "system");
   },
 });
 
@@ -642,13 +643,13 @@ async function chartSourceForConfig(
     source?.kind !== "file" ||
     source.projectId !== projectId ||
     source.fileType !== "sheet" ||
-    !source.contentState ||
     (await isInactiveTree(ctx, source))
   ) {
     return null;
   }
+  const state = await materializedState(ctx, source);
   const sheet = new Y.Doc();
-  Y.applyUpdate(sheet, new Uint8Array(source.contentState));
+  Y.applyUpdate(sheet, new Uint8Array(state));
   const result = chartSourceFromSheet(sheet, source._id, source.name);
   sheet.destroy();
   return result;
@@ -1092,15 +1093,7 @@ export const pushUpdateV2 = mutation({
     if (!materialized) {
       return { ok: false as const, error: "invalid-update" as const };
     }
-    const {
-      content,
-      state,
-      replayed,
-      size: newSize,
-      sheetMeta,
-      boardMeta,
-      cleanupUpdate,
-    } = materialized;
+    const { content, state, size: newSize, sheetMeta, boardMeta, cleanupUpdate } = materialized;
     if (
       byteLength(content) > MAX_FILE_BYTES ||
       (doc.fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
@@ -1140,18 +1133,21 @@ export const pushUpdateV2 = mutation({
       });
     }
     await syncBoardLinkIndex(ctx, doc, state, access.userId);
+    const now = Date.now();
+    const scheduleCompaction = !doc.compactionScheduledAt || doc.compactionScheduledAt <= now;
     await ctx.db.patch(doc._id, {
       content,
-      contentSeq: seq,
-      contentState: state,
       size: newSize,
       sheetMeta,
       boardMeta,
-      updatedAt: Date.now(),
+      ...(scheduleCompaction ? { compactionScheduledAt: now + COMPACT_DELAY_MS } : {}),
+      updatedAt: now,
     });
+    await syncDocumentNode(ctx, doc._id);
+    await ctx.db.patch(access.project._id, { lastSavedAt: now });
     await addProjectBytes(ctx, access.project, newSize - doc.size);
-    if (seq % COMPACT_THRESHOLD === 0 || replayed > COMPACT_THRESHOLD) {
-      await ctx.scheduler.runAfter(0, internal.collab.compactDocument, {
+    if (scheduleCompaction) {
+      await ctx.scheduler.runAfter(COMPACT_DELAY_MS, internal.collab.compactDocument, {
         documentId: args.documentId,
       });
     }
@@ -1253,7 +1249,9 @@ export const replaceSheetFromImport = mutation({
       size,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, doc._id);
     await syncBoardLinkIndex(ctx, doc, state, access.userId);
+    await ctx.db.patch(access.project._id, { lastSavedAt: now });
     await addProjectBytes(ctx, access.project, size - doc.size);
     return { ok: true as const, seq };
   },
@@ -1278,6 +1276,7 @@ export const compactDocument = internalMutation({
       .collect();
     if (updates.length === 0) {
       ydoc.destroy();
+      await ctx.db.patch(doc._id, { compactionScheduledAt: undefined });
       return;
     }
     let maxSeq = baseSeq;
@@ -1305,6 +1304,11 @@ export const compactDocument = internalMutation({
         updatedAt: Date.now(),
       });
     }
+    await ctx.db.patch(doc._id, {
+      contentState: encoded,
+      contentSeq: maxSeq,
+      compactionScheduledAt: undefined,
+    });
     const pruneThrough = maxSeq - COMPACT_OVERLAP;
     if (pruneThrough <= 0) {
       return;
@@ -1381,6 +1385,7 @@ export const ensureSeed = mutation({
       sheetMeta,
       boardMeta,
     });
+    await syncDocumentNode(ctx, doc._id);
     if (size !== doc.size) {
       const projectRow = await ctx.db.get(doc.projectId);
       if (projectRow) await addProjectBytes(ctx, projectRow, size - doc.size);
@@ -1626,7 +1631,9 @@ export const restoreHistory = mutation({
       boardMeta: restoredBoardMeta,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, doc._id);
     await syncBoardLinkIndex(ctx, doc, state, access.userId);
+    await ctx.db.patch(access.project._id, { lastSavedAt: now });
     await addProjectBytes(ctx, access.project, restoredSize - doc.size);
     await pruneDocumentHistory(ctx, doc);
     await recordProjectEvent(ctx, {
@@ -1643,12 +1650,13 @@ export const restoreHistory = mutation({
 });
 
 export const pruneHistory = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const rows = await ctx.db
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
       .query("yjsSnapshots")
       .withIndex("by_purpose_created", (q) => q.eq("purpose", "history"))
-      .take(200);
+      .paginate({ cursor: args.cursor ?? null, numItems: 200, maximumRowsRead: 200 });
+    const rows = page.page;
     const documentIds = [...new Set(rows.map((row) => row.documentId))];
     for (const documentId of documentIds) {
       const doc = await ctx.db.get(documentId);
@@ -1657,5 +1665,11 @@ export const pruneHistory = internalMutation({
       }
       await pruneDocumentHistory(ctx, doc);
     }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.collab.pruneHistory, {
+        cursor: page.continueCursor,
+      });
+    }
+    return { scanned: rows.length, isDone: page.isDone };
   },
 });

@@ -1,7 +1,23 @@
 import type { NextConfig } from "next";
 
+function origin(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return "";
+  }
+}
+
+const clerkOrigin = origin(process.env.CLERK_JWT_ISSUER_DOMAIN);
+const clerkScriptSource = clerkOrigin ? ` ${clerkOrigin}` : "";
+const challengeOrigin = ["https:", "", "challenges.cloudflare.com"].join("/");
+const scriptPolicy =
+  process.env.NODE_ENV === "development"
+    ? `script-src 'self' 'unsafe-inline' 'unsafe-eval'${clerkScriptSource} ${challengeOrigin}`
+    : `script-src 'self' 'unsafe-inline'${clerkScriptSource} ${challengeOrigin}`;
+
 const nextConfig: NextConfig = {
-  allowedDevOrigins: ["integral-mentally-alpaca.ngrok-free.app"],
   experimental: {
     viewTransition: true,
   },
@@ -15,7 +31,7 @@ const nextConfig: NextConfig = {
         headers: [
           {
             key: "Content-Security-Policy",
-            value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
+            value: `default-src 'self'; ${scriptPolicy}; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; font-src 'self' https: data:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src 'self' blob: ${challengeOrigin}; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'`,
           },
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },

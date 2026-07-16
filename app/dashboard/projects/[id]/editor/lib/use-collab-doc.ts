@@ -38,6 +38,7 @@ const DEFAULT_CURSOR_COLOR = { color: "#1d4ed8", light: "#1d4ed833" };
 const FLUSH_MS = 200;
 const HEARTBEAT_MS = 5_000;
 const OUTBOX_PREFIX = "stash:collab-outbox:";
+const OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type CollabViewer = {
   sessionId: string;
@@ -100,6 +101,19 @@ function base64ToBytes(value: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+function readOutbox(value: string): { createdAt: number | null; update: Uint8Array } {
+  try {
+    const parsed = JSON.parse(value) as { createdAt?: unknown; update?: unknown };
+    if (typeof parsed.update === "string") {
+      return {
+        createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : null,
+        update: base64ToBytes(parsed.update),
+      };
+    }
+  } catch {}
+  return { createdAt: null, update: base64ToBytes(value) };
 }
 
 function createSessionId(): string {
@@ -239,7 +253,13 @@ export function useCollabDoc(
           localStorage.removeItem(outboxKey);
           return;
         }
-        localStorage.setItem(outboxKey, bytesToBase64(Y.mergeUpdates(updates)));
+        localStorage.setItem(
+          outboxKey,
+          JSON.stringify({
+            createdAt: Date.now(),
+            update: bytesToBase64(Y.mergeUpdates(updates)),
+          }),
+        );
       } catch (error) {
         reportAsync(error);
       }
@@ -260,7 +280,7 @@ export function useCollabDoc(
       const recovered: Uint8Array[] = [];
       for (let index = 0; index < localStorage.length; index += 1) {
         const key = localStorage.key(index);
-        if (!key?.startsWith(outboxPrefix)) {
+        if (!key?.startsWith(OUTBOX_PREFIX)) {
           continue;
         }
         const value = localStorage.getItem(key);
@@ -268,7 +288,14 @@ export function useCollabDoc(
           continue;
         }
         try {
-          recovered.push(base64ToBytes(value));
+          const outbox = readOutbox(value);
+          if (outbox.createdAt !== null && Date.now() - outbox.createdAt > OUTBOX_RETENTION_MS) {
+            localStorage.removeItem(key);
+            index -= 1;
+            continue;
+          }
+          if (!key.startsWith(outboxPrefix)) continue;
+          recovered.push(outbox.update);
           recoveredEntries.set(key, value);
         } catch {
           localStorage.removeItem(key);
@@ -450,9 +477,9 @@ export function useCollabDoc(
     if (isEmpty) {
       setReady(true);
     }
-    if (isEmpty && !seeded.current) {
+    if (isEmpty && canEdit && !seeded.current) {
       seeded.current = true;
-      void ensureSeed({ documentId: documentId as Id<"documents"> });
+      void ensureSeed({ documentId: documentId as Id<"documents"> }).catch(reportAsync);
     }
     if (appliedSeq.current !== queryAfterSeq) {
       setPullCursor({ documentId, afterSeq: appliedSeq.current });
@@ -515,7 +542,14 @@ export function useCollabDoc(
         })
         .catch(reportAsync);
     };
-    const onChange = () => send();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onChange = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        send();
+      }, 300);
+    };
     const onPageHide = () => beaconLeave(documentId, sessionId);
     awareness.on("update", onChange);
     window.addEventListener("pagehide", onPageHide);
@@ -523,6 +557,7 @@ export function useCollabDoc(
     const interval = setInterval(send, HEARTBEAT_MS);
     return () => {
       awareness.off("update", onChange);
+      if (timer !== null) clearTimeout(timer);
       window.removeEventListener("pagehide", onPageHide);
       clearInterval(interval);
       beaconLeave(documentId, sessionId);

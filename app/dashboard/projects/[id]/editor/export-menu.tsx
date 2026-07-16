@@ -95,11 +95,20 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
 
   const exportZip = () =>
     run("zip", async () => {
-      const bundle = await convex.query(api.documents.exportBundle, { projectId });
-      if (!bundle) {
+      const nodes: BundleNode[] = [];
+      let cursor: string | undefined;
+      let projectTitle = "Project";
+      do {
+        const page = await convex.query(api.documents.exportBundle, { projectId, cursor });
+        if (!page) break;
+        projectTitle = page.projectTitle;
+        nodes.push(...(page.nodes as BundleNode[]));
+        cursor = page.cursor ?? undefined;
+      } while (cursor);
+      if (nodes.length === 0) {
         throw new Error("empty-project");
       }
-      await exportProjectZip(bundle.projectTitle, bundle.nodes as BundleNode[]);
+      await exportProjectZip(projectTitle, nodes);
     });
 
   const nodesWithRenderedAssets = async () => {

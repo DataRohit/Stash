@@ -30,6 +30,7 @@ const schema = defineSchema({
     updatedAt: v.number(),
   })
     .index("by_clerk_org", ["clerkOrgId"])
+    .index("by_user", ["memberUserId"])
     .index("by_org_email", ["clerkOrgId", "email"])
     .index("by_org_user", ["clerkOrgId", "memberUserId"])
     .index("by_email", ["email"]),
@@ -51,6 +52,8 @@ const schema = defineSchema({
     deletedAt: v.optional(v.number()),
     createdBy: v.string(),
     createdAt: v.number(),
+    lastSavedAt: v.optional(v.number()),
+    treeProjectedAt: v.optional(v.number()),
     updatedAt: v.number(),
   })
     .index("by_clerk_org", ["clerkOrgId"])
@@ -109,6 +112,7 @@ const schema = defineSchema({
     content: v.string(),
     contentSeq: v.optional(v.number()),
     contentState: v.optional(v.bytes()),
+    compactionScheduledAt: v.optional(v.number()),
     sheetMeta: v.optional(v.object({ rows: v.number(), cols: v.number() })),
     boardMeta: v.optional(v.object({ columns: v.number(), cards: v.number() })),
     storageId: v.union(v.id("_storage"), v.null()),
@@ -131,8 +135,33 @@ const schema = defineSchema({
     })
     .searchIndex("search_name", {
       searchField: "name",
-      filterFields: ["clerkOrgId"],
+      filterFields: ["projectId", "clerkOrgId"],
     }),
+
+  documentNodes: defineTable({
+    documentId: v.id("documents"),
+    projectId: v.id("projects"),
+    parentId: v.union(v.id("documents"), v.null()),
+    kind: v.union(v.literal("folder"), v.literal("file"), v.literal("asset")),
+    name: v.string(),
+    fileType: v.union(
+      v.literal("md"),
+      v.literal("html"),
+      v.literal("sheet"),
+      v.literal("board"),
+      v.literal("view"),
+      v.literal("chart"),
+      v.null(),
+    ),
+    size: v.number(),
+    mimeType: v.union(v.string(), v.null()),
+    hasAsset: v.boolean(),
+    deletingAt: v.optional(v.number()),
+    trashedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_project", ["projectId"]),
 
   documentProperties: defineTable({
     projectId: v.id("projects"),
@@ -377,6 +406,7 @@ const schema = defineSchema({
     updatedAt: v.number(),
   })
     .index("by_project", ["projectId"])
+    .index("by_user", ["userId"])
     .index("by_project_user", ["projectId", "userId"]),
 
   projectEvents: defineTable({

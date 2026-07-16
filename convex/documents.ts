@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
+import { canAdministerProject, canEditProject, projectRole } from "../lib/access-policy";
 import { isRasterAssetMimeType } from "../lib/asset-formats";
 import { inspectBoard, MAX_BOARD_STORED_BYTES, seedBoard } from "../lib/board-model";
 import { type ChartSource, resolveChartData } from "../lib/chart-data";
@@ -83,6 +84,56 @@ export function byteLength(text: string): number {
 
 export function isInactive(doc: Doc<"documents">): boolean {
   return Boolean(doc.deletingAt || doc.trashedAt);
+}
+
+export async function syncDocumentNode(
+  ctx: MutationCtx,
+  documentId: Id<"documents">,
+): Promise<void> {
+  const [doc, existing] = await Promise.all([
+    ctx.db.get(documentId),
+    ctx.db
+      .query("documentNodes")
+      .withIndex("by_document", (q) => q.eq("documentId", documentId))
+      .unique(),
+  ]);
+  if (!doc) {
+    if (existing) await ctx.db.delete(existing._id);
+    return;
+  }
+  const value = {
+    documentId: doc._id,
+    projectId: doc.projectId,
+    parentId: doc.parentId,
+    kind: doc.kind,
+    name: doc.name,
+    fileType: doc.fileType,
+    size: doc.size,
+    mimeType: doc.mimeType,
+    hasAsset: doc.kind === "asset" && doc.storageId !== null,
+    deletingAt: doc.deletingAt,
+    trashedAt: doc.trashedAt,
+    updatedAt: doc.updatedAt,
+  };
+  if (existing) await ctx.db.patch(existing._id, value);
+  else await ctx.db.insert("documentNodes", value);
+}
+
+export async function documentState(
+  ctx: QueryCtx,
+  doc: Doc<"documents">,
+): Promise<ArrayBuffer | null> {
+  const updates = await ctx.db
+    .query("yjsUpdates")
+    .withIndex("by_document", (q) => q.eq("documentId", doc._id).gt("seq", doc.contentSeq ?? 0))
+    .collect();
+  if (!doc.contentState && updates.length === 0) return null;
+  const ydoc = new Y.Doc();
+  if (doc.contentState) Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+  for (const update of updates) Y.applyUpdate(ydoc, new Uint8Array(update.update));
+  const state = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+  ydoc.destroy();
+  return state;
 }
 
 export async function isInactiveTree(
@@ -234,7 +285,7 @@ export async function requireProjectEditor(
   projectId: Id<"projects">,
 ): Promise<Access> {
   const access = await accessForProject(ctx, projectId);
-  if (!access || !(access.isAdmin || access.level === "editor")) {
+  if (!access || !canEditProject(projectRole(access.isAdmin, access.level))) {
     throw new Error("Forbidden");
   }
   return access;
@@ -245,7 +296,7 @@ export async function requireProjectAdmin(
   projectId: Id<"projects">,
 ): Promise<Access> {
   const access = await accessForProject(ctx, projectId);
-  if (!access?.isAdmin) {
+  if (!access || !canAdministerProject(projectRole(access.isAdmin, access.level))) {
     throw new Error("Forbidden");
   }
   return access;
@@ -461,15 +512,22 @@ function descendantIds(docs: Doc<"documents">[], rootId: Id<"documents">): Set<I
   return ids;
 }
 
-function visibleDocuments(docs: Doc<"documents">[]): Doc<"documents">[] {
+export function visibleDocuments<
+  T extends {
+    _id: Id<"documents">;
+    parentId: Id<"documents"> | null;
+    deletingAt?: number;
+    trashedAt?: number;
+  },
+>(docs: T[]): T[] {
   const byId = new Map(docs.map((doc) => [doc._id, doc]));
   const hidden = new Set<Id<"documents">>();
   for (const doc of docs) {
-    let current: Doc<"documents"> | undefined = doc;
+    let current: T | undefined = doc;
     const seen = new Set<Id<"documents">>();
     while (current && !seen.has(current._id)) {
       seen.add(current._id);
-      if (isInactive(current)) {
+      if (current.deletingAt || current.trashedAt) {
         hidden.add(doc._id);
         break;
       }
@@ -673,6 +731,7 @@ export const purgeSubtreeBatch = internalMutation({
       }
       freed += doc.size;
       await ctx.db.delete(doc._id);
+      await syncDocumentNode(ctx, doc._id);
     }
     await accountFreed();
     await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, args);
@@ -729,10 +788,51 @@ export const listByProject = query({
     if (!access) {
       return [];
     }
-    const docs = await ctx.db
-      .query("documents")
+    const projected = await ctx.db
+      .query("documentNodes")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
       .collect();
+    const docs: Array<{
+      _id: Id<"documents">;
+      parentId: Id<"documents"> | null;
+      kind: "folder" | "file" | "asset";
+      name: string;
+      fileType: Doc<"documents">["fileType"];
+      size: number;
+      mimeType: string | null;
+      hasAsset: boolean;
+      deletingAt?: number;
+      trashedAt?: number;
+    }> = access.project.treeProjectedAt
+      ? projected.map((node) => ({
+          _id: node.documentId,
+          parentId: node.parentId,
+          kind: node.kind,
+          name: node.name,
+          fileType: node.fileType,
+          size: node.size,
+          mimeType: node.mimeType,
+          hasAsset: node.hasAsset,
+          deletingAt: node.deletingAt,
+          trashedAt: node.trashedAt,
+        }))
+      : (
+          await ctx.db
+            .query("documents")
+            .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+            .collect()
+        ).map((doc) => ({
+          _id: doc._id,
+          parentId: doc.parentId,
+          kind: doc.kind,
+          name: doc.name,
+          fileType: doc.fileType,
+          size: doc.size,
+          mimeType: doc.mimeType,
+          hasAsset: doc.kind === "asset" && doc.storageId !== null,
+          deletingAt: doc.deletingAt,
+          trashedAt: doc.trashedAt,
+        }));
     return visibleDocuments(docs).map((doc) => ({
       id: doc._id,
       parentId: doc.parentId,
@@ -741,9 +841,50 @@ export const listByProject = query({
       fileType: doc.fileType,
       size: doc.size,
       mimeType: doc.mimeType,
-      hasAsset: doc.kind === "asset" && doc.storageId !== null,
+      hasAsset: doc.hasAsset,
       assetUrl: null,
     }));
+  },
+});
+
+export const backfillDocumentNodes = internalMutation({
+  args: { projectId: v.id("projects"), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .paginate({ cursor: args.cursor ?? null, numItems: 5, maximumRowsRead: 5 });
+    for (const doc of page.page) await syncDocumentNode(ctx, doc._id);
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.documents.backfillDocumentNodes, {
+        projectId: args.projectId,
+        cursor: page.continueCursor,
+      });
+    } else {
+      await ctx.db.patch(args.projectId, { treeProjectedAt: Date.now() });
+    }
+    return { scanned: page.page.length, isDone: page.isDone };
+  },
+});
+
+export const scheduleDocumentNodeBackfill = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("projects")
+      .paginate({ cursor: args.cursor ?? null, numItems: 50, maximumRowsRead: 50 });
+    for (const project of page.page) {
+      if (!project.treeProjectedAt && !project.deletedAt) {
+        await ctx.scheduler.runAfter(0, internal.documents.backfillDocumentNodes, {
+          projectId: project._id,
+        });
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.documents.scheduleDocumentNodeBackfill, {
+        cursor: page.continueCursor,
+      });
+    }
   },
 });
 
@@ -782,11 +923,7 @@ export const getDocument = query({
     if (!doc) {
       return null;
     }
-    const docs = await ctx.db
-      .query("documents")
-      .withIndex("by_project", (q) => q.eq("projectId", doc.projectId))
-      .collect();
-    if (!visibleDocuments(docs).some((visible) => visible._id === doc._id)) {
+    if (await isInactiveTree(ctx, doc)) {
       return null;
     }
     const access = await accessForProject(ctx, doc.projectId);
@@ -859,6 +996,7 @@ export const createFolder = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, id);
     await recordProjectEvent(ctx, {
       projectId: args.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -978,6 +1116,7 @@ export const createFile = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, id);
     if (contentState) {
       await ctx.db.insert("yjsUpdates", {
         documentId: id,
@@ -1092,6 +1231,7 @@ export const createFromTemplate = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, id);
     await ctx.db.insert("yjsUpdates", {
       documentId: id,
       seq: 1,
@@ -1189,6 +1329,7 @@ export const importDocuments = mutation({
         createdAt: now,
         updatedAt: now,
       });
+      await syncDocumentNode(ctx, id);
       await ctx.db.insert("yjsUpdates", { documentId: id, seq: 1, update: state, createdAt: now });
       ids.push(id);
     }
@@ -1272,6 +1413,7 @@ export const importSheet = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, id);
     for (const [index, update] of args.updates.entries()) {
       await ctx.db.insert("yjsUpdates", {
         documentId: id,
@@ -1312,6 +1454,7 @@ export const rename = mutation({
     }
     if (name === doc.name) return;
     await ctx.db.patch(doc._id, { name, fileType, updatedAt: Date.now() });
+    await syncDocumentNode(ctx, doc._id);
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -1350,6 +1493,7 @@ export const move = mutation({
       throw new Error("name-taken");
     }
     await ctx.db.patch(doc._id, { parentId: args.parentId, updatedAt: Date.now() });
+    await syncDocumentNode(ctx, doc._id);
     const [previousParent, nextParent] = await Promise.all([
       doc.parentId ? ctx.db.get(doc.parentId) : null,
       args.parentId ? ctx.db.get(args.parentId) : null,
@@ -1415,7 +1559,7 @@ export const duplicate = mutation({
     if (total + doc.size > max) {
       throw new Error("project-full");
     }
-    let state: ArrayBuffer | null = doc.contentState ?? null;
+    let state = await documentState(ctx, doc);
     if (!state && doc.fileType === "sheet") {
       const seedDoc = new Y.Doc();
       seedSheet(seedDoc);
@@ -1462,6 +1606,7 @@ export const duplicate = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, id);
     if (state) {
       await ctx.db.insert("yjsUpdates", { documentId: id, seq: 1, update: state, createdAt: now });
     }
@@ -1548,6 +1693,8 @@ export const setContent = mutation({
       throw new Error("project-full");
     }
     await ctx.db.patch(doc._id, { content: args.content, size: newSize, updatedAt: Date.now() });
+    await syncDocumentNode(ctx, doc._id);
+    await ctx.db.patch(access.project._id, { lastSavedAt: Date.now() });
     await addProjectBytes(ctx, access.project, newSize - doc.size);
   },
 });
@@ -1561,6 +1708,7 @@ export const remove = mutation({
     }
     const access = await requireProjectEditor(ctx, doc.projectId);
     await ctx.db.patch(doc._id, { trashedAt: Date.now(), updatedAt: Date.now() });
+    await syncDocumentNode(ctx, doc._id);
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -1635,6 +1783,7 @@ export const restoreDocument = mutation({
       name,
       updatedAt: Date.now(),
     });
+    await syncDocumentNode(ctx, doc._id);
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -1653,7 +1802,7 @@ export const deleteForever = mutation({
     if (!doc?.trashedAt || doc.deletingAt) {
       throw new Error("not-found");
     }
-    const access = await requireProjectAdmin(ctx, doc.projectId);
+    const access = await requireProjectEditor(ctx, doc.projectId);
     await recordProjectEvent(ctx, {
       projectId: doc.projectId,
       clerkOrgId: access.project.clerkOrgId,
@@ -1662,6 +1811,7 @@ export const deleteForever = mutation({
       targetName: doc.name,
     });
     await ctx.db.patch(doc._id, { deletingAt: Date.now(), updatedAt: Date.now() });
+    await syncDocumentNode(ctx, doc._id);
     await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, {
       projectId: access.project._id,
       rootId: doc._id,
@@ -1680,6 +1830,7 @@ export const purgeExpiredTrash = internalMutation({
     for (const doc of rows) {
       if ((doc.trashedAt ?? 0) < cutoff && !doc.deletingAt) {
         await ctx.db.patch(doc._id, { deletingAt: Date.now(), updatedAt: Date.now() });
+        await syncDocumentNode(ctx, doc._id);
         await ctx.scheduler.runAfter(0, internal.documents.purgeSubtreeBatch, {
           projectId: doc.projectId,
           rootId: doc._id,
@@ -1764,6 +1915,7 @@ export const createAsset = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, id);
     await addProjectBytes(ctx, access.project, meta.size);
     await recordProjectEvent(ctx, {
       projectId: args.projectId,
@@ -1850,24 +2002,27 @@ export const search = query({
 });
 
 export const exportBundle = query({
-  args: { projectId: v.id("projects") },
+  args: { projectId: v.id("projects"), cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const access = await accessForProject(ctx, args.projectId);
     if (!access) {
       return null;
     }
-    const docs = await ctx.db
+    const page = await ctx.db
       .query("documents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
-      .collect();
-    const visible = visibleDocuments(docs);
-    const visibleById = new Map(visible.map((doc) => [doc._id, doc]));
+      .paginate({ cursor: args.cursor ?? null, numItems: 5, maximumRowsRead: 5 });
+    const visible = [];
+    for (const doc of page.page) {
+      if (!(await isInactiveTree(ctx, doc))) visible.push(doc);
+    }
     const nodes = await Promise.all(
       visible.map(async (doc) => {
         let content = doc.kind === "file" ? doc.content : "";
-        if (doc.kind === "file" && doc.fileType === "sheet" && doc.contentState) {
+        const state = doc.kind === "file" ? await documentState(ctx, doc) : null;
+        if (doc.kind === "file" && doc.fileType === "sheet" && state) {
           const ydoc = new Y.Doc();
-          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          Y.applyUpdate(ydoc, new Uint8Array(state));
           const model = sheetRenderModel(ydoc);
           content = serializeDelimited(
             model.rows.map((row) => row.values),
@@ -1875,9 +2030,9 @@ export const exportBundle = query({
             "\r\n",
           );
           ydoc.destroy();
-        } else if (doc.kind === "file" && doc.fileType === "board" && doc.contentState) {
+        } else if (doc.kind === "file" && doc.fileType === "board" && state) {
           const ydoc = new Y.Doc();
-          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          Y.applyUpdate(ydoc, new Uint8Array(state));
           const model = boardRenderModel(ydoc);
           content = model.columns
             .map((column) =>
@@ -1890,26 +2045,33 @@ export const exportBundle = query({
             )
             .join("\n\n");
           ydoc.destroy();
-        } else if (doc.kind === "file" && doc.fileType === "view" && doc.contentState) {
+        } else if (doc.kind === "file" && doc.fileType === "view" && state) {
           const ydoc = new Y.Doc();
-          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          Y.applyUpdate(ydoc, new Uint8Array(state));
           content = JSON.stringify(inspectView(ydoc), null, 2);
           ydoc.destroy();
-        } else if (doc.kind === "file" && doc.fileType === "chart" && doc.contentState) {
+        } else if (doc.kind === "file" && doc.fileType === "chart" && state) {
           const ydoc = new Y.Doc();
-          Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+          Y.applyUpdate(ydoc, new Uint8Array(state));
           const config = chartRenderModel(ydoc);
           ydoc.destroy();
           const sourceId = config.sourceDocId
             ? ctx.db.normalizeId("documents", config.sourceDocId)
             : null;
-          const sourceDoc = sourceId ? visibleById.get(sourceId) : undefined;
+          const sourceDoc = sourceId ? await ctx.db.get(sourceId) : null;
           let source: ChartSource | null = null;
-          if (sourceDoc?.fileType === "sheet" && sourceDoc.contentState) {
-            const sheet = new Y.Doc();
-            Y.applyUpdate(sheet, new Uint8Array(sourceDoc.contentState));
-            source = chartSourceFromSheet(sheet, sourceDoc._id, sourceDoc.name);
-            sheet.destroy();
+          if (
+            sourceDoc?.projectId === args.projectId &&
+            sourceDoc.fileType === "sheet" &&
+            !(await isInactiveTree(ctx, sourceDoc))
+          ) {
+            const sourceState = await documentState(ctx, sourceDoc);
+            if (sourceState) {
+              const sheet = new Y.Doc();
+              Y.applyUpdate(sheet, new Uint8Array(sourceState));
+              source = chartSourceFromSheet(sheet, sourceDoc._id, sourceDoc.name);
+              sheet.destroy();
+            }
           }
           content = renderChartSvg(resolveChartData(config, source));
         }
@@ -1926,7 +2088,11 @@ export const exportBundle = query({
         };
       }),
     );
-    return { projectTitle: access.project.title, nodes };
+    return {
+      projectTitle: access.project.title,
+      nodes,
+      cursor: page.isDone ? null : page.continueCursor,
+    };
   },
 });
 

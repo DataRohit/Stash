@@ -1890,7 +1890,7 @@ export function ProjectEditor({
       <TrashPanel
         open={trashOpen}
         projectId={pid}
-        isAdmin={isAdmin}
+        canPurge={canEdit}
         onClose={() => setTrashOpen(false)}
       />
       {selectedFileId && selectedNode?.kind === "file" ? (

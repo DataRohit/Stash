@@ -92,7 +92,7 @@ export const saveFromDocument = mutation({
     if (doc.contentState) Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
     const updates = await ctx.db
       .query("yjsUpdates")
-      .withIndex("by_document", (q) => q.eq("documentId", doc._id))
+      .withIndex("by_document", (q) => q.eq("documentId", doc._id).gt("seq", doc.contentSeq ?? 0))
       .collect();
     for (const update of updates) Y.applyUpdate(ydoc, new Uint8Array(update.update));
     if (doc.fileType === "board") {

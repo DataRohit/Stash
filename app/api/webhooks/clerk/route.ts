@@ -5,10 +5,14 @@ import {
   purgeDeletedOrganization,
   webhookDeleteAcceptedMember,
   webhookDeleteInvitation,
+  webhookDeleteUser,
+  webhookSetOrgPlanLimits,
   webhookUpsertAcceptedMember,
   webhookUpsertPendingInvitation,
 } from "@/lib/convex-server";
+import { limitsFromFeatures } from "@/lib/plan-limits";
 import { logServerError, logServerWarning } from "@/lib/server-log";
+import { getUserSubscriptionFor } from "@/lib/subscription";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -29,12 +33,6 @@ async function primaryEmailForUser(userId: string, fallback: string): Promise<st
     });
     return fallback.toLowerCase();
   }
-}
-
-async function revokeUserSessions(userId: string): Promise<void> {
-  const client = await clerkClient();
-  const sessions = await client.sessions.getSessionList({ userId, status: "active" });
-  await Promise.all(sessions.data.map((session) => client.sessions.revokeSession(session.id)));
 }
 
 export async function POST(req: NextRequest) {
@@ -88,7 +86,38 @@ export async function POST(req: NextRequest) {
         const userId = event.data.public_user_data.user_id;
         if (orgId && userId) {
           await webhookDeleteAcceptedMember(orgId, userId);
-          await revokeUserSessions(userId);
+        }
+        break;
+      }
+      case "user.deleted": {
+        if (event.data.id) await webhookDeleteUser(event.data.id);
+        break;
+      }
+      case "subscription.created":
+      case "subscription.updated":
+      case "subscription.active":
+      case "subscription.pastDue": {
+        const userId = event.data.payer.user_id;
+        if (!userId) break;
+        const subscription = await getUserSubscriptionFor(userId, true);
+        if (subscription.degraded) throw new Error("subscription-unavailable");
+        const limits = limitsFromFeatures(subscription.featureSlugs);
+        const client = await clerkClient();
+        const memberships = await client.users.getOrganizationMembershipList({
+          userId,
+          limit: 100,
+        });
+        for (const membership of memberships.data) {
+          const organization = await client.organizations.getOrganization({
+            organizationId: membership.organization.id,
+          });
+          if (organization.createdBy !== userId) continue;
+          await webhookSetOrgPlanLimits(organization.id, {
+            maxProjects: limits.maxProjectsPerOrganization,
+            maxCollaborators: limits.maxCollaboratorsPerProject,
+            maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
+            historyRetentionDays: limits.historyRetentionDays,
+          });
         }
         break;
       }

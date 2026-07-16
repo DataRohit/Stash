@@ -368,6 +368,21 @@ export const webhookDeleteMember = mutation({
   },
 });
 
+export const webhookDeleteUser = mutation({
+  args: { secret: v.string(), memberUserId: v.string() },
+  handler: async (ctx, args) => {
+    requireWebhookSecret(args.secret);
+    const memberships = await ctx.db
+      .query("members")
+      .withIndex("by_user", (q) => q.eq("memberUserId", args.memberUserId))
+      .collect();
+    for (const membership of memberships) {
+      await ctx.db.delete(membership._id);
+      await purgeAccessForUser(ctx, membership.clerkOrgId, args.memberUserId);
+    }
+  },
+});
+
 export const webhookUpsertInvitation = mutation({
   args: {
     secret: v.string(),

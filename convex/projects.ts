@@ -11,9 +11,9 @@ import { action, internalMutation, internalQuery, mutation, query } from "./_gen
 import { recordProjectEvent } from "./activity";
 import {
   addProjectBytes,
-  isInactive,
   purgeDocCollabBatch,
   purgeRecentDocumentBatch,
+  syncDocumentNode,
 } from "./documents";
 import {
   clampInt,
@@ -22,6 +22,7 @@ import {
   HARD_MAX_COLLABORATORS,
   HARD_MAX_PROJECTS,
 } from "./limits";
+import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const MAX_TAGS = 8;
 const MAX_TAG_LENGTH = 24;
@@ -33,6 +34,17 @@ const STUCK_CLONE_MS = 15 * 60 * 1000;
 const MAX_PROJECT_IMAGE_BYTES = 2 * 1024 * 1024;
 
 type Caller = { userId: string; isAdmin: boolean };
+type CloneManifestNode = {
+  id: Doc<"documents">["_id"];
+  parentId: Doc<"documents">["parentId"];
+  kind: Doc<"documents">["kind"];
+  name: string;
+  fileType: Doc<"documents">["fileType"];
+  size: number;
+  mimeType: string | null;
+  trashedAt?: number;
+  deletingAt?: number;
+};
 type GrantLevel = "viewer" | "editor";
 
 function normalizeTags(tags: string[]): string[] {
@@ -85,23 +97,6 @@ function accessRowsFor(ctx: QueryCtx, projectId: Doc<"projects">["_id"]) {
     .collect();
 }
 
-async function lastSavedAtFor(
-  ctx: QueryCtx,
-  projectId: Doc<"projects">["_id"],
-): Promise<number | null> {
-  const docs = await ctx.db
-    .query("documents")
-    .withIndex("by_project", (q) => q.eq("projectId", projectId))
-    .collect();
-  let latest: number | null = null;
-  for (const doc of docs) {
-    if (doc.kind !== "folder" && !isInactive(doc)) {
-      latest = latest === null ? doc.updatedAt : Math.max(latest, doc.updatedAt);
-    }
-  }
-  return latest;
-}
-
 async function privilegedMemberIds(ctx: QueryCtx, clerkOrgId: string): Promise<string[]> {
   const members = await ctx.db
     .query("members")
@@ -138,6 +133,25 @@ export async function purgeAccessForUser(
     .collect();
   for (const grant of grants) {
     await ctx.db.delete(grant._id);
+  }
+  const recent = await ctx.db
+    .query("recentDocuments")
+    .withIndex("by_user_org_time", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
+    .collect();
+  for (const row of recent) await ctx.db.delete(row._id);
+  const notifications = await ctx.db
+    .query("notifications")
+    .withIndex("by_recipient_org", (q) =>
+      q.eq("recipientUserId", userId).eq("clerkOrgId", clerkOrgId),
+    )
+    .collect();
+  for (const row of notifications) await ctx.db.delete(row._id);
+  const preferences = await ctx.db
+    .query("notificationPreferences")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  for (const row of preferences) {
+    if (row.clerkOrgId === clerkOrgId) await ctx.db.delete(row._id);
   }
 }
 
@@ -232,6 +246,7 @@ export const purgeBatch = internalMutation({
       }
       freed += document.size;
       await ctx.db.delete(document._id);
+      await syncDocumentNode(ctx, document._id);
     }
     if (documents.length > 0) {
       await accountFreed();
@@ -382,7 +397,7 @@ export const get = query({
       tags: project.tags,
       imageUrl: project.imageStorageId ? await ctx.storage.getUrl(project.imageStorageId) : null,
       createdAt: project.createdAt,
-      lastSavedAt: await lastSavedAtFor(ctx, project._id),
+      lastSavedAt: project.lastSavedAt ?? null,
       isAdmin: caller.isAdmin,
       viewerLevel,
       viewerIsOwner: viewerMember?.isOwner === true,
@@ -461,6 +476,7 @@ export const create = mutation({
       byteVersion: 0,
       createdBy: userId,
       createdAt: now,
+      treeProjectedAt: now,
       updatedAt: now,
     });
   },
@@ -473,6 +489,14 @@ export const prepareDuplicate = internalMutation({
     if (!source || source.deletedAt || (source.cloneState && source.cloneState !== "ready"))
       throw new Error("not-found");
     const userId = await requireAdmin(ctx, source.clerkOrgId);
+    if (
+      !(await enforceWriteRateLimit(ctx, "project-clone", source._id, userId, {
+        capacity: 2,
+        refillPerSecond: 1 / 30,
+      }))
+    ) {
+      throw new Error("rate-limited");
+    }
     const projects = (
       await ctx.db
         .query("projects")
@@ -486,21 +510,6 @@ export const prepareDuplicate = internalMutation({
     let title = `${source.title} (copy)`;
     for (let index = 2; titles.has(title.toLowerCase()); index += 1)
       title = `${source.title} (copy ${index})`;
-    const docs = await ctx.db
-      .query("documents")
-      .withIndex("by_project", (q) => q.eq("projectId", source._id))
-      .collect();
-    const byId = new Map(docs.map((doc) => [doc._id, doc]));
-    const visible = docs.filter((doc) => {
-      let current: Doc<"documents"> | undefined = doc;
-      const seen = new Set<string>();
-      while (current && !seen.has(current._id)) {
-        seen.add(current._id);
-        if (isInactive(current)) return false;
-        current = current.parentId ? byId.get(current.parentId) : undefined;
-      }
-      return true;
-    });
     const now = Date.now();
     const projectId = await ctx.db.insert("projects", {
       clerkOrgId: source.clerkOrgId,
@@ -514,9 +523,10 @@ export const prepareDuplicate = internalMutation({
       byteVersion: 0,
       cloneState: "copying",
       cloneCopied: 0,
-      cloneTotal: visible.length,
+      cloneTotal: 0,
       createdBy: userId,
       createdAt: now,
+      treeProjectedAt: now,
       updatedAt: now,
     });
     const properties = await ctx.db
@@ -526,20 +536,6 @@ export const prepareDuplicate = internalMutation({
     return {
       projectId,
       sourceImageStorageId: source.imageStorageId,
-      docs: visible.map((doc) => ({
-        id: doc._id,
-        parentId: doc.parentId,
-        kind: doc.kind,
-        name: doc.name,
-        fileType: doc.fileType,
-        content: doc.content,
-        contentState: doc.contentState,
-        sheetMeta: doc.sheetMeta,
-        boardMeta: doc.boardMeta,
-        storageId: doc.storageId,
-        mimeType: doc.mimeType,
-        size: doc.size,
-      })),
       properties: properties.map((property) => ({
         id: property._id,
         name: property.name,
@@ -551,6 +547,59 @@ export const prepareDuplicate = internalMutation({
         updatedAt: property.updatedAt,
       })),
     };
+  },
+});
+
+export const cloneManifestPage = internalQuery({
+  args: { projectId: v.id("projects"), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .paginate({ cursor: args.cursor ?? null, numItems: 5, maximumRowsRead: 5 });
+    return {
+      nodes: page.page.map((doc) => ({
+        id: doc._id,
+        parentId: doc.parentId,
+        kind: doc.kind,
+        name: doc.name,
+        fileType: doc.fileType,
+        size: doc.size,
+        mimeType: doc.mimeType,
+        trashedAt: doc.trashedAt,
+        deletingAt: doc.deletingAt,
+      })),
+      cursor: page.isDone ? null : page.continueCursor,
+    };
+  },
+});
+
+export const cloneNodeContent = internalQuery({
+  args: { documentId: v.id("documents") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.documentId);
+    if (!doc) throw new Error("clone-source-missing");
+    const updates = await ctx.db
+      .query("yjsUpdates")
+      .withIndex("by_document", (q) => q.eq("documentId", doc._id).gt("seq", doc.contentSeq ?? 0))
+      .collect();
+    return {
+      content: doc.content,
+      contentState: doc.contentState,
+      sheetMeta: doc.sheetMeta,
+      boardMeta: doc.boardMeta,
+      storageId: doc.storageId,
+      updates: updates.map((row) => row.update),
+    };
+  },
+});
+
+export const setDuplicateTotal = internalMutation({
+  args: { projectId: v.id("projects"), total: v.number() },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (project?.cloneState !== "copying") throw new Error("clone-stopped");
+    await ctx.db.patch(project._id, { cloneTotal: args.total, updatedAt: Date.now() });
   },
 });
 
@@ -746,6 +795,7 @@ export const insertDuplicateNode = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+    await syncDocumentNode(ctx, id);
     if (args.kind === "file" && args.contentState)
       await ctx.db.insert("yjsUpdates", {
         documentId: id,
@@ -809,6 +859,7 @@ export const remapDuplicateBoardLinks = internalMutation({
       createdAt: Date.now(),
     });
     await ctx.db.patch(doc._id, { content, contentSeq: 2, contentState: state, size });
+    await syncDocumentNode(ctx, doc._id);
     await ctx.scheduler.runAfter(0, internal.collab.rebuildBoardIndexes, {
       documentId: doc._id,
     });
@@ -866,6 +917,7 @@ export const remapDuplicateViewProperties = internalMutation({
       createdAt: Date.now(),
     });
     await ctx.db.patch(doc._id, { content, contentSeq: 2, contentState: state, size });
+    await syncDocumentNode(ctx, doc._id);
     await addProjectBytes(ctx, projectRow, size - doc.size);
   },
 });
@@ -941,6 +993,31 @@ export const duplicateProject = action({
     const mapped = new Map<string, Doc<"documents">["_id"]>();
     const mappedProperties = new Map<string, Doc<"documentProperties">["_id"]>();
     try {
+      const manifest: CloneManifestNode[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await ctx.runQuery(internal.projects.cloneManifestPage, {
+          projectId: args.sourceProjectId,
+          cursor,
+        });
+        manifest.push(...page.nodes);
+        cursor = page.cursor ?? undefined;
+      } while (cursor);
+      const byId = new Map(manifest.map((node) => [node.id, node]));
+      const docs = manifest.filter((node) => {
+        let current: (typeof manifest)[number] | undefined = node;
+        const seen = new Set<string>();
+        while (current && !seen.has(current.id)) {
+          seen.add(current.id);
+          if (current.trashedAt || current.deletingAt) return false;
+          current = current.parentId ? byId.get(current.parentId) : undefined;
+        }
+        return !current;
+      });
+      await ctx.runMutation(internal.projects.setDuplicateTotal, {
+        projectId: prepared.projectId,
+        total: docs.length,
+      });
       for (const property of prepared.properties) {
         const id = await ctx.runMutation(internal.projects.insertDuplicateProperty, {
           projectId: prepared.projectId,
@@ -954,15 +1031,26 @@ export const duplicateProject = action({
         });
         mappedProperties.set(property.id, id);
       }
-      const pending = [...prepared.docs];
+      const pending = [...docs];
       while (pending.length > 0) {
         const index = pending.findIndex((node) => !node.parentId || mapped.has(node.parentId));
         if (index < 0) throw new Error("invalid-tree");
         const node = pending.splice(index, 1)[0];
         if (!node) throw new Error("invalid-tree");
+        const body = await ctx.runQuery(internal.projects.cloneNodeContent, {
+          documentId: node.id,
+        });
+        let contentState = body.contentState;
+        if (body.updates.length > 0) {
+          const source = new Y.Doc();
+          if (contentState) Y.applyUpdate(source, new Uint8Array(contentState));
+          for (const update of body.updates) Y.applyUpdate(source, new Uint8Array(update));
+          contentState = Y.encodeStateAsUpdate(source).slice().buffer;
+          source.destroy();
+        }
         let storageId = null;
-        if (node.storageId) {
-          const blob = await ctx.storage.get(node.storageId);
+        if (body.storageId) {
+          const blob = await ctx.storage.get(body.storageId);
           if (!blob) throw new Error("missing-asset");
           storageId = await ctx.storage.store(blob);
         }
@@ -972,10 +1060,10 @@ export const duplicateProject = action({
           kind: node.kind,
           name: node.name,
           fileType: node.fileType,
-          content: node.content,
-          contentState: node.contentState,
-          sheetMeta: node.sheetMeta,
-          boardMeta: node.boardMeta,
+          content: body.content,
+          contentState,
+          sheetMeta: body.sheetMeta,
+          boardMeta: body.boardMeta,
           storageId,
           mimeType: node.mimeType,
           size: node.size,
@@ -983,7 +1071,7 @@ export const duplicateProject = action({
         mapped.set(node.id, id);
       }
       const links = [...mapped].map(([source, target]) => ({ source, target }));
-      for (const node of prepared.docs) {
+      for (const node of docs) {
         if (node.fileType !== "board") continue;
         const documentId = mapped.get(node.id);
         if (documentId) {
@@ -994,7 +1082,7 @@ export const duplicateProject = action({
         }
       }
       const propertyLinks = [...mappedProperties].map(([source, target]) => ({ source, target }));
-      for (const node of prepared.docs) {
+      for (const node of docs) {
         if (node.fileType !== "view") continue;
         const documentId = mapped.get(node.id);
         if (documentId) {
@@ -1004,7 +1092,7 @@ export const duplicateProject = action({
           });
         }
       }
-      for (const node of prepared.docs) {
+      for (const node of docs) {
         if (node.kind !== "file") continue;
         const documentId = mapped.get(node.id);
         if (!documentId) continue;

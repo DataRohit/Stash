@@ -72,6 +72,8 @@ async function getCachedConvexToken(
   const now = Date.now();
   const cached = cachedConvexTokens.get(cacheKey);
   if (cached && cached.expiresAt > now + CONVEX_TOKEN_REFRESH_BUFFER_MS) {
+    cachedConvexTokens.delete(cacheKey);
+    cachedConvexTokens.set(cacheKey, cached);
     return cached.token;
   }
   const pending = pendingConvexTokens.get(cacheKey);
@@ -280,14 +282,15 @@ export async function fetchSharedDocument(token: string, ip: string) {
     return { status: "unconfigured" as const };
   }
   const rateId = ip.slice(0, MAX_SHARE_RATE_ID_LENGTH);
-  const rateKey = createHash("sha256").update(`${token}\0${rateId}\0${salt}`).digest("hex");
+  const rateKey = createHash("sha256").update(`${rateId}\0${salt}`).digest("hex");
   const { userId, orgId, orgRole } = await auth();
   const client = new ConvexHttpClient(url);
   try {
-    return await client.mutation(api.sharing.redeemShare, {
+    const rate = await client.mutation(api.sharing.checkShareRate, { secret, rateKey });
+    if (rate.limited) return { status: "rate-limited" as const };
+    return await client.query(api.sharing.redeemShare, {
       secret,
       token,
-      rateKey,
       viewerUserId: userId ?? undefined,
       viewerOrgId: orgId ?? undefined,
       viewerOrgRole: orgRole ?? undefined,
@@ -332,6 +335,19 @@ export async function setOrgPlanLimits(
   });
 }
 
+export async function webhookSetOrgPlanLimits(
+  clerkOrgId: string,
+  limits: {
+    maxProjects: number;
+    maxCollaborators: number;
+    maxSizeBytes: number;
+    historyRetentionDays: number;
+  },
+): Promise<void> {
+  const { client, secret } = webhookConvexClient();
+  await client.mutation(api.organizations.setPlanLimits, { clerkOrgId, secret, ...limits });
+}
+
 export async function purgeDeletedOrganization(clerkOrgId: string): Promise<void> {
   const secret = process.env.CONVEX_PURGE_SECRET;
   const client = convexClient();
@@ -370,6 +386,11 @@ export async function webhookDeleteAcceptedMember(
 ): Promise<void> {
   const { client, secret } = webhookConvexClient();
   await client.mutation(api.members.webhookDeleteMember, { clerkOrgId, memberUserId, secret });
+}
+
+export async function webhookDeleteUser(memberUserId: string): Promise<void> {
+  const { client, secret } = webhookConvexClient();
+  await client.mutation(api.members.webhookDeleteUser, { memberUserId, secret });
 }
 
 export async function webhookUpsertPendingInvitation(input: {

@@ -3,7 +3,7 @@ import * as Y from "yjs";
 import type { ChartSource } from "../lib/chart-data";
 import { chartSourceFromSheet } from "../lib/doc-projection";
 import { query } from "./_generated/server";
-import { accessForProject, isInactiveTree } from "./documents";
+import { accessForProject, documentState, isInactiveTree } from "./documents";
 
 export const sourceData = query({
   args: {
@@ -21,13 +21,14 @@ export const sourceData = query({
       source?.kind !== "file" ||
       source.projectId !== args.projectId ||
       source.fileType !== "sheet" ||
-      !source.contentState ||
       (await isInactiveTree(ctx, source))
     ) {
       return { source: null };
     }
+    const state = await documentState(ctx, source);
+    if (!state) return { source: null };
     const sheet = new Y.Doc();
-    Y.applyUpdate(sheet, new Uint8Array(source.contentState));
+    Y.applyUpdate(sheet, new Uint8Array(state));
     const model = chartSourceFromSheet(sheet, source._id, source.name);
     sheet.destroy();
     return { source: model };

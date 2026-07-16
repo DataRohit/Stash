@@ -60,22 +60,6 @@ async function accessibleProjects(ctx: QueryCtx, clerkOrgId: string) {
   return { actor, projects: projects.filter((project) => !project.deletedAt) };
 }
 
-function pathsFor(docs: Doc<"documents">[]) {
-  const byId = new Map(docs.map((doc) => [doc._id, doc]));
-  const path = (doc: Doc<"documents">) => {
-    const parts = [doc.name];
-    let parent = doc.parentId ? byId.get(doc.parentId) : undefined;
-    const seen = new Set<Id<"documents">>();
-    while (parent && !seen.has(parent._id)) {
-      seen.add(parent._id);
-      parts.unshift(parent.name);
-      parent = parent.parentId ? byId.get(parent.parentId) : undefined;
-    }
-    return `/${parts.join("/")}`;
-  };
-  return { byId, path };
-}
-
 function snippet(content: string, term: string) {
   const lower = content.toLowerCase();
   const exact = term.toLowerCase();
@@ -219,20 +203,31 @@ export const search = query({
         });
       }
     }
-    const [nameHits, contentHits] = await Promise.all([
-      ctx.db
-        .query("documents")
-        .withSearchIndex("search_name", (q) =>
-          q.search("name", term).eq("clerkOrgId", args.clerkOrgId),
-        )
-        .take(SEARCH_CANDIDATE_LIMIT),
-      ctx.db
-        .query("documents")
-        .withSearchIndex("search_content", (q) =>
-          q.search("content", term).eq("clerkOrgId", args.clerkOrgId).eq("kind", "file"),
-        )
-        .take(SEARCH_CANDIDATE_LIMIT),
-    ]);
+    const perProjectLimit = Math.max(
+      8,
+      Math.min(40, Math.ceil(SEARCH_CANDIDATE_LIMIT / Math.max(1, projects.length)) * 2),
+    );
+    const projectHits = await Promise.all(
+      projects.map(async (project) => {
+        const [names, content] = await Promise.all([
+          ctx.db
+            .query("documents")
+            .withSearchIndex("search_name", (q) =>
+              q.search("name", term).eq("projectId", project._id),
+            )
+            .take(perProjectLimit),
+          ctx.db
+            .query("documents")
+            .withSearchIndex("search_content", (q) =>
+              q.search("content", term).eq("projectId", project._id).eq("kind", "file"),
+            )
+            .take(perProjectLimit),
+        ]);
+        return { names, content };
+      }),
+    );
+    const nameHits = projectHits.flatMap((hit) => hit.names);
+    const contentHits = projectHits.flatMap((hit) => hit.content);
     let nameRanked = 0;
     for (const doc of nameHits) {
       if (nameRanked >= PAGE_LIMIT) {
@@ -402,17 +397,17 @@ export const listRecent = query({
       ) {
         continue;
       }
-      const docs = await ctx.db
-        .query("documents")
-        .withIndex("by_project", (q) => q.eq("projectId", row.projectId))
-        .collect();
+      const path = await visiblePath(ctx, doc);
+      if (!path) {
+        continue;
+      }
       output.push({
         id: row._id,
         documentId: doc._id,
         projectId: project._id,
         projectTitle: project.title,
         name: doc.name,
-        path: pathsFor(docs).path(doc),
+        path,
         kind: doc.kind,
         fileType: doc.fileType,
         lastOpenedAt: row.lastOpenedAt,

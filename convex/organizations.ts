@@ -116,10 +116,26 @@ export const remove = mutation({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     await requireOrgAdmin(ctx, args.clerkOrgId);
-    const existing = await findByClerkOrgId(ctx, args.clerkOrgId);
-    if (existing) {
-      await ctx.db.delete(existing._id);
+    const projects = await ctx.db
+      .query("projects")
+      .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .collect();
+    for (const project of projects) {
+      if (!project.deletedAt) await ctx.db.patch(project._id, { deletedAt: Date.now() });
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: project._id });
     }
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .collect();
+    for (const member of members) await ctx.db.delete(member._id);
+    const templates = await ctx.db
+      .query("orgTemplates")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .collect();
+    for (const template of templates) await ctx.db.delete(template._id);
+    const existing = await findByClerkOrgId(ctx, args.clerkOrgId);
+    if (existing) await ctx.db.delete(existing._id);
   },
 });
 
@@ -136,12 +152,11 @@ export const setPlanLimits = mutation({
     if (!secretMatches(args.secret, process.env.CONVEX_PURGE_SECRET)) {
       throw new Error("Forbidden");
     }
-    await requireOrgAdmin(ctx, args.clerkOrgId);
     const row = await ensureRow(ctx, args.clerkOrgId);
     if (!row) {
       return;
     }
-    await ctx.db.patch(row._id, {
+    const next = {
       maxProjects: clampInt(args.maxProjects, 0, HARD_MAX_PROJECTS),
       maxCollaborators: clampInt(args.maxCollaborators, 0, HARD_MAX_COLLABORATORS),
       maxSizeBytes: clampInt(args.maxSizeBytes, MIN_PROJECT_BYTES, HARD_MAX_PROJECT_BYTES),
@@ -150,6 +165,17 @@ export const setPlanLimits = mutation({
         MIN_HISTORY_RETENTION_DAYS,
         HARD_MAX_HISTORY_RETENTION_DAYS,
       ),
+    };
+    if (
+      row.maxProjects === next.maxProjects &&
+      row.maxCollaborators === next.maxCollaborators &&
+      row.maxSizeBytes === next.maxSizeBytes &&
+      row.historyRetentionDays === next.historyRetentionDays
+    ) {
+      return;
+    }
+    await ctx.db.patch(row._id, {
+      ...next,
       updatedAt: Date.now(),
     });
   },
@@ -174,7 +200,7 @@ export const claimReconcile = mutation({
   args: { clerkOrgId: v.string(), staleMs: v.number() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId) {
+    if (!identity || identity.org_id !== args.clerkOrgId || identity.org_role !== "org:admin") {
       return false;
     }
     const now = Date.now();

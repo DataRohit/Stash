@@ -255,12 +255,24 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
   const handleExportZip = async () => {
     setExportingZip(true);
     try {
-      const bundle = await convex.query(api.documents.exportBundle, { projectId: pid });
-      if (!bundle || bundle.nodes.length === 0) {
+      const nodes: BundleNode[] = [];
+      let cursor: string | undefined;
+      let projectTitle = project.title;
+      do {
+        const page = await convex.query(api.documents.exportBundle, {
+          projectId: pid,
+          cursor,
+        });
+        if (!page) break;
+        projectTitle = page.projectTitle;
+        nodes.push(...(page.nodes as BundleNode[]));
+        cursor = page.cursor ?? undefined;
+      } while (cursor);
+      if (nodes.length === 0) {
         notify.error("Nothing to export", { description: "This project has no files yet." });
         return;
       }
-      await exportProjectZip(bundle.projectTitle, bundle.nodes as BundleNode[]);
+      await exportProjectZip(projectTitle, nodes);
       notify.success("Project exported");
     } catch {
       notify.error("Export failed", { description: "Couldn’t prepare the download. Try again." });

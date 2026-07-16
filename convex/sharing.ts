@@ -9,10 +9,23 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
-import { accessForProject, isInactive, isInactiveTree, requireProjectAdmin } from "./documents";
+import { accessForProject, documentState, isInactiveTree, requireProjectAdmin } from "./documents";
 import { secretMatches } from "./secrets";
 
 type ShareMode = "private" | "org" | "public";
+type SharedTreeNode = Pick<
+  Doc<"documents">,
+  | "_id"
+  | "parentId"
+  | "kind"
+  | "name"
+  | "fileType"
+  | "size"
+  | "mimeType"
+  | "updatedAt"
+  | "deletingAt"
+  | "trashedAt"
+>;
 
 const SHARE_EVENT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 const PRUNE_BATCH = 200;
@@ -66,7 +79,7 @@ function sharedViewMatches(record: SharedViewRecord, filter: ViewFilter): boolea
 }
 
 async function sharedViewPreview(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   projectId: Id<"projects">,
   config: ViewConfig,
   allowedDocumentIds: Set<string>,
@@ -96,14 +109,28 @@ async function sharedViewPreview(
           .take(SHARED_VIEW_RECORD_LIMIT + 1)
       : Promise.resolve([]),
   ]);
-  const records: SharedViewRecord[] = [];
-  for (const document of documents.slice(0, SHARED_VIEW_RECORD_LIMIT)) {
-    if (!allowedDocumentIds.has(document._id) || (await isInactiveTree(ctx, document))) continue;
-    const values = await ctx.db
-      .query("documentPropertyValues")
-      .withIndex("by_document", (q) => q.eq("documentId", document._id))
-      .collect();
-    records.push({
+  const visible = visibleDocuments(documents).filter((document) =>
+    allowedDocumentIds.has(document._id),
+  );
+  const valuesByDocument = new Map<string, Doc<"documentPropertyValues">[]>();
+  await Promise.all(
+    [...referenced].map(async (propertyId) => {
+      const id = ctx.db.normalizeId("documentProperties", propertyId);
+      if (!id) return;
+      const values = await ctx.db
+        .query("documentPropertyValues")
+        .withIndex("by_project_property", (q) => q.eq("projectId", projectId).eq("propertyId", id))
+        .collect();
+      for (const value of values) {
+        const rows = valuesByDocument.get(value.documentId) ?? [];
+        rows.push(value);
+        valuesByDocument.set(value.documentId, rows);
+      }
+    }),
+  );
+  const records: SharedViewRecord[] = visible.map((document) => {
+    const values = valuesByDocument.get(document._id) ?? [];
+    return {
       id: document._id,
       name: document.name,
       fileType: document.fileType,
@@ -116,12 +143,12 @@ async function sharedViewPreview(
           dateValue: value.dateValue,
           dateEndValue: value.dateEndValue,
         })),
-    });
-  }
+    };
+  });
   if (config.datePropertyId === "boardDue") {
+    const visibleDocumentIds = new Set(visible.map((document) => document._id));
     for (const card of boardCards.slice(0, SHARED_VIEW_RECORD_LIMIT)) {
-      const source = await ctx.db.get(card.documentId);
-      if (!source || !allowedDocumentIds.has(source._id) || (await isInactiveTree(ctx, source))) {
+      if (!visibleDocumentIds.has(card.documentId)) {
         continue;
       }
       records.push({
@@ -183,7 +210,7 @@ async function sharedViewPreview(
 }
 
 async function sharedChartPreview(
-  ctx: MutationCtx,
+  ctx: QueryCtx,
   projectId: Id<"projects">,
   config: ChartConfig,
   allowedDocumentIds: Set<string>,
@@ -196,11 +223,12 @@ async function sharedChartPreview(
       sourceDoc?.kind === "file" &&
       sourceDoc.projectId === projectId &&
       sourceDoc.fileType === "sheet" &&
-      sourceDoc.contentState &&
       !(await isInactiveTree(ctx, sourceDoc))
     ) {
+      const state = await documentState(ctx, sourceDoc);
+      if (!state) return resolveChartData(config, null);
       const sheet = new Y.Doc();
-      Y.applyUpdate(sheet, new Uint8Array(sourceDoc.contentState));
+      Y.applyUpdate(sheet, new Uint8Array(state));
       source = chartSourceFromSheet(sheet, sourceDoc._id, sourceDoc.name);
       sheet.destroy();
     }
@@ -306,15 +334,15 @@ async function uniqueToken(ctx: MutationCtx): Promise<string> {
   throw new Error("token-collision");
 }
 
-function visibleDocuments(docs: Doc<"documents">[]): Doc<"documents">[] {
+function visibleDocuments<T extends SharedTreeNode>(docs: T[]): T[] {
   const byId = new Map(docs.map((doc) => [doc._id, doc]));
   const hidden = new Set<Id<"documents">>();
   for (const doc of docs) {
-    let current: Doc<"documents"> | undefined = doc;
+    let current: T | undefined = doc;
     const seen = new Set<Id<"documents">>();
     while (current && !seen.has(current._id)) {
       seen.add(current._id);
-      if (isInactive(current)) {
+      if (current.deletingAt || current.trashedAt) {
         hidden.add(doc._id);
         break;
       }
@@ -332,9 +360,9 @@ function cleanRef(ref: string): string {
   return ref.split("#")[0]?.split("?")[0]?.trim() ?? "";
 }
 
-function pathOf(doc: Doc<"documents">, byId: Map<Id<"documents">, Doc<"documents">>): string {
+function pathOf(doc: SharedTreeNode, byId: Map<Id<"documents">, SharedTreeNode>): string {
   const parts: string[] = [];
-  let current: Doc<"documents"> | undefined = doc;
+  let current: SharedTreeNode | undefined = doc;
   const seen = new Set<Id<"documents">>();
   while (current && !seen.has(current._id)) {
     seen.add(current._id);
@@ -345,10 +373,10 @@ function pathOf(doc: Doc<"documents">, byId: Map<Id<"documents">, Doc<"documents
 }
 
 function resolveRef(
-  from: Doc<"documents">,
+  from: SharedTreeNode,
   ref: string,
-  docs: Doc<"documents">[],
-): Doc<"documents"> | null {
+  docs: SharedTreeNode[],
+): SharedTreeNode | null {
   const clean = cleanRef(ref);
   if (clean.length === 0 || isExternalRef(clean)) {
     return null;
@@ -390,11 +418,11 @@ function referencedPaths(content: string): string[] {
 }
 
 function includeAncestors(
-  doc: Doc<"documents">,
-  byId: Map<Id<"documents">, Doc<"documents">>,
+  doc: SharedTreeNode,
+  byId: Map<Id<"documents">, SharedTreeNode>,
   includeIds: Set<Id<"documents">>,
 ): void {
-  let current: Doc<"documents"> | undefined = doc;
+  let current: SharedTreeNode | undefined = doc;
   const seen = new Set<Id<"documents">>();
   while (current && !seen.has(current._id)) {
     seen.add(current._id);
@@ -431,11 +459,8 @@ export const getState = query({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
     const doc = await ctx.db.get(args.documentId);
-    if (
-      doc?.kind !== "file" ||
-      (await isInactiveTree(ctx, doc)) ||
-      !(await accessForProject(ctx, doc.projectId))
-    ) {
+    const access = doc?.kind === "file" ? await accessForProject(ctx, doc.projectId) : null;
+    if (doc?.kind !== "file" || (await isInactiveTree(ctx, doc)) || !access) {
       return null;
     }
     const share = await shareForDocument(ctx, doc._id);
@@ -446,7 +471,7 @@ export const getState = query({
       .take(8);
     return {
       mode: share?.mode ?? ("private" as ShareMode),
-      token: share?.token ?? null,
+      token: access.isAdmin ? (share?.token ?? null) : null,
       expiresAt: share?.expiresAt ?? null,
       updatedByName: share?.updatedByName ?? null,
       updatedAt: share?.updatedAt ?? null,
@@ -590,11 +615,19 @@ export const rotateShareToken = mutation({
   },
 });
 
-export const redeemShare = mutation({
+export const checkShareRate = mutation({
+  args: { secret: v.string(), rateKey: v.string() },
+  handler: async (ctx, args) => {
+    if (!serviceSecretValid(args.secret)) throw new Error("Forbidden");
+    if (!RATE_KEY_PATTERN.test(args.rateKey)) return { limited: true };
+    return { limited: await hitRateLimit(ctx, args.rateKey) };
+  },
+});
+
+export const redeemShare = query({
   args: {
     secret: v.string(),
     token: v.string(),
-    rateKey: v.string(),
     viewerUserId: v.optional(v.string()),
     viewerOrgId: v.optional(v.string()),
     viewerOrgRole: v.optional(v.string()),
@@ -603,11 +636,8 @@ export const redeemShare = mutation({
     if (!serviceSecretValid(args.secret)) {
       throw new Error("Forbidden");
     }
-    if (!SHARE_TOKEN_PATTERN.test(args.token) || !RATE_KEY_PATTERN.test(args.rateKey)) {
+    if (!SHARE_TOKEN_PATTERN.test(args.token)) {
       return null;
-    }
-    if (await hitRateLimit(ctx, args.rateKey)) {
-      return { status: "rate-limited" as const };
     }
     const share = await ctx.db
       .query("documentShares")
@@ -637,9 +667,9 @@ export const redeemShare = mutation({
         return { status: access, mode: effectiveMode };
       }
     }
-    const [docs, shares] = await Promise.all([
+    const [projected, shares] = await Promise.all([
       ctx.db
-        .query("documents")
+        .query("documentNodes")
         .withIndex("by_project", (q) => q.eq("projectId", share.projectId))
         .collect(),
       ctx.db
@@ -647,6 +677,23 @@ export const redeemShare = mutation({
         .withIndex("by_project", (q) => q.eq("projectId", share.projectId))
         .collect(),
     ]);
+    const docs: SharedTreeNode[] = project.treeProjectedAt
+      ? projected.map((node) => ({
+          _id: node.documentId,
+          parentId: node.parentId,
+          kind: node.kind,
+          name: node.name,
+          fileType: node.fileType,
+          size: node.size,
+          mimeType: node.mimeType,
+          updatedAt: node.updatedAt,
+          deletingAt: node.deletingAt,
+          trashedAt: node.trashedAt,
+        }))
+      : await ctx.db
+          .query("documents")
+          .withIndex("by_project", (q) => q.eq("projectId", share.projectId))
+          .collect();
     const now = Date.now();
     const isShareLive = (row: Doc<"documentShares">): boolean =>
       row.mode !== "private" &&
@@ -676,19 +723,19 @@ export const redeemShare = mutation({
     const nodes = await Promise.all(
       visible
         .filter((node) => includeIds.has(node._id))
-        .map(async (node) => ({
-          id: node._id,
-          parentId: node.parentId,
-          kind: node.kind,
-          name: node.name,
-          fileType: node.fileType,
-          size: node.size,
-          mimeType: node.mimeType,
-          assetUrl:
-            node.kind === "asset" && node.storageId
-              ? await ctx.storage.getUrl(node.storageId)
-              : null,
-        })),
+        .map(async (node) => {
+          const asset = node.kind === "asset" ? await ctx.db.get(node._id) : null;
+          return {
+            id: node._id,
+            parentId: node.parentId,
+            kind: node.kind,
+            name: node.name,
+            fileType: node.fileType,
+            size: node.size,
+            mimeType: node.mimeType,
+            assetUrl: asset?.storageId ? await ctx.storage.getUrl(asset.storageId) : null,
+          };
+        }),
     );
     const fileLinks = shares
       .filter(
@@ -702,15 +749,16 @@ export const redeemShare = mutation({
     let boardPreview: ReturnType<typeof boardRenderModel> | undefined;
     let viewPreview: Awaited<ReturnType<typeof sharedViewPreview>> | undefined;
     let chartPreview: Awaited<ReturnType<typeof sharedChartPreview>> | undefined;
-    if (doc.fileType === "sheet" && doc.contentState) {
+    const currentState = await documentState(ctx, doc);
+    if (doc.fileType === "sheet" && currentState) {
       const sheet = new Y.Doc();
-      Y.applyUpdate(sheet, new Uint8Array(doc.contentState));
+      Y.applyUpdate(sheet, new Uint8Array(currentState));
       sheetPreview = sheetRenderModel(sheet);
       sheet.destroy();
     }
-    if (doc.fileType === "board" && doc.contentState) {
+    if (doc.fileType === "board" && currentState) {
       const board = new Y.Doc();
-      Y.applyUpdate(board, new Uint8Array(doc.contentState));
+      Y.applyUpdate(board, new Uint8Array(currentState));
       boardPreview = boardRenderModel(board);
       const visibleIds = new Set(visible.map((node) => node._id as string));
       for (const column of boardPreview.columns) {
@@ -720,9 +768,9 @@ export const redeemShare = mutation({
       }
       board.destroy();
     }
-    if (doc.fileType === "view" && doc.contentState) {
+    if (doc.fileType === "view" && currentState) {
       const view = new Y.Doc();
-      Y.applyUpdate(view, new Uint8Array(doc.contentState));
+      Y.applyUpdate(view, new Uint8Array(currentState));
       const allowedDocumentIds = new Set(
         shares
           .filter((row) => isShareLive(row) && modeRank(row.mode) >= modeRank(effectiveMode))
@@ -736,9 +784,9 @@ export const redeemShare = mutation({
       );
       view.destroy();
     }
-    if (doc.fileType === "chart" && doc.contentState) {
+    if (doc.fileType === "chart" && currentState) {
       const chart = new Y.Doc();
-      Y.applyUpdate(chart, new Uint8Array(doc.contentState));
+      Y.applyUpdate(chart, new Uint8Array(currentState));
       const config = inspectChart(chart);
       chart.destroy();
       const allowedDocumentIds = new Set(

@@ -29,7 +29,7 @@ type TrashItem = {
 type TrashPanelProps = {
   open: boolean;
   projectId: Id<"projects">;
-  isAdmin: boolean;
+  canPurge: boolean;
   onClose: () => void;
 };
 
@@ -52,7 +52,7 @@ function retentionLabel(trashedAt: number, now: number): { label: string; immine
   };
 }
 
-export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProps) {
+export function TrashPanel({ open, projectId, canPurge, onClose }: TrashPanelProps) {
   const [confirmItem, setConfirmItem] = useState<TrashItem | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const itemsData = useQuery(api.documents.listTrash, open ? { projectId } : "skip");
@@ -98,7 +98,7 @@ export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProp
         onClose={onClose}
         title="Trash"
         icon={<Trash2 className="size-3.5" aria-hidden="true" />}
-        description="Trashed items are hidden from the project and permanently removed after 30 days."
+        description="Trashed items still use project storage. Restore them or delete them permanently; otherwise they are removed after 30 days."
         className="max-w-lg"
       >
         <div className="py-2">
@@ -146,7 +146,7 @@ export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProp
                       <RotateCcw className="size-3.5" aria-hidden="true" />
                       Restore
                     </button>
-                    {isAdmin ? (
+                    {canPurge ? (
                       <button
                         type="button"
                         onClick={() => setConfirmItem(item)}

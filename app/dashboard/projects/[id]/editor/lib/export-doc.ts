@@ -140,7 +140,7 @@ async function buildExportHtml(
   content: string,
   nodes: TreeNode[],
 ): Promise<string> {
-  const { inner, isMd, blocks } = renderInner(fileNode, content, nodes, EMPTY_LINKS);
+  const { inner, isMd, blocks } = renderInner(fileNode, content, nodes, EMPTY_LINKS, false);
   const svgs = await renderMermaid(blocks, "default");
   const withMermaid = injectMermaid(inner, svgs);
   const inlined = await inlineAssets(withMermaid, nodes);

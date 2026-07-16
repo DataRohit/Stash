@@ -5,7 +5,7 @@ import { inspectBoard } from "../lib/board-model";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
-import { accessForProject, isInactiveTree, requireProjectEditor } from "./documents";
+import { accessForProject, documentState, isInactiveTree, requireProjectEditor } from "./documents";
 
 const MAX_PROPERTIES = 64;
 const MAX_PROPERTY_ROWS = 256;
@@ -393,17 +393,42 @@ export const searchLinkTargets = query({
   args: { sourceDocumentId: v.id("documents"), term: v.string() },
   handler: async (ctx, args) => {
     const source = await ctx.db.get(args.sourceDocumentId);
-    if (source?.kind !== "file" || !(await accessForProject(ctx, source.projectId))) {
+    const sourceAccess =
+      source?.kind === "file" ? await accessForProject(ctx, source.projectId) : null;
+    if (source?.kind !== "file" || !sourceAccess) {
       return [];
     }
     const term = args.term.trim().slice(0, 80);
     if (term.length < 2) return [];
-    const hits = await ctx.db
-      .query("documents")
-      .withSearchIndex("search_name", (q) =>
-        q.search("name", term).eq("clerkOrgId", source.clerkOrgId),
+    const projectIds = sourceAccess.isAdmin
+      ? (
+          await ctx.db
+            .query("projects")
+            .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", source.clerkOrgId))
+            .collect()
+        )
+          .filter((project) => !project.deletedAt)
+          .map((project) => project._id)
+      : (
+          await ctx.db
+            .query("projectAccess")
+            .withIndex("by_org_user", (q) =>
+              q.eq("clerkOrgId", source.clerkOrgId).eq("userId", sourceAccess.userId),
+            )
+            .collect()
+        ).map((grant) => grant.projectId);
+    const hits = (
+      await Promise.all(
+        projectIds.map((projectId) =>
+          ctx.db
+            .query("documents")
+            .withSearchIndex("search_name", (q) =>
+              q.search("name", term).eq("projectId", projectId),
+            )
+            .take(12),
+        ),
       )
-      .take(30);
+    ).flat();
     const results = [];
     for (const target of hits) {
       if (
@@ -421,6 +446,7 @@ export const searchLinkTargets = query({
         projectId: target.projectId,
         projectTitle: access.project.title,
       });
+      if (results.length === 30) break;
     }
     return results;
   },
@@ -458,9 +484,11 @@ export const addLink = mutation({
     const access = await requireProjectEditor(ctx, source.projectId);
     if (source.clerkOrgId !== target.clerkOrgId) throw new Error("invalid-link");
     if (args.sourceCardId) {
-      if (source.fileType !== "board" || !source.contentState) throw new Error("invalid-card");
+      if (source.fileType !== "board") throw new Error("invalid-card");
+      const state = await documentState(ctx, source);
+      if (!state) throw new Error("invalid-card");
       const ydoc = new Y.Doc();
-      Y.applyUpdate(ydoc, new Uint8Array(source.contentState));
+      Y.applyUpdate(ydoc, new Uint8Array(state));
       const validCard = inspectBoard(ydoc).cards.has(args.sourceCardId);
       ydoc.destroy();
       if (!validCard) throw new Error("invalid-card");

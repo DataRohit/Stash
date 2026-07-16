@@ -1,5 +1,6 @@
 "use client";
 
+import { useQuery } from "convex/react";
 import { Check, CornerDownRight, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -7,6 +8,8 @@ import { DataLoader, DataState } from "@/components/ui/data-state";
 import { useAnchoredPosition } from "@/components/ui/floating";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { useMediaQuery } from "@/components/ui/use-media-query";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -43,6 +46,7 @@ export type CommentThread = {
   resolvedAt: number | null;
   createdAt: number;
   updatedAt: number;
+  hasMoreMessages: boolean;
   messages: CommentMessage[];
 };
 
@@ -263,6 +267,39 @@ function MessageItem({ message }: { message: CommentMessage }) {
   );
 }
 
+function ThreadMessages({ thread }: { thread: CommentThread }) {
+  const [loadOlder, setLoadOlder] = useState(false);
+  const loaded = useQuery(
+    api.comments.listThreadMessages,
+    loadOlder ? { commentId: thread.id as Id<"comments"> } : "skip",
+  );
+  const messages = loaded?.messages ?? thread.messages;
+  return (
+    <>
+      <ul className="space-y-3">
+        {messages.map((message) => (
+          <MessageItem key={message.id} message={message} />
+        ))}
+      </ul>
+      {thread.hasMoreMessages && !loadOlder ? (
+        <button
+          type="button"
+          onClick={() => setLoadOlder(true)}
+          className="w-full cursor-pointer rounded-sm bg-foreground/[0.04] px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-foreground/[0.08] hover:text-foreground"
+        >
+          Load older replies
+        </button>
+      ) : null}
+      {loadOlder && loaded === undefined ? (
+        <DataLoader label="Loading older replies" compact />
+      ) : null}
+      {loaded?.hasMore ? (
+        <p className="text-[11px] text-muted-foreground">Showing the 200 most recent replies.</p>
+      ) : null}
+    </>
+  );
+}
+
 export function CommentsRail({
   threads,
   loading,
@@ -429,11 +466,7 @@ export function CommentsRail({
                     </button>
 
                     <div className="space-y-3 px-3 py-3">
-                      <ul className="space-y-3">
-                        {thread.messages.map((message) => (
-                          <MessageItem key={message.id} message={message} />
-                        ))}
-                      </ul>
+                      <ThreadMessages thread={thread} />
                       <div className="flex items-center gap-2 border-hairline border-t pt-3">
                         <button
                           type="button"

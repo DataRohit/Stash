@@ -1,6 +1,9 @@
 import { auth } from "@clerk/nextjs/server";
 
 const CLERK_API_BASE = "https://api.clerk.com/v1";
+const SUBSCRIPTION_CACHE_TTL_MS = 60_000;
+const SUBSCRIPTION_FETCH_TIMEOUT_MS = 3_000;
+const MAX_SUBSCRIPTION_CACHE_ENTRIES = 256;
 
 type ClerkPlan = {
   slug: string;
@@ -41,17 +44,27 @@ const FREE_SUBSCRIPTION: UserSubscription = {
   degraded: false,
 };
 
-export async function getUserSubscription(): Promise<UserSubscription> {
-  const { userId } = await auth();
+const subscriptionCache = new Map<string, { value: UserSubscription; expiresAt: number }>();
+
+export async function getUserSubscriptionFor(
+  userId: string,
+  refresh = false,
+): Promise<UserSubscription> {
   const secretKey = process.env.CLERK_SECRET_KEY;
-  if (!userId || !secretKey) {
+  if (!secretKey) {
     return { ...FREE_SUBSCRIPTION, degraded: true };
+  }
+  const cached = refresh ? undefined : subscriptionCache.get(userId);
+  if (cached && cached.expiresAt > Date.now()) {
+    subscriptionCache.delete(userId);
+    subscriptionCache.set(userId, cached);
+    return cached.value;
   }
 
   try {
     const response = await fetch(`${CLERK_API_BASE}/users/${userId}/billing/subscription`, {
       headers: { Authorization: `Bearer ${secretKey}` },
-      cache: "no-store",
+      signal: AbortSignal.timeout(SUBSCRIPTION_FETCH_TIMEOUT_MS),
     });
     if (!response.ok) {
       return { ...FREE_SUBSCRIPTION, degraded: true };
@@ -67,7 +80,7 @@ export async function getUserSubscription(): Promise<UserSubscription> {
       return FREE_SUBSCRIPTION;
     }
 
-    return {
+    const value = {
       planSlug: item.plan.slug,
       isPro: !item.plan.is_default,
       featureSlugs: item.plan.features.map((feature) => feature.slug),
@@ -76,7 +89,22 @@ export async function getUserSubscription(): Promise<UserSubscription> {
       canceled: item.canceled_at != null,
       degraded: false,
     };
+    while (subscriptionCache.size >= MAX_SUBSCRIPTION_CACHE_ENTRIES) {
+      const oldest = subscriptionCache.keys().next().value;
+      if (typeof oldest !== "string") break;
+      subscriptionCache.delete(oldest);
+    }
+    subscriptionCache.set(userId, {
+      value,
+      expiresAt: Date.now() + SUBSCRIPTION_CACHE_TTL_MS,
+    });
+    return value;
   } catch {
     return { ...FREE_SUBSCRIPTION, degraded: true };
   }
+}
+
+export async function getUserSubscription(): Promise<UserSubscription> {
+  const { userId } = await auth();
+  return userId ? await getUserSubscriptionFor(userId) : { ...FREE_SUBSCRIPTION, degraded: true };
 }

@@ -12,7 +12,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
-import { accessForProject, isInactiveTree, requireProjectEditor } from "./documents";
+import { accessForProject, documentState, isInactiveTree, requireProjectEditor } from "./documents";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const MAX_ANCHOR_BYTES = 4096;
@@ -24,7 +24,8 @@ const UNREAD_DISPLAY_CAP = 10;
 const NOTIFICATION_RETENTION_MS = 60 * 24 * 60 * 60 * 1000;
 const PRUNE_BATCH = 200;
 const MAX_THREADS_PER_DOCUMENT = 200;
-const MAX_MESSAGES_PER_THREAD = 200;
+const MAX_MESSAGES_PER_THREAD = 40;
+const MAX_LOADED_MESSAGES_PER_THREAD = 200;
 const MARK_READ_BATCH = 200;
 const COMMENT_WRITE_LIMIT = { capacity: 20, refillPerSecond: 1 };
 
@@ -250,10 +251,11 @@ export const listForDocument = query({
     let activeRows: Set<string> | null = null;
     let activeCols: Set<string> | null = null;
     let activeCards: Set<string> | null = null;
-    if (doc.fileType === "sheet" && doc.contentState) {
+    const state = await documentState(ctx, doc);
+    if (doc.fileType === "sheet" && state) {
       try {
         const ydoc = new Y.Doc();
-        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+        Y.applyUpdate(ydoc, new Uint8Array(state));
         const inspection = inspectSheet(ydoc);
         activeRows = inspection.rowSet;
         activeCols = inspection.colSet;
@@ -263,10 +265,10 @@ export const listForDocument = query({
         activeCols = new Set();
       }
     }
-    if (doc.fileType === "board" && doc.contentState) {
+    if (doc.fileType === "board" && state) {
       try {
         const ydoc = new Y.Doc();
-        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState));
+        Y.applyUpdate(ydoc, new Uint8Array(state));
         activeCards = new Set(inspectBoard(ydoc).cards.keys());
         ydoc.destroy();
       } catch {
@@ -279,7 +281,7 @@ export const listForDocument = query({
           .query("commentMessages")
           .withIndex("by_comment", (q) => q.eq("commentId", thread._id))
           .order("desc")
-          .take(MAX_MESSAGES_PER_THREAD);
+          .take(MAX_MESSAGES_PER_THREAD + 1);
         return {
           id: thread._id,
           documentId: thread.documentId,
@@ -318,7 +320,9 @@ export const listForDocument = query({
           resolvedAt: thread.resolvedAt,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
+          hasMoreMessages: messages.length > MAX_MESSAGES_PER_THREAD,
           messages: messages
+            .slice(0, MAX_MESSAGES_PER_THREAD)
             .sort((a, b) => a.createdAt - b.createdAt)
             .map((message) => ({
               id: message._id,
@@ -334,6 +338,43 @@ export const listForDocument = query({
       }),
     );
     return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+});
+
+export const listThreadMessages = query({
+  args: { commentId: v.id("comments") },
+  handler: async (ctx, args) => {
+    const thread = await ctx.db.get(args.commentId);
+    const doc = thread ? await ctx.db.get(thread.documentId) : null;
+    if (
+      !thread ||
+      doc?.kind !== "file" ||
+      (await isInactiveTree(ctx, doc)) ||
+      !(await accessForProject(ctx, thread.projectId))
+    ) {
+      return null;
+    }
+    const messages = await ctx.db
+      .query("commentMessages")
+      .withIndex("by_comment", (q) => q.eq("commentId", thread._id))
+      .order("desc")
+      .take(MAX_LOADED_MESSAGES_PER_THREAD + 1);
+    return {
+      hasMore: messages.length > MAX_LOADED_MESSAGES_PER_THREAD,
+      messages: messages
+        .slice(0, MAX_LOADED_MESSAGES_PER_THREAD)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((message) => ({
+          id: message._id,
+          body: message.body,
+          mentionUserIds: message.mentionUserIds,
+          authorUserId: message.authorUserId,
+          authorName: message.authorName,
+          authorEmail: message.authorEmail,
+          authorImage: message.authorImage,
+          createdAt: message.createdAt,
+        })),
+    };
   },
 });
 
@@ -383,6 +424,7 @@ export const createThread = mutation({
   },
   handler: async (ctx, args) => {
     const { doc, access } = await fileForAccess(ctx, args.documentId);
+    const state = await documentState(ctx, doc);
     if (args.anchor.kind === "text") {
       if (
         doc.fileType === "sheet" ||
@@ -394,9 +436,9 @@ export const createThread = mutation({
       }
       assertAnchor(args.anchor.startRel);
       assertAnchor(args.anchor.endRel);
-    } else if (args.anchor.kind === "cell" && (doc.fileType !== "sheet" || !doc.contentState)) {
+    } else if (args.anchor.kind === "cell" && (doc.fileType !== "sheet" || !state)) {
       throw new Error("invalid-anchor");
-    } else if (args.anchor.kind === "card" && (doc.fileType !== "board" || !doc.contentState)) {
+    } else if (args.anchor.kind === "card" && (doc.fileType !== "board" || !state)) {
       throw new Error("invalid-anchor");
     } else if (args.anchor.kind === "document" && doc.fileType !== "view") {
       throw new Error("invalid-anchor");
@@ -414,7 +456,7 @@ export const createThread = mutation({
     } else if (args.anchor.kind === "cell") {
       try {
         const ydoc = new Y.Doc();
-        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState as ArrayBuffer));
+        Y.applyUpdate(ydoc, new Uint8Array(state as ArrayBuffer));
         const inspection = inspectSheet(ydoc);
         const rowIndex = inspection.rows.indexOf(args.anchor.rowId);
         const colIndex = inspection.cols.indexOf(args.anchor.colId);
@@ -429,7 +471,7 @@ export const createThread = mutation({
     } else if (args.anchor.kind === "card") {
       try {
         const ydoc = new Y.Doc();
-        Y.applyUpdate(ydoc, new Uint8Array(doc.contentState as ArrayBuffer));
+        Y.applyUpdate(ydoc, new Uint8Array(state as ArrayBuffer));
         const inspection = inspectBoard(ydoc);
         const card = inspection.cards.get(args.anchor.cardId);
         if (!card) throw new Error("invalid-anchor");

@@ -296,6 +296,7 @@ cp .env.example .env.local
 | `CLERK_SECRET_KEY` | Yes | Clerk server API and billing-plan reads |
 | `CLERK_WEBHOOK_SIGNING_SECRET` | For webhooks | Verifies Clerk membership and organization events |
 | `CONVEX_PURGE_SECRET` | Yes | Authenticates trusted Next.js-to-Convex operations; use 32+ random characters |
+| `HEALTH_CHECK_TOKEN` | Yes | Authorizes detailed health checks; use an independent value with 32+ random characters |
 | `SHARE_IP_SALT` | Yes | Hashes client addresses used by public-share throttling; use an independent random value |
 | `SHARE_TRUST_FORWARDED` | No | Defaults to `0`; set to `1` only behind a trusted proxy or CDN that overwrites forwarding headers |
 | `CLERK_JWT_ISSUER_DOMAIN` | Yes | Verifies Clerk session JWTs inside Convex |
@@ -303,8 +304,6 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | No | Overrides the sign-up route; template default is `/sign-up` |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_FORCE_REDIRECT_URL` | No | Post-sign-in destination; template default is `/dashboard` |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL` | No | Post-sign-up destination; template default is `/dashboard` |
-| `RESEND_API_KEY` | No | Reserved for optional notification-email delivery; unused by the current runtime |
-| `RESEND_FROM_EMAIL` | No | Reserved verified sender for optional Resend delivery |
 
 Never commit `.env.local` or production credentials.
 
@@ -322,8 +321,8 @@ For a first boot:
    publishable and secret keys into `.env.local`.
 2. Add a Clerk JWT template named `convex`, then set
    `CLERK_JWT_ISSUER_DOMAIN` to the development instance issuer.
-3. Replace `CONVEX_PURGE_SECRET` and `SHARE_IP_SALT` with independent random
-   development values. Leave the optional Resend values empty.
+3. Replace `CONVEX_PURGE_SECRET`, `HEALTH_CHECK_TOKEN`, and `SHARE_IP_SALT` with
+   independent random development values.
 4. Run `pnpm dev:local`, open the web address below, sign in, and create or join
    an organization.
 

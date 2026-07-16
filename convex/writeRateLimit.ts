@@ -1,5 +1,4 @@
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation } from "./_generated/server";
 
@@ -12,12 +11,8 @@ type WriteLimit = {
   refillPerSecond: number;
 };
 
-async function writeKeyHash(
-  scope: string,
-  documentId: Id<"documents">,
-  userId: string,
-): Promise<string> {
-  const input = new TextEncoder().encode(`${scope}\0${documentId}\0${userId}`);
+async function writeKeyHash(scope: string, resourceId: string, userId: string): Promise<string> {
+  const input = new TextEncoder().encode(`${scope}\0${resourceId}\0${userId}`);
   const digest = await crypto.subtle.digest("SHA-256", input);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -25,11 +20,11 @@ async function writeKeyHash(
 export async function enforceWriteRateLimit(
   ctx: MutationCtx,
   scope: string,
-  documentId: Id<"documents">,
+  resourceId: string,
   userId: string,
   limit: WriteLimit,
 ): Promise<boolean> {
-  const keyHash = await writeKeyHash(scope, documentId, userId);
+  const keyHash = await writeKeyHash(scope, resourceId, userId);
   const now = Date.now();
   const row = await ctx.db
     .query("writeWindows")

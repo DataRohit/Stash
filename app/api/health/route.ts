@@ -2,6 +2,7 @@ import { ConvexHttpClient } from "convex/browser";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { api } from "@/convex/_generated/api";
+import { secretMatches } from "@/convex/secrets";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +37,7 @@ function configurationChecks() {
     clerkIssuer: isUrl(process.env.CLERK_JWT_ISSUER_DOMAIN),
     clerkWebhookSecret: webhookSecret?.startsWith("whsec_") === true,
     purgeSecret: (process.env.CONVEX_PURGE_SECRET?.length ?? 0) >= 32,
+    healthCheckToken: (process.env.HEALTH_CHECK_TOKEN?.length ?? 0) >= 32,
     shareIpSalt: (process.env.SHARE_IP_SALT?.length ?? 0) >= 32,
     productionKeys,
   };
@@ -63,6 +65,10 @@ async function convexReachable(): Promise<boolean> {
 export async function GET(request: NextRequest) {
   const ts = new Date().toISOString();
   if (request.nextUrl.searchParams.get("deep") !== "1") {
+    return NextResponse.json({ ok: true, convex: null, ts });
+  }
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  if (!secretMatches(token, process.env.HEALTH_CHECK_TOKEN)) {
     return NextResponse.json({ ok: true, convex: null, ts });
   }
   const checks = configurationChecks();
