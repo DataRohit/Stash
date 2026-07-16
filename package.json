@@ -111,8 +111,8 @@
     "yjs": "^13.6.31"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.2",
-    "@commitlint/cli": "^21.2.0",
+    "@biomejs/biome": "^2.5.3",
+    "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.2.0",
     "@secretlint/secretlint-rule-preset-recommend": "^13.0.2",
     "@tailwindcss/postcss": "^4",
@@ -125,7 +125,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
     "husky": "^9.1.7",
-    "knip": "^6.24.0",
+    "knip": "^6.25.0",
     "lint-staged": "^17.0.8",
     "markdownlint-cli2": "^0.23.0",
     "secretlint": "^13.0.2",
