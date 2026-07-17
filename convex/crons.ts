@@ -15,6 +15,12 @@ crons.interval("resume project purges", { minutes: 10 }, internal.projects.resum
 crons.interval("resume document purges", { minutes: 10 }, internal.documents.resumePurges, {});
 crons.interval("purge expired trash", { hours: 6 }, internal.documents.purgeExpiredTrash, {});
 crons.interval("prune old notifications", { hours: 6 }, internal.comments.pruneNotifications, {});
+crons.interval(
+  "prune validated uploads",
+  { hours: 1 },
+  internal.documents.pruneValidatedUploads,
+  {},
+);
 crons.interval("prune old share events", { hours: 12 }, internal.sharing.pruneShareEvents, {});
 crons.interval("prune share rate windows", { minutes: 30 }, internal.sharing.pruneShareWindows, {});
 crons.interval(
@@ -41,6 +47,18 @@ crons.daily(
   "prune recent documents",
   { hourUTC: 4, minuteUTC: 0 },
   internal.navigation.pruneRecentDocuments,
+  {},
+);
+crons.daily(
+  "send notification digests",
+  { hourUTC: 8, minuteUTC: 0 },
+  internal.email.queueDailyDigests,
+  {},
+);
+crons.daily(
+  "prune email digest runs",
+  { hourUTC: 5, minuteUTC: 0 },
+  internal.email.pruneDigestRuns,
   {},
 );
 

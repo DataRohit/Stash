@@ -36,7 +36,7 @@ Stash includes safeguards for authenticated write abuse, share-boundary validati
 storage accuracy, and bounded data cleanup. Collaboration updates and presence
 heartbeats are throttled per user and document; malformed share inputs are
 rejected before lookup; shared routes use a dedicated content security policy;
-asset uploads accept only approved raster formats; and notification visibility
+asset uploads accept only approved formats with content-signature checks; and notification visibility
 reuses authorization results only for the duration of one query.
 
 Storage counters, retained history, deleted content, unattached uploads, and
@@ -125,13 +125,14 @@ confirms that changes synchronize automatically.
 ### Documents and files
 
 - Nested project folders with Markdown, HTML, spreadsheets, Kanban boards, team
-  views, charts, and PNG, JPEG, GIF, WebP, or AVIF image nodes.
+  views, charts, images, PDFs, text and code, CSV/TSV, ZIP, audio, and video attachments.
 - Document names accept `.md`, `.html`, `.sheet`, `.board`, `.view`, and `.chart`. Entering an
   extension in the creation dialog selects the matching format automatically;
   names without an extension use the selected format and receive its canonical
   extension.
 - Multi-file `.md` and `.html` import plus atomic RFC-style CSV/TSV spreadsheet import.
-- Drag-and-drop movement with cycle prevention and an accessible move dialog.
+- Multi-selection with keyboard, pointer, and long-press controls for bounded bulk
+  move, trash, restore, and duplicate workflows.
 - File duplication with collision-safe names and independent collaboration state.
 - Thirty-day trash, restoration, administrator-only permanent deletion, and bounded purge jobs.
 - Project and plan storage accounting enforced at the backend boundary.
@@ -164,6 +165,7 @@ confirms that changes synchronize automatically.
 - Yjs-relative text comment anchors, stable row/column cell anchors for spreadsheets,
   and stable card anchors for boards.
 - Replies, resolution, reopening, mentions, and notification preferences.
+- Document watches, unread markers, optional immediate email, and daily digests.
 - Version checkpoints, text comparison, restoration, and live collaborator updates.
 - Project activity feed with actor, target, event type, and time.
 
@@ -174,6 +176,8 @@ confirms that changes synchronize automatically.
 - Dashboard quick-open palette with project, path, file, and content results.
 - Per-user, organization-scoped recent-document tracking with access
   revalidation and a bounded history.
+- Per-user project and document favorites with access revalidation and a personal
+  favorites, recent documents, and open-mentions home.
 
 ### Sharing and export
 
@@ -299,6 +303,9 @@ cp .env.example .env.local
 | `HEALTH_CHECK_TOKEN` | Yes | Authorizes detailed health checks; use an independent value with 32+ random characters |
 | `SHARE_IP_SALT` | Yes | Hashes client addresses used by public-share throttling; use an independent random value |
 | `SHARE_TRUST_FORWARDED` | No | Defaults to `0`; set to `1` only behind a trusted proxy or CDN that overwrites forwarding headers |
+| `RESEND_API_KEY` | No | Enables transactional notification emails through Resend when paired with a sender |
+| `RESEND_FROM_EMAIL` | No | Verified sender used for notification and digest emails |
+| `EMAIL_UNSUBSCRIBE_SECRET` | For email | Signs expiring, single-purpose unsubscribe links; use 32+ random characters |
 | `CLERK_JWT_ISSUER_DOMAIN` | Yes | Verifies Clerk session JWTs inside Convex |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | No | Overrides the sign-in route; template default is `/sign-in` |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | No | Overrides the sign-up route; template default is `/sign-up` |
@@ -306,6 +313,13 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_CLERK_SIGN_UP_FORCE_REDIRECT_URL` | No | Post-sign-up destination; template default is `/dashboard` |
 
 Never commit `.env.local` or production credentials.
+
+Email delivery runs inside Convex actions. Configure `NEXT_PUBLIC_SITE_URL`,
+`RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and `EMAIL_UNSUBSCRIBE_SECRET` in the
+Convex deployment environment as well as the web environment. The unsubscribe
+secret must have the same value in both runtimes; `CONVEX_PURGE_SECRET` must
+also match so the signed public route can update the preference through the
+trusted server path.
 
 ## Local development
 
@@ -384,7 +398,8 @@ CI installs from the frozen lockfile and executes `pnpm check` for every push to
 - Shared routes use a content security policy that constrains scripts, styles, images, fonts, connections, and frames while disabling base and form targets.
 - Server service secrets use constant-time comparison.
 - HTML preview runs in a sandboxed iframe.
-- Asset uploads use a server-enforced PNG, JPEG, GIF, WebP, and AVIF MIME allowlist; file size, project size, tree depth, and node-count limits are also enforced server-side.
+- Attachment uploads use a server-enforced MIME allowlist, file-signature checks,
+  per-type size limits, project quotas, tree-depth limits, and node-count limits.
 - Notification queries revalidate visibility and reuse per-project access decisions only within the current query.
 - Secretlint runs locally and in CI.
 

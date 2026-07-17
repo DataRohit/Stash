@@ -274,6 +274,50 @@ const schema = defineSchema({
     .index("by_document", ["documentId"])
     .index("by_project", ["projectId"]),
 
+  favorites: defineTable({
+    clerkOrgId: v.string(),
+    userId: v.string(),
+    projectId: v.id("projects"),
+    documentId: v.optional(v.id("documents")),
+    createdAt: v.number(),
+  })
+    .index("by_user_org", ["userId", "clerkOrgId", "createdAt"])
+    .index("by_user_project", ["userId", "projectId", "documentId"])
+    .index("by_user_document", ["userId", "documentId"])
+    .index("by_document", ["documentId"])
+    .index("by_project", ["projectId"]),
+
+  documentWatches: defineTable({
+    clerkOrgId: v.string(),
+    userId: v.string(),
+    projectId: v.id("projects"),
+    documentId: v.id("documents"),
+    createdAt: v.number(),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_document_user", ["documentId", "userId"])
+    .index("by_user_document", ["userId", "documentId"])
+    .index("by_user_org", ["userId", "clerkOrgId"])
+    .index("by_project", ["projectId"]),
+
+  validatedUploads: defineTable({
+    storageId: v.id("_storage"),
+    projectId: v.id("projects"),
+    userId: v.string(),
+    mimeType: v.string(),
+    size: v.number(),
+    expiresAt: v.number(),
+  })
+    .index("by_storage", ["storageId"])
+    .index("by_expires", ["expiresAt"]),
+
+  watchPreferences: defineTable({
+    clerkOrgId: v.string(),
+    userId: v.string(),
+    autoWatch: v.boolean(),
+    updatedAt: v.number(),
+  }).index("by_user_org", ["userId", "clerkOrgId"]),
+
   yjsUpdates: defineTable({
     documentId: v.id("documents"),
     seq: v.number(),
@@ -375,6 +419,7 @@ const schema = defineSchema({
         v.literal("reply"),
         v.literal("resolved"),
         v.literal("reopened"),
+        v.literal("watching"),
       ),
     ),
     recipientUserId: v.string(),
@@ -388,6 +433,9 @@ const schema = defineSchema({
     quote: v.string(),
     bodySnippet: v.string(),
     readAt: v.union(v.number(), v.null()),
+    emailSentAt: v.optional(v.number()),
+    emailAttempts: v.optional(v.number()),
+    digestSentAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_recipient", ["recipientUserId", "createdAt"])
@@ -397,6 +445,30 @@ const schema = defineSchema({
     .index("by_comment", ["commentId"])
     .index("by_document", ["documentId"])
     .index("by_created", ["createdAt"]),
+
+  emailPreferences: defineTable({
+    clerkOrgId: v.string(),
+    userId: v.string(),
+    mention: v.union(v.literal("immediate"), v.literal("digest"), v.literal("off")),
+    reply: v.union(v.literal("immediate"), v.literal("digest"), v.literal("off")),
+    resolved: v.union(v.literal("immediate"), v.literal("digest"), v.literal("off")),
+    reopened: v.union(v.literal("immediate"), v.literal("digest"), v.literal("off")),
+    watching: v.union(v.literal("immediate"), v.literal("digest"), v.literal("off")),
+    updatedAt: v.number(),
+  })
+    .index("by_user_org", ["userId", "clerkOrgId"])
+    .index("by_user", ["userId"]),
+
+  emailDigestRuns: defineTable({
+    clerkOrgId: v.string(),
+    userId: v.string(),
+    day: v.string(),
+    state: v.union(v.literal("sending"), v.literal("sent"), v.literal("failed")),
+    attempts: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_user_org_day", ["userId", "clerkOrgId", "day"])
+    .index("by_updated", ["updatedAt"]),
 
   notificationPreferences: defineTable({
     clerkOrgId: v.string(),

@@ -13,6 +13,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { accessForProject, documentState, isInactiveTree, requireProjectEditor } from "./documents";
+import { ensureAutoWatch } from "./watchHelpers";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const MAX_ANCHOR_BYTES = 4096;
@@ -28,6 +29,7 @@ const MAX_MESSAGES_PER_THREAD = 40;
 const MAX_LOADED_MESSAGES_PER_THREAD = 200;
 const MARK_READ_BATCH = 200;
 const COMMENT_WRITE_LIMIT = { capacity: 20, refillPerSecond: 1 };
+const WATCH_NOTIFICATION_COLLAPSE_MS = 5 * 60 * 1000;
 
 type Actor = {
   userId: string;
@@ -159,7 +161,7 @@ async function notifyRecipients(
   quote: string,
   body: string,
   recipientIds: string[],
-  kind: "mention" | "reply" | "resolved" | "reopened",
+  kind: "mention" | "reply" | "resolved" | "reopened" | "watching",
 ): Promise<void> {
   const now = Date.now();
   const accessible = await accessibleMemberIds(ctx, project);
@@ -175,7 +177,34 @@ async function notifyRecipients(
       )
       .unique();
     if (preference?.muted) continue;
-    await ctx.db.insert("notifications", {
+    if (kind === "watching" || kind === "reply") {
+      const recent = await ctx.db
+        .query("notifications")
+        .withIndex("by_recipient_org", (q) =>
+          q.eq("recipientUserId", recipientUserId).eq("clerkOrgId", project.clerkOrgId),
+        )
+        .order("desc")
+        .take(12);
+      const collapsed = recent.find(
+        (row) =>
+          row.kind === kind &&
+          row.documentId === documentId &&
+          row.actorUserId === actor.userId &&
+          row.readAt === null &&
+          now - row.createdAt <= WATCH_NOTIFICATION_COLLAPSE_MS,
+      );
+      if (collapsed) {
+        await ctx.db.patch(collapsed._id, {
+          commentId,
+          ...(messageId ? { messageId } : {}),
+          quote,
+          bodySnippet: body.slice(0, MAX_SNIPPET_LENGTH),
+          createdAt: now,
+        });
+        continue;
+      }
+    }
+    const notificationId = await ctx.db.insert("notifications", {
       kind,
       recipientUserId,
       clerkOrgId: project.clerkOrgId,
@@ -190,7 +219,19 @@ async function notifyRecipients(
       readAt: null,
       createdAt: now,
     });
+    await ctx.scheduler.runAfter(2 * 60 * 1000, internal.email.sendNotification, {
+      notificationId,
+      attempt: 0,
+    });
   }
+}
+
+async function watcherIds(ctx: QueryCtx, documentId: Id<"documents">): Promise<string[]> {
+  const rows = await ctx.db
+    .query("documentWatches")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .collect();
+  return rows.map((row) => row.userId);
 }
 
 async function fileForAccess(ctx: MutationCtx, documentId: Id<"documents">) {
@@ -229,7 +270,7 @@ async function visibleNotificationTarget(
   ) {
     return null;
   }
-  return { project, doc };
+  return { project, doc, thread };
 }
 
 export const listForDocument = query({
@@ -533,6 +574,25 @@ export const createThread = mutation({
       body,
       mentionUserIds,
     );
+    await ensureAutoWatch(ctx, {
+      clerkOrgId: access.project.clerkOrgId,
+      userId: actor.userId,
+      projectId: doc.projectId,
+      documentId: doc._id,
+    });
+    const mentioned = new Set(mentionUserIds);
+    await notifyRecipients(
+      ctx,
+      access.project,
+      doc._id,
+      commentId,
+      messageId,
+      actor,
+      quote,
+      body,
+      (await watcherIds(ctx, doc._id)).filter((userId) => !mentioned.has(userId)),
+      "watching",
+    );
     return commentId;
   },
 });
@@ -614,6 +674,25 @@ export const reply = mutation({
       body,
       participants,
       "reply",
+    );
+    await ensureAutoWatch(ctx, {
+      clerkOrgId: access.project.clerkOrgId,
+      userId: actor.userId,
+      projectId: thread.projectId,
+      documentId: thread.documentId,
+    });
+    const alreadyNotified = new Set([...mentionUserIds, ...participants]);
+    await notifyRecipients(
+      ctx,
+      access.project,
+      thread.documentId,
+      thread._id,
+      messageId,
+      actor,
+      thread.quote,
+      body,
+      (await watcherIds(ctx, thread.documentId)).filter((userId) => !alreadyNotified.has(userId)),
+      "watching",
     );
     return messageId;
   },
@@ -736,6 +815,7 @@ export const listMine = query({
         createdAt: row.createdAt,
         projectTitle: target.project.title,
         documentName: target.doc.name,
+        threadStatus: target.thread.status,
       });
       if (visible.length >= 20) {
         break;

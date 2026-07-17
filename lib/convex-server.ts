@@ -463,3 +463,14 @@ export async function setProjectMaxCollaborators(
     maxCollaborators,
   });
 }
+
+export async function unsubscribeNotificationEmail(input: {
+  userId: string;
+  clerkOrgId: string;
+  kind: "mention" | "reply" | "resolved" | "reopened" | "watching" | "digest";
+}): Promise<void> {
+  const secret = process.env.CONVEX_PURGE_SECRET;
+  const client = convexClient();
+  if (!client || !secret) throw new Error("Convex email preferences are not configured");
+  await client.mutation(api.email.unsubscribeWithSecret, { ...input, secret });
+}

@@ -54,9 +54,11 @@ function retentionLabel(trashedAt: number, now: number): { label: string; immine
 
 export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProps) {
   const [confirmItem, setConfirmItem] = useState<TrashItem | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => Date.now());
   const itemsData = useQuery(api.documents.listTrash, open ? { projectId } : "skip");
   const restore = useMutation(api.documents.restoreDocument);
+  const bulkRestore = useMutation(api.documents.bulkRestore);
   const deleteForever = useMutation(api.documents.deleteForever);
   const items = (itemsData ?? []) as TrashItem[];
 
@@ -112,54 +114,95 @@ export function TrashPanel({ open, projectId, isAdmin, onClose }: TrashPanelProp
               className="m-2"
             />
           ) : (
-            <ul className="flex flex-col gap-1 px-2">
-              {items.map((item) => {
-                const retention = retentionLabel(item.trashedAt, now);
-                return (
-                  <li
-                    key={item.id}
-                    className={`group flex items-center gap-2 rounded-md px-3 py-2 transition-colors hover:bg-foreground/[0.05] ${retention.imminent ? "bg-destructive/5" : ""}`}
+            <div className="px-2">
+              {selected.size > 0 ? (
+                <div className="mb-2 flex min-h-11 items-center justify-between gap-3 rounded-md border border-hairline bg-surface/50 px-3">
+                  <span className="font-mono text-xs">{selected.size} selected</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const results = await bulkRestore({
+                          projectId,
+                          documentIds: [...selected] as Id<"documents">[],
+                        });
+                        const restored = results.filter((result) => result.ok).length;
+                        notify.success(`${restored} ${restored === 1 ? "item" : "items"} restored`);
+                        setSelected(new Set());
+                      } catch (error) {
+                        notify.error("Restore failed", { description: mapDocError(error) });
+                      }
+                    }}
+                    className="flex h-9 items-center gap-2 rounded-sm border border-hairline px-3 text-xs hover:bg-foreground/[0.06]"
                   >
-                    <ItemGlyph item={item} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-foreground text-xs">{item.name}</span>
-                      <span className="block font-mono text-[10px] text-muted-foreground">
-                        <time
-                          dateTime={new Date(item.trashedAt).toISOString()}
-                          title={formatDateTime(item.trashedAt)}
-                        >
-                          {formatRelativeTime(item.trashedAt, now)}
-                        </time>
-                        {item.size > 0 ? ` · ${formatBytes(item.size)}` : ""}
-                      </span>
-                      <span
-                        className={`block font-mono text-[10px] ${retention.imminent ? "text-destructive" : "text-muted-foreground"}`}
-                      >
-                        {retention.label}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => void onRestore(item)}
-                      className="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-hairline px-2 font-medium text-[11px] text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
+                    <RotateCcw className="size-4" aria-hidden="true" />
+                    Restore selected
+                  </button>
+                </div>
+              ) : null}
+              <ul className="flex flex-col gap-1">
+                {items.map((item) => {
+                  const retention = retentionLabel(item.trashedAt, now);
+                  return (
+                    <li
+                      key={item.id}
+                      className={`group flex items-center gap-2 rounded-md px-3 py-2 transition-colors hover:bg-foreground/[0.05] ${retention.imminent ? "bg-destructive/5" : ""}`}
                     >
-                      <RotateCcw className="size-3.5" aria-hidden="true" />
-                      Restore
-                    </button>
-                    {isAdmin ? (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(item.id)}
+                        onChange={(event) => {
+                          setSelected((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.add(item.id);
+                            else next.delete(item.id);
+                            return next;
+                          });
+                        }}
+                        aria-label={`Select ${item.name}`}
+                        className="size-4 shrink-0"
+                      />
+                      <ItemGlyph item={item} />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-foreground text-xs">{item.name}</span>
+                        <span className="block font-mono text-[10px] text-muted-foreground">
+                          <time
+                            dateTime={new Date(item.trashedAt).toISOString()}
+                            title={formatDateTime(item.trashedAt)}
+                          >
+                            {formatRelativeTime(item.trashedAt, now)}
+                          </time>
+                          {item.size > 0 ? ` · ${formatBytes(item.size)}` : ""}
+                        </span>
+                        <span
+                          className={`block font-mono text-[10px] ${retention.imminent ? "text-destructive" : "text-muted-foreground"}`}
+                        >
+                          {retention.label}
+                        </span>
+                      </span>
                       <button
                         type="button"
-                        onClick={() => setConfirmItem(item)}
-                        aria-label={`Delete ${item.name} forever`}
-                        className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => void onRestore(item)}
+                        className="flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-sm border border-hairline px-2 font-medium text-[11px] text-muted-foreground transition-colors hover:bg-foreground/[0.06] hover:text-foreground"
                       >
-                        <Trash2 className="size-3.5" aria-hidden="true" />
+                        <RotateCcw className="size-3.5" aria-hidden="true" />
+                        Restore
                       </button>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
+                      {isAdmin ? (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmItem(item)}
+                          aria-label={`Delete ${item.name} forever`}
+                          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-sm border border-hairline text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" aria-hidden="true" />
+                        </button>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           )}
         </div>
       </Dialog>

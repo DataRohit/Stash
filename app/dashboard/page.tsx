@@ -6,6 +6,7 @@ import { OrgCard } from "@/app/dashboard/org-card";
 import { OrgInvitations } from "@/app/dashboard/org-invitations";
 import { OrgMembers } from "@/app/dashboard/org-members";
 import { OrgTemplates } from "@/app/dashboard/org-templates";
+import { PersonalHome } from "@/app/dashboard/projects/personal-home";
 import { fetchOrgDetails } from "@/lib/convex-server";
 import { orgAvatarUrl } from "@/lib/org-avatar";
 import { limitsFromFeatures } from "@/lib/plan-limits";
@@ -65,6 +66,15 @@ export default async function DashboardPage() {
   return (
     <main className="flex w-full flex-col items-center px-3 pt-32 pb-16 sm:px-6 lg:pt-28">
       <div className="flex w-full max-w-7xl flex-col gap-6">
+        <section className="glass rounded-lg p-6 sm:p-8">
+          <div className="mb-6">
+            <span className="font-mono text-muted-foreground text-xs uppercase tracking-widest">
+              — My work
+            </span>
+            <h1 className="mt-1 font-serif text-3xl tracking-display">Home</h1>
+          </div>
+          <PersonalHome clerkOrgId={orgId} />
+        </section>
         <OrgInvitations />
         <OrgCard
           name={organization.name}

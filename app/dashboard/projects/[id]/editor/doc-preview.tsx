@@ -120,8 +120,8 @@ export function DocPreview({
           onLoad={() => setReady(true)}
           sandbox={
             allowActiveContent
-              ? "allow-scripts allow-popups allow-top-navigation-by-user-activation"
-              : "allow-scripts"
+              ? "allow-scripts allow-popups allow-downloads allow-top-navigation-by-user-activation"
+              : "allow-scripts allow-downloads"
           }
           className="editor-panel size-full border-0"
         />

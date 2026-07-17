@@ -1,7 +1,8 @@
+import { makeFunctionReference } from "convex/server";
 import { v } from "convex/values";
 import * as Y from "yjs";
 import { canAdministerProject, canEditProject, projectRole } from "../lib/access-policy";
-import { isRasterAssetMimeType } from "../lib/asset-formats";
+import { assetMaxBytes, isAllowedAssetMimeType, matchesAssetSignature } from "../lib/asset-formats";
 import { inspectBoard, MAX_BOARD_STORED_BYTES, seedBoard } from "../lib/board-model";
 import { type ChartSource, resolveChartData } from "../lib/chart-data";
 import { MAX_CHART_STORED_BYTES, seedChart } from "../lib/chart-model";
@@ -27,7 +28,7 @@ import { inspectView, MAX_VIEW_STORED_BYTES, seedView } from "../lib/view-model"
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
 import {
   clampInt,
@@ -35,15 +36,18 @@ import {
   HARD_MAX_PROJECT_BYTES,
   MIN_PROJECT_BYTES,
 } from "./limits";
+import { ensureAutoWatch } from "./watchHelpers";
+import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_COLLAB_UPDATE_BYTES = 768 * 1024;
-const MAX_ASSET_BYTES = 5 * 1024 * 1024;
 const MAX_NODES_PER_PROJECT = 2000;
 const MAX_DEPTH = 16;
 const PURGE_COLLAB_BATCH = 200;
 const PURGE_DOCUMENT_BATCH = 20;
+const MAX_BULK_ITEMS = 200;
+const BULK_WRITE_LIMIT = { capacity: 12, refillPerSecond: 0.2 };
 const WINDOWS_RESERVED_NAMES = new Set([
   "con",
   "prn",
@@ -674,7 +678,19 @@ export async function purgeRecentDocumentBatch(
   for (const row of rows) {
     await ctx.db.delete(row._id);
   }
-  return rows.length > 0;
+  if (rows.length > 0) return true;
+  const favorites = await ctx.db
+    .query("favorites")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of favorites) await ctx.db.delete(row._id);
+  if (favorites.length > 0) return true;
+  const watches = await ctx.db
+    .query("documentWatches")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of watches) await ctx.db.delete(row._id);
+  return watches.length > 0;
 }
 
 export async function purgeDocCollab(ctx: MutationCtx, documentId: Id<"documents">): Promise<void> {
@@ -1137,6 +1153,12 @@ export const createFile = mutation({
       targetName: name,
       detail: fileType,
     });
+    await ensureAutoWatch(ctx, {
+      clerkOrgId: access.project.clerkOrgId,
+      userId: access.userId,
+      projectId: args.projectId,
+      documentId: id,
+    });
     return id;
   },
 });
@@ -1250,6 +1272,12 @@ export const createFromTemplate = mutation({
       targetName: name,
       detail: args.templateId ? "template" : fileType,
     });
+    await ensureAutoWatch(ctx, {
+      clerkOrgId: access.project.clerkOrgId,
+      userId: access.userId,
+      projectId: args.projectId,
+      documentId: id,
+    });
     return id;
   },
 });
@@ -1331,6 +1359,12 @@ export const importDocuments = mutation({
       });
       await syncDocumentNode(ctx, id);
       await ctx.db.insert("yjsUpdates", { documentId: id, seq: 1, update: state, createdAt: now });
+      await ensureAutoWatch(ctx, {
+        clerkOrgId: access.project.clerkOrgId,
+        userId: access.userId,
+        projectId: args.projectId,
+        documentId: id,
+      });
       ids.push(id);
     }
     await addProjectBytes(ctx, access.project, addedBytes);
@@ -1431,6 +1465,12 @@ export const importSheet = mutation({
       targetName: name,
       detail: "sheet",
     });
+    await ensureAutoWatch(ctx, {
+      clerkOrgId: access.project.clerkOrgId,
+      userId: access.userId,
+      projectId: args.projectId,
+      documentId: id,
+    });
     return id;
   },
 });
@@ -1507,6 +1547,206 @@ export const move = mutation({
       previousValue: previousParent?.name ?? "Root",
       nextValue: nextParent?.name ?? "Root",
     });
+  },
+});
+
+function bulkRoots(documents: Doc<"documents">[], ids: Id<"documents">[]): Id<"documents">[] {
+  const selected = new Set(ids);
+  const byId = new Map(documents.map((doc) => [doc._id, doc]));
+  return ids.filter((id) => {
+    let current = byId.get(id)?.parentId;
+    const seen = new Set<Id<"documents">>();
+    while (current && !seen.has(current)) {
+      if (selected.has(current)) return false;
+      seen.add(current);
+      current = byId.get(current)?.parentId ?? null;
+    }
+    return true;
+  });
+}
+
+function bulkError(error: unknown): string {
+  return error instanceof Error ? error.message : "failed";
+}
+
+export const bulkMove = mutation({
+  args: {
+    projectId: v.id("projects"),
+    documentIds: v.array(v.id("documents")),
+    parentId: v.union(v.id("documents"), v.null()),
+  },
+  handler: async (ctx, args) => {
+    if (args.documentIds.length < 1 || args.documentIds.length > MAX_BULK_ITEMS) {
+      throw new Error("too-many-items");
+    }
+    const access = await requireProjectEditor(ctx, args.projectId);
+    if (
+      !(await enforceWriteRateLimit(
+        ctx,
+        "bulk-documents",
+        args.projectId,
+        access.userId,
+        BULK_WRITE_LIMIT,
+      ))
+    ) {
+      throw new Error("rate-limited");
+    }
+    if (args.parentId) await assertParent(ctx, args.projectId, args.parentId);
+    const documents = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const ids = bulkRoots(documents, [...new Set(args.documentIds)]);
+    const results: Array<{ id: Id<"documents">; ok: boolean; error?: string }> = [];
+    for (const id of ids) {
+      try {
+        const doc = await ctx.db.get(id);
+        if (!doc || doc.projectId !== args.projectId || isInactive(doc))
+          throw new Error("not-found");
+        if (args.parentId === doc._id) throw new Error("invalid-target");
+        const descendants = await subtree(ctx, doc.projectId, doc._id);
+        if (args.parentId && descendants.some((node) => node._id === args.parentId)) {
+          throw new Error("invalid-target");
+        }
+        if (
+          (await depthOf(ctx, args.parentId)) +
+            1 +
+            (await subtreeHeight(ctx, doc.projectId, doc._id)) >
+          MAX_DEPTH
+        ) {
+          throw new Error("too-deep");
+        }
+        if (await nameTaken(ctx, doc.projectId, args.parentId, doc.name, doc._id)) {
+          throw new Error("name-taken");
+        }
+        await ctx.db.patch(doc._id, { parentId: args.parentId, updatedAt: Date.now() });
+        await syncDocumentNode(ctx, doc._id);
+        results.push({ id, ok: true });
+      } catch (error) {
+        results.push({ id, ok: false, error: bulkError(error) });
+      }
+    }
+    const moved = results.filter((result) => result.ok).length;
+    if (moved > 0) {
+      const parent = args.parentId ? await ctx.db.get(args.parentId) : null;
+      await recordProjectEvent(ctx, {
+        projectId: args.projectId,
+        clerkOrgId: access.project.clerkOrgId,
+        kind: "node_moved",
+        targetName: `${moved} ${moved === 1 ? "item" : "items"}`,
+        detail: "bulk",
+        nextValue: parent?.name ?? "Root",
+      });
+    }
+    return results;
+  },
+});
+
+export const bulkTrash = mutation({
+  args: { projectId: v.id("projects"), documentIds: v.array(v.id("documents")) },
+  handler: async (ctx, args) => {
+    if (args.documentIds.length < 1 || args.documentIds.length > MAX_BULK_ITEMS) {
+      throw new Error("too-many-items");
+    }
+    const access = await requireProjectEditor(ctx, args.projectId);
+    if (
+      !(await enforceWriteRateLimit(
+        ctx,
+        "bulk-documents",
+        args.projectId,
+        access.userId,
+        BULK_WRITE_LIMIT,
+      ))
+    ) {
+      throw new Error("rate-limited");
+    }
+    const documents = await ctx.db
+      .query("documents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .collect();
+    const ids = bulkRoots(documents, [...new Set(args.documentIds)]);
+    const results = [];
+    const now = Date.now();
+    for (const id of ids) {
+      const doc = await ctx.db.get(id);
+      if (!doc || doc.projectId !== args.projectId || isInactive(doc)) {
+        results.push({ id, ok: false, error: "not-found" });
+        continue;
+      }
+      await ctx.db.patch(id, { trashedAt: now, updatedAt: now });
+      await syncDocumentNode(ctx, id);
+      results.push({ id, ok: true, error: undefined });
+    }
+    const trashed = results.filter((result) => result.ok).length;
+    if (trashed > 0) {
+      await recordProjectEvent(ctx, {
+        projectId: args.projectId,
+        clerkOrgId: access.project.clerkOrgId,
+        kind: "node_trashed",
+        targetName: `${trashed} ${trashed === 1 ? "item" : "items"}`,
+        detail: "bulk",
+      });
+    }
+    return results;
+  },
+});
+
+export const bulkRestore = mutation({
+  args: { projectId: v.id("projects"), documentIds: v.array(v.id("documents")) },
+  handler: async (ctx, args) => {
+    if (args.documentIds.length < 1 || args.documentIds.length > MAX_BULK_ITEMS) {
+      throw new Error("too-many-items");
+    }
+    const access = await requireProjectEditor(ctx, args.projectId);
+    if (
+      !(await enforceWriteRateLimit(
+        ctx,
+        "bulk-documents",
+        args.projectId,
+        access.userId,
+        BULK_WRITE_LIMIT,
+      ))
+    ) {
+      throw new Error("rate-limited");
+    }
+    const results = [];
+    for (const id of [...new Set(args.documentIds)]) {
+      try {
+        const doc = await ctx.db.get(id);
+        if (!doc?.trashedAt || doc.deletingAt || doc.projectId !== args.projectId) {
+          throw new Error("not-found");
+        }
+        let parentId = doc.parentId;
+        if (parentId) {
+          const parent = await ctx.db.get(parentId);
+          if (!parent || isInactive(parent) || parent.kind !== "folder") parentId = null;
+        }
+        const name = (await nameTaken(ctx, doc.projectId, parentId, doc.name, doc._id))
+          ? await uniqueName(ctx, doc.projectId, parentId, doc.name)
+          : doc.name;
+        await ctx.db.patch(doc._id, {
+          trashedAt: undefined,
+          parentId,
+          name,
+          updatedAt: Date.now(),
+        });
+        await syncDocumentNode(ctx, doc._id);
+        results.push({ id, ok: true, error: undefined });
+      } catch (error) {
+        results.push({ id, ok: false, error: bulkError(error) });
+      }
+    }
+    const restored = results.filter((result) => result.ok).length;
+    if (restored > 0) {
+      await recordProjectEvent(ctx, {
+        projectId: args.projectId,
+        clerkOrgId: access.project.clerkOrgId,
+        kind: "node_restored",
+        targetName: `${restored} ${restored === 1 ? "item" : "items"}`,
+        detail: "bulk",
+      });
+    }
+    return results;
   },
 });
 
@@ -1663,7 +1903,43 @@ export const duplicate = mutation({
       targetName: name,
       previousValue: doc.name,
     });
+    await ensureAutoWatch(ctx, {
+      clerkOrgId: access.project.clerkOrgId,
+      userId: access.userId,
+      projectId: doc.projectId,
+      documentId: id,
+    });
     return id;
+  },
+});
+
+const duplicateReference = makeFunctionReference<
+  "mutation",
+  { documentId: Id<"documents"> },
+  Id<"documents">
+>("documents:duplicate");
+
+export const bulkDuplicate = action({
+  args: { documentIds: v.array(v.id("documents")) },
+  handler: async (ctx, args) => {
+    if (args.documentIds.length < 1 || args.documentIds.length > MAX_BULK_ITEMS) {
+      throw new Error("too-many-items");
+    }
+    const results: Array<{
+      id: Id<"documents">;
+      ok: boolean;
+      duplicateId?: Id<"documents">;
+      error?: string;
+    }> = [];
+    for (const id of [...new Set(args.documentIds)]) {
+      try {
+        const duplicateId = await ctx.runMutation(duplicateReference, { documentId: id });
+        results.push({ id, ok: true, duplicateId });
+      } catch (error) {
+        results.push({ id, ok: false, error: bulkError(error) });
+      }
+    }
+    return results;
   },
 });
 
@@ -1848,6 +2124,103 @@ export const generateUploadUrl = mutation({
   },
 });
 
+export const assetUploadInfo = internalQuery({
+  args: {
+    projectId: v.id("projects"),
+    storageId: v.id("_storage"),
+    userId: v.string(),
+    clerkOrgId: v.string(),
+    isAdmin: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const project = await ctx.db.get(args.projectId);
+    if (!project || project.deletedAt || project.clerkOrgId !== args.clerkOrgId) return null;
+    if (!args.isAdmin) {
+      const grant = await ctx.db
+        .query("projectAccess")
+        .withIndex("by_project_user", (q) =>
+          q.eq("projectId", args.projectId).eq("userId", args.userId),
+        )
+        .unique();
+      if (!grant || (grant.level ?? "editor") !== "editor") return null;
+    }
+    const meta = await ctx.db.system.get(args.storageId);
+    return meta ? { mimeType: meta.contentType ?? "", size: meta.size } : null;
+  },
+});
+
+export const recordValidatedUpload = internalMutation({
+  args: {
+    projectId: v.id("projects"),
+    storageId: v.id("_storage"),
+    userId: v.string(),
+    mimeType: v.string(),
+    size: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("validatedUploads")
+      .withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+      .unique();
+    if (existing) await ctx.db.delete(existing._id);
+    await ctx.db.insert("validatedUploads", {
+      ...args,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+  },
+});
+
+export const validateAssetUpload = action({
+  args: { projectId: v.id("projects"), storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity?.org_id) throw new Error("forbidden");
+    const info = await ctx.runQuery(internal.documents.assetUploadInfo, {
+      ...args,
+      userId: identity.subject,
+      clerkOrgId: identity.org_id as string,
+      isAdmin: identity.org_role === "org:admin",
+    });
+    if (!info) throw new Error("invalid-asset");
+    const maxBytes = assetMaxBytes(info.mimeType);
+    if (!isAllowedAssetMimeType(info.mimeType) || maxBytes === null || info.size > maxBytes) {
+      await ctx.storage.delete(args.storageId);
+      throw new Error(
+        maxBytes !== null && info.size > maxBytes ? "file-too-large" : "invalid-asset",
+      );
+    }
+    const blob = await ctx.storage.get(args.storageId);
+    const signature = blob
+      ? new Uint8Array(await blob.slice(0, Math.min(blob.size, 4096)).arrayBuffer())
+      : null;
+    if (!signature || !matchesAssetSignature(info.mimeType, signature)) {
+      await ctx.storage.delete(args.storageId);
+      throw new Error("asset-signature-mismatch");
+    }
+    await ctx.runMutation(internal.documents.recordValidatedUpload, {
+      ...args,
+      userId: identity.subject,
+      mimeType: info.mimeType,
+      size: info.size,
+    });
+    return true;
+  },
+});
+
+export const pruneValidatedUploads = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db
+      .query("validatedUploads")
+      .withIndex("by_expires", (q) => q.lt("expiresAt", Date.now()))
+      .take(PURGE_COLLAB_BATCH);
+    for (const row of rows) await ctx.db.delete(row._id);
+    if (rows.length === PURGE_COLLAB_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.documents.pruneValidatedUploads, {});
+    }
+  },
+});
+
 export const createAsset = mutation({
   args: {
     projectId: v.id("projects"),
@@ -1857,6 +2230,10 @@ export const createAsset = mutation({
   },
   handler: async (ctx, args) => {
     const access = await requireProjectEditor(ctx, args.projectId);
+    const validation = await ctx.db
+      .query("validatedUploads")
+      .withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
+      .unique();
     const documentReference = await ctx.db
       .query("documents")
       .withIndex("by_storage", (q) => q.eq("storageId", args.storageId))
@@ -1873,14 +2250,27 @@ export const createAsset = mutation({
       throw new Error("invalid-asset");
     }
     const mimeType = meta.contentType ?? "";
-    if (!isRasterAssetMimeType(mimeType)) {
+    const maxBytes = assetMaxBytes(mimeType);
+    if (!isAllowedAssetMimeType(mimeType) || maxBytes === null) {
       await ctx.storage.delete(args.storageId);
       throw new Error("invalid-asset");
     }
-    if (meta.size > MAX_ASSET_BYTES) {
+    if (meta.size > maxBytes) {
       await ctx.storage.delete(args.storageId);
       throw new Error("file-too-large");
     }
+    if (
+      !validation ||
+      validation.expiresAt < Date.now() ||
+      validation.userId !== access.userId ||
+      validation.projectId !== args.projectId ||
+      validation.mimeType !== mimeType ||
+      validation.size !== meta.size
+    ) {
+      await ctx.storage.delete(args.storageId);
+      throw new Error("asset-signature-mismatch");
+    }
+    await ctx.db.delete(validation._id);
     try {
       await assertParent(ctx, args.projectId, args.parentId);
       await assertCapacity(ctx, args.projectId);

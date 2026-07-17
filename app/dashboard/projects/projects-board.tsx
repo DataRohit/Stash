@@ -4,8 +4,8 @@ import { useQuery } from "convex/react";
 import { FolderPlus, Plus, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { type FormEvent, type KeyboardEvent, useState, useTransition } from "react";
+import { PersonalHome } from "@/app/dashboard/projects/personal-home";
 import { ProjectCard } from "@/app/dashboard/projects/project-card";
-import { RecentDocuments } from "@/app/dashboard/projects/recent-documents";
 import { createProject } from "@/app/dashboard/projects-actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,8 @@ export function ProjectsBoard({
 }: ProjectsBoardProps) {
   const router = useRouter();
   const projects = useQuery(api.projects.listByOrg, { clerkOrgId });
+  const favorites = useQuery(api.navigation.listFavorites, { clerkOrgId });
+  const unread = useQuery(api.watches.listUnread, { documentIds: [] });
 
   const [createOpen, setCreateOpen] = useState(false);
   const [title, setTitle] = useState("");
@@ -222,7 +224,7 @@ export function ProjectsBoard({
       ) : null}
 
       <div className="mt-6 border-hairline border-t pt-6">
-        <RecentDocuments clerkOrgId={clerkOrgId} />
+        <PersonalHome clerkOrgId={clerkOrgId} />
         {projects === undefined ? (
           <DataLoader label="Loading projects" compact />
         ) : projects.length === 0 ? (
@@ -254,6 +256,12 @@ export function ProjectsBoard({
                 cloneState={project.cloneState}
                 cloneCopied={project.cloneCopied}
                 cloneTotal={project.cloneTotal}
+                favorite={
+                  favorites?.some(
+                    (item) => item.projectId === project.id && item.documentId === null,
+                  ) ?? false
+                }
+                unread={unread?.projectIds.includes(project.id) ?? false}
               />
             ))}
           </div>

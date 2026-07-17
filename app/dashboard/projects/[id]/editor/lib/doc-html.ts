@@ -1,5 +1,6 @@
 import { Marked } from "marked";
 import { resolveRef, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { assetFamily } from "@/lib/asset-formats";
 
 export type MermaidBlock = { id: string; code: string };
 
@@ -259,7 +260,10 @@ function rewriteRefs(
   for (const img of doc.querySelectorAll("img[src], source[src]")) {
     const src = img.getAttribute("src") ?? "";
     const target = resolveRef(fromNode, src, nodes);
-    if (target?.kind === "asset" && target.assetUrl) {
+    const family = target?.kind === "asset" ? assetFamily(target.mimeType ?? "") : null;
+    const canRender =
+      img.tagName === "IMG" ? family === "image" : family === "audio" || family === "video";
+    if (target?.kind === "asset" && target.assetUrl && canRender) {
       img.setAttribute("src", target.assetUrl);
     } else if (src && !isExternalRef(src)) {
       img.setAttribute("src", missingAssetSrc(src));
@@ -289,6 +293,9 @@ function rewriteRefs(
       anchor.setAttribute("href", target.assetUrl);
       anchor.setAttribute("target", "_blank");
       anchor.setAttribute("rel", "noopener noreferrer");
+      if (assetFamily(target.mimeType ?? "") === "unsafe") {
+        anchor.setAttribute("download", target.name);
+      }
     } else if (href && !isExternalRef(href)) {
       anchor.setAttribute("href", "#");
       anchor.setAttribute("title", `Missing file or asset: ${href}`);

@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import { Check, CornerDownRight, Loader2, MessageSquare, RotateCcw, X } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { WatchButton } from "@/components/dashboard/watch-button";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { useAnchoredPosition } from "@/components/ui/floating";
 import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
@@ -71,6 +72,8 @@ type CommentsRailProps = {
   activeThreadId: string | null;
   selection: SelectionState | null;
   selectionKind?: "text" | "cell" | "card" | "document";
+  documentId: string;
+  watching: boolean;
   onClose: () => void;
   onCreate: (body: string, mentionUserIds: string[]) => Promise<void>;
   onReply: (threadId: string, body: string, mentionUserIds: string[]) => Promise<void>;
@@ -308,6 +311,8 @@ export function CommentsRail({
   activeThreadId,
   selection,
   selectionKind = "text",
+  documentId,
+  watching,
   onClose,
   onCreate,
   onReply,
@@ -367,15 +372,18 @@ export function CommentsRail({
             </span>
             <span className="sr-only">{openCount} open comments</span>
           </div>
-          <button
-            ref={closeRef}
-            type="button"
-            onClick={onClose}
-            aria-label="Close comments"
-            className="flex size-9 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive sm:size-7"
-          >
-            <X className="size-4" aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-1">
+            <WatchButton documentId={documentId} watching={watching} compact />
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={onClose}
+              aria-label="Close comments"
+              className="flex size-9 cursor-pointer items-center justify-center rounded-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive sm:size-7"
+            >
+              <X className="size-4" aria-hidden="true" />
+            </button>
+          </div>
         </div>
 
         <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3">

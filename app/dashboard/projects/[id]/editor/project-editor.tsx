@@ -1,7 +1,7 @@
 "use client";
 
 import { useAuth, useUser } from "@clerk/nextjs";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useConvex, useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
   BookmarkPlus,
@@ -58,6 +58,10 @@ import { FileTree } from "@/app/dashboard/projects/[id]/editor/file-tree";
 import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import {
+  type BundleNode,
+  exportProjectZip,
+} from "@/app/dashboard/projects/[id]/editor/lib/export-doc";
+import {
   extractTextOutline,
   type OutlineItem,
 } from "@/app/dashboard/projects/[id]/editor/lib/outline";
@@ -82,6 +86,8 @@ import {
 import { TrashPanel } from "@/app/dashboard/projects/[id]/editor/trash-panel";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { ViewEditor } from "@/app/dashboard/projects/[id]/editor/view-editor";
+import { FavoriteButton } from "@/components/dashboard/favorite-button";
+import { WatchButton } from "@/components/dashboard/watch-button";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { useAnchoredPosition } from "@/components/ui/floating";
@@ -90,7 +96,14 @@ import { useDialogA11y } from "@/components/ui/use-dialog-a11y";
 import { useMediaQuery } from "@/components/ui/use-media-query";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { isRasterAssetMimeType, RASTER_ASSET_FORMATS } from "@/lib/asset-formats";
+import {
+  ASSET_FORMAT_LABEL,
+  assetMaxBytes,
+  assetMimeType,
+  isAllowedAssetMimeType,
+  isRasterAssetMimeType,
+  RASTER_ASSET_FORMATS,
+} from "@/lib/asset-formats";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { parseDelimited, sheetImportUpdates } from "@/lib/sheet-csv";
 import { cn } from "@/lib/utils";
@@ -104,6 +117,36 @@ type ProjectEditorProps = {
 };
 
 type ViewMode = "editor" | "split" | "preview";
+type UploadStatus = "uploading" | "complete" | "failed";
+
+function uploadAsset(
+  url: string,
+  file: File,
+  onProgress: (progress: number) => void,
+): Promise<Id<"_storage">> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", url);
+    request.setRequestHeader("Content-Type", assetMimeType(file));
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) onProgress(Math.round((event.loaded / event.total) * 100));
+    });
+    request.addEventListener("load", () => {
+      if (request.status < 200 || request.status >= 300) {
+        reject(new Error("upload-failed"));
+        return;
+      }
+      try {
+        resolve((JSON.parse(request.responseText) as { storageId: Id<"_storage"> }).storageId);
+      } catch {
+        reject(new Error("upload-failed"));
+      }
+    });
+    request.addEventListener("error", () => reject(new Error("upload-failed")));
+    request.addEventListener("abort", () => reject(new Error("upload-failed")));
+    request.send(file);
+  });
+}
 
 const VersionHistoryModal = dynamic(
   () =>
@@ -113,7 +156,14 @@ const VersionHistoryModal = dynamic(
   { ssr: false },
 );
 
-const MAX_ASSET_BYTES = 5 * 1024 * 1024;
+const AttachmentViewer = dynamic(
+  () =>
+    import("@/app/dashboard/projects/[id]/editor/attachment-viewer").then(
+      (module) => module.AttachmentViewer,
+    ),
+  { loading: () => <DataLoader label="Loading attachment viewer" compact /> },
+);
+
 const MAX_FILE_BYTES = 512 * 1024;
 
 function sidebarStorageKey(projectId: string): string {
@@ -356,6 +406,7 @@ export function ProjectEditor({
   canEdit: initialCanEdit,
   isAdmin: initialIsAdmin,
 }: ProjectEditorProps) {
+  const convex = useConvex();
   const pid = projectId as Id<"projects">;
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -381,8 +432,12 @@ export function ProjectEditor({
   const removeDoc = useMutation(api.documents.remove);
   const moveDoc = useMutation(api.documents.move);
   const duplicateDoc = useMutation(api.documents.duplicate);
+  const bulkDuplicateDocs = useAction(api.documents.bulkDuplicate);
+  const bulkMoveDocs = useMutation(api.documents.bulkMove);
+  const bulkTrashDocs = useMutation(api.documents.bulkTrash);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const createAsset = useMutation(api.documents.createAsset);
+  const validateAssetUpload = useAction(api.documents.validateAssetUpload);
   const importDocuments = useMutation(api.documents.importDocuments);
   const importSheet = useMutation(api.documents.importSheet);
   const replaceSheetFromImport = useMutation(api.collab.replaceSheetFromImport);
@@ -495,6 +550,11 @@ export function ProjectEditor({
   const selectedNode = nodes.find((node) => node.id === effectiveSelectedId) ?? null;
   const selectedFileId = selectedNode?.kind === "file" ? (effectiveSelectedId as string) : null;
   const selectedAssetId = selectedNode?.kind === "asset" ? selectedNode.id : null;
+  const favoriteData = useQuery(api.navigation.listFavorites, { clerkOrgId });
+  const watchState = useQuery(
+    api.watches.getState,
+    selectedFileId ? { documentId: selectedFileId as Id<"documents"> } : "skip",
+  );
   const selectedAssetUrls = useQuery(
     api.documents.getAssetUrls,
     selectedAssetId ? { documentIds: [selectedAssetId as Id<"documents">] } : "skip",
@@ -810,61 +870,63 @@ export function ProjectEditor({
     }
   };
 
-  const handleUpload = async (parentId: string | null, files: File[]) => {
-    const imports = files.filter((file) => /\.(?:md|html)$/i.test(file.name));
-    const sheetImports = files.filter((file) => /\.(?:csv|tsv)$/i.test(file.name));
-    const assets = files.filter((file) => isRasterAssetMimeType(file.type));
-    if (imports.length + sheetImports.length + assets.length !== files.length) {
-      notify.error("Unsupported file", {
-        description: `Upload ${RASTER_ASSET_FORMATS} images, .md/.html documents, or .csv/.tsv spreadsheets.`,
-      });
-    }
-    for (const file of sheetImports) {
-      await guard(async () => {
-        const delimiter = file.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
-        const values = parseDelimited(await file.text(), delimiter);
-        await importSheet({
-          projectId: pid,
-          parentId: parentId as Id<"documents"> | null,
-          name: file.name.replace(/\.(?:csv|tsv)$/i, ".sheet"),
-          updates: sheetImportUpdates(values).map(toArrayBuffer),
-        });
-      });
-    }
-    if (imports.length > 0) {
-      await guard(async () => {
-        await importDocuments({
-          projectId: pid,
-          parentId: parentId as Id<"documents"> | null,
-          files: await Promise.all(
-            imports.map(async (file) => ({ name: file.name, content: await file.text() })),
-          ),
-        });
-      });
-    }
-    for (const file of assets) {
-      if (file.size > MAX_ASSET_BYTES) {
-        notify.error("File too large", { description: "Each asset can be up to 5 MB." });
-        continue;
-      }
-      await guard(async () => {
-        const uploadUrl = await generateUploadUrl({ projectId: pid });
-        const response = await fetch(uploadUrl, {
-          method: "POST",
-          headers: { "Content-Type": file.type },
-          body: file,
-        });
-        if (!response.ok) {
-          throw new Error("upload failed");
+  const handleUpload = async (
+    parentId: string | null,
+    files: File[],
+    update: (index: number, progress: number, status: UploadStatus, error?: string) => void,
+  ) => {
+    let completed = 0;
+    let failed = 0;
+    for (const [index, file] of files.entries()) {
+      try {
+        if (/\.(?:md|html)$/i.test(file.name)) {
+          update(index, 20, "uploading");
+          await importDocuments({
+            projectId: pid,
+            parentId: parentId as Id<"documents"> | null,
+            files: [{ name: file.name, content: await file.text() }],
+          });
+        } else {
+          const mimeType = assetMimeType(file);
+          if (!isAllowedAssetMimeType(mimeType)) {
+            throw new Error(`Upload ${ASSET_FORMAT_LABEL}, or .md/.html documents.`);
+          }
+          const maxBytes = assetMaxBytes(mimeType);
+          if (maxBytes === null || file.size > maxBytes) {
+            throw new Error(`${file.name} exceeds the ${formatBytes(maxBytes ?? 0)} limit.`);
+          }
+          const uploadUrl = await generateUploadUrl({ projectId: pid });
+          const storageId = await uploadAsset(uploadUrl, file, (progress) =>
+            update(index, Math.min(progress, 90), "uploading"),
+          );
+          update(index, 92, "uploading");
+          await validateAssetUpload({ projectId: pid, storageId });
+          update(index, 97, "uploading");
+          await createAsset({
+            projectId: pid,
+            parentId: parentId as Id<"documents"> | null,
+            name: file.name,
+            storageId,
+          });
         }
-        const { storageId } = (await response.json()) as { storageId: Id<"_storage"> };
-        await createAsset({
-          projectId: pid,
-          parentId: parentId as Id<"documents"> | null,
-          name: file.name,
-          storageId,
-        });
+        completed += 1;
+        update(index, 100, "complete");
+      } catch (error) {
+        failed += 1;
+        const detail =
+          error instanceof Error &&
+          (error.message.startsWith("Upload") || error.message.includes("exceeds"))
+            ? error.message
+            : mapDocError(error);
+        update(index, 100, "failed", detail);
+      }
+    }
+    if (completed > 0) {
+      notify.success(`${completed} ${completed === 1 ? "file" : "files"} added`, {
+        description: failed ? `${failed} failed. Review the upload results.` : undefined,
       });
+    } else if (failed > 0) {
+      notify.error("Upload failed", { description: "Review the per-file results and try again." });
     }
   };
 
@@ -872,14 +934,18 @@ export function ProjectEditor({
     if (selectedNode?.kind !== "file") {
       return null;
     }
-    if (!isRasterAssetMimeType(file.type)) {
+    if (!isRasterAssetMimeType(assetMimeType(file))) {
       notify.error("Unsupported image", {
         description: `Images must be ${RASTER_ASSET_FORMATS}.`,
       });
       return null;
     }
-    if (file.size > MAX_ASSET_BYTES) {
-      notify.error("File too large", { description: "Each image can be up to 5 MB." });
+    const mimeType = assetMimeType(file);
+    const maxBytes = assetMaxBytes(mimeType);
+    if (maxBytes === null || file.size > maxBytes) {
+      notify.error("File too large", {
+        description: `This image exceeds the ${formatBytes(maxBytes ?? 0)} limit.`,
+      });
       return null;
     }
     const subtype = file.type.split("/")[1] ?? "png";
@@ -888,13 +954,14 @@ export function ProjectEditor({
       const uploadUrl = await generateUploadUrl({ projectId: pid });
       const response = await fetch(uploadUrl, {
         method: "POST",
-        headers: { "Content-Type": file.type },
+        headers: { "Content-Type": mimeType },
         body: file,
       });
       if (!response.ok) {
         throw new Error("upload failed");
       }
       const { storageId } = (await response.json()) as { storageId: Id<"_storage"> };
+      await validateAssetUpload({ projectId: pid, storageId });
       const asset = await createAsset({
         projectId: pid,
         parentId: selectedNode.parentId as Id<"documents"> | null,
@@ -907,6 +974,24 @@ export function ProjectEditor({
       notify.error("Image upload failed", { description: mapDocError(error) });
       return null;
     }
+  };
+
+  const importSelectedCsv = async () => {
+    if (selectedNode?.kind !== "asset" || !selectedAssetUrl) return;
+    await guard(async () => {
+      const response = await fetch(selectedAssetUrl);
+      if (!response.ok) throw new Error("missing-asset");
+      const delimiter = selectedNode.mimeType?.includes("tab") ? "\t" : ",";
+      const values = parseDelimited(await response.text(), delimiter);
+      const id = await importSheet({
+        projectId: pid,
+        parentId: selectedNode.parentId as Id<"documents"> | null,
+        name: selectedNode.name.replace(/\.(?:csv|tsv)$/i, ".sheet"),
+        updates: sheetImportUpdates(values).map(toArrayBuffer),
+      });
+      selectNode(id);
+      notify.success("Spreadsheet imported");
+    });
   };
 
   const replaceSelectedSheet = async (file: File) => {
@@ -1139,6 +1224,8 @@ export function ProjectEditor({
     >
       <FileTree
         nodes={nodes}
+        projectId={projectId}
+        clerkOrgId={clerkOrgId}
         selectedId={effectiveSelectedId}
         canEdit={canEdit}
         onSelect={(node) => selectNode(node.id)}
@@ -1193,6 +1280,83 @@ export function ProjectEditor({
           guard(async () => {
             const id = await duplicateDoc({ documentId: node.id as Id<"documents"> });
             selectNode(id);
+          })
+        }
+        onBulkMove={(ids, parentId) =>
+          guard(async () => {
+            const results = await bulkMoveDocs({
+              projectId: pid,
+              documentIds: ids as Id<"documents">[],
+              parentId: parentId as Id<"documents"> | null,
+            });
+            const moved = results.filter((result) => result.ok).length;
+            const skipped = results.length - moved;
+            notify.success(`${moved} ${moved === 1 ? "item" : "items"} moved`, {
+              description: skipped
+                ? `${skipped} skipped because of conflicts or invalid targets.`
+                : undefined,
+            });
+          })
+        }
+        onBulkRemove={(selected) =>
+          guard(async () => {
+            if (!window.confirm(`Move ${selected.length} selected items to trash?`)) return;
+            const results = await bulkTrashDocs({
+              projectId: pid,
+              documentIds: selected.map((node) => node.id as Id<"documents">),
+            });
+            const trashed = results.filter((result) => result.ok).length;
+            const skipped = results.length - trashed;
+            notify.success(`${trashed} ${trashed === 1 ? "item" : "items"} moved to trash`, {
+              description: skipped ? `${skipped} skipped.` : undefined,
+            });
+            if (effectiveSelectedId && selected.some((node) => node.id === effectiveSelectedId)) {
+              setSelectedId(null);
+            }
+          })
+        }
+        onBulkDuplicate={(selected) =>
+          guard(async () => {
+            const results = await bulkDuplicateDocs({
+              documentIds: selected.map((node) => node.id as Id<"documents">),
+            });
+            const copied = results.filter((result) => result.ok).length;
+            const failures = results.filter((result) => !result.ok);
+            notify.success(`${copied} ${copied === 1 ? "document" : "documents"} duplicated`, {
+              description: failures.length
+                ? `${failures.length} skipped. ${failures[0]?.error ?? "Unknown error"}`
+                : undefined,
+            });
+          })
+        }
+        onBulkExport={(selected) =>
+          guard(async () => {
+            const bundle: BundleNode[] = [];
+            let cursor: string | undefined;
+            do {
+              const page = await convex.query(api.documents.exportBundle, {
+                projectId: pid,
+                cursor,
+              });
+              if (!page) break;
+              bundle.push(...(page.nodes as BundleNode[]));
+              cursor = page.cursor ?? undefined;
+            } while (cursor);
+            const included = new Set(selected.map((node) => node.id));
+            let changed = true;
+            while (changed) {
+              changed = false;
+              for (const node of bundle) {
+                if (node.parentId && included.has(node.parentId) && !included.has(node.id)) {
+                  included.add(node.id);
+                  changed = true;
+                }
+              }
+            }
+            const filtered = bundle.filter((node) => included.has(node.id));
+            if (filtered.length === 0) throw new Error("empty-project");
+            await exportProjectZip(`${activeProjectTitle}-selection`, filtered);
+            notify.success("Selected items exported");
           })
         }
         onOpenTrash={() => setTrashOpen(true)}
@@ -1280,6 +1444,19 @@ export function ProjectEditor({
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+          {selectedNode && selectedNode.kind !== "folder" ? (
+            <FavoriteButton
+              projectId={projectId}
+              documentId={selectedNode.id}
+              favorite={favoriteData?.some((item) => item.documentId === selectedNode.id) ?? false}
+              className="size-11"
+            />
+          ) : null}
+          {selectedFileId && watchState ? (
+            <div className="hidden sm:block">
+              <WatchButton documentId={selectedFileId} watching={watchState.watching} compact />
+            </div>
+          ) : null}
           {selectedFileId && collab ? (
             <>
               <ViewerPresence viewers={collab.viewers} canOpen={isAdmin} />
@@ -1492,6 +1669,14 @@ export function ProjectEditor({
                           <History className="size-4" aria-hidden="true" />
                           Version history
                         </button>
+                        {watchState && selectedFileId ? (
+                          <WatchButton
+                            documentId={selectedFileId}
+                            watching={watchState.watching}
+                            menu
+                            onToggled={() => setMoreOpen(false)}
+                          />
+                        ) : null}
                         <button
                           type="button"
                           role="menuitem"
@@ -1790,13 +1975,15 @@ export function ProjectEditor({
             <DataLoader label="Loading document" className="editor-panel min-w-0 flex-1" />
           ) : selectedNode?.kind === "asset" && selectedAssetUrl ? (
             <div className="editor-panel flex min-w-0 flex-1 items-center justify-center overflow-auto p-6">
-              <Image
-                src={selectedAssetUrl}
-                alt={selectedNode.name}
-                width={1600}
-                height={1200}
-                unoptimized
-                className="max-h-full max-w-full rounded-md border border-hairline object-contain"
+              <AttachmentViewer
+                node={selectedNode}
+                url={selectedAssetUrl}
+                onImportCsv={
+                  selectedNode.mimeType === "text/csv" ||
+                  selectedNode.mimeType === "text/tab-separated-values"
+                    ? importSelectedCsv
+                    : undefined
+                }
               />
             </div>
           ) : selectedNode?.kind === "asset" ? (
@@ -1845,6 +2032,8 @@ export function ProjectEditor({
         ) : null}
         {commentsOpen && selectedFileId ? (
           <CommentsRail
+            documentId={selectedFileId}
+            watching={watchState?.watching ?? false}
             threads={commentThreads}
             loading={commentThreadsData === undefined}
             candidates={mentionCandidates}

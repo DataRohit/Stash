@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { accessForProject, isInactiveTree } from "./documents";
+import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const RECENT_LIMIT = 8;
 const PALETTE_LIMIT = 16;
@@ -16,6 +17,8 @@ const MAX_PATH_DEPTH = 32;
 const RECENT_CAP = 100;
 const RECENT_TRIM_BATCH = 25;
 const RECENT_WALK_BATCH = 8;
+const FAVORITE_CAP = 200;
+const FAVORITE_WRITE_LIMIT = { capacity: 40, refillPerSecond: 2 };
 
 type SearchResult = {
   id: string;
@@ -320,6 +323,112 @@ export const listProjects = query({
   },
 });
 
+export const toggleFavorite = mutation({
+  args: {
+    projectId: v.id("projects"),
+    documentId: v.optional(v.id("documents")),
+    favorite: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const access = await accessForProject(ctx, args.projectId);
+    if (!access) throw new Error("forbidden");
+    if (args.documentId) {
+      const doc = await ctx.db.get(args.documentId);
+      if (!doc || doc.projectId !== args.projectId || doc.deletingAt) throw new Error("not-found");
+    }
+    const rateKey = args.documentId ?? args.projectId;
+    if (
+      !(await enforceWriteRateLimit(ctx, "favorites", rateKey, access.userId, FAVORITE_WRITE_LIMIT))
+    ) {
+      throw new Error("rate-limited");
+    }
+    const rows = await ctx.db
+      .query("favorites")
+      .withIndex("by_user_project", (q) =>
+        q
+          .eq("userId", access.userId)
+          .eq("projectId", args.projectId)
+          .eq("documentId", args.documentId),
+      )
+      .collect();
+    if (!args.favorite) {
+      for (const row of rows) await ctx.db.delete(row._id);
+      return false;
+    }
+    if (rows.length > 0) {
+      for (const duplicate of rows.slice(1)) await ctx.db.delete(duplicate._id);
+      return true;
+    }
+    const count = await ctx.db
+      .query("favorites")
+      .withIndex("by_user_org", (q) =>
+        q.eq("userId", access.userId).eq("clerkOrgId", access.project.clerkOrgId),
+      )
+      .take(FAVORITE_CAP);
+    if (count.length >= FAVORITE_CAP) throw new Error("favorite-limit-reached");
+    await ctx.db.insert("favorites", {
+      clerkOrgId: access.project.clerkOrgId,
+      userId: access.userId,
+      projectId: args.projectId,
+      ...(args.documentId ? { documentId: args.documentId } : {}),
+      createdAt: Date.now(),
+    });
+    return true;
+  },
+});
+
+export const listFavorites = query({
+  args: { clerkOrgId: v.string() },
+  handler: async (ctx, args) => {
+    const actor = await caller(ctx, args.clerkOrgId);
+    if (!actor) return [];
+    const rows = await ctx.db
+      .query("favorites")
+      .withIndex("by_user_org", (q) =>
+        q.eq("userId", actor.userId).eq("clerkOrgId", args.clerkOrgId),
+      )
+      .order("asc")
+      .take(FAVORITE_CAP);
+    const output = [];
+    for (const row of rows) {
+      const project = await ctx.db.get(row.projectId);
+      if (!project || project.deletedAt || !(await accessForProject(ctx, row.projectId))) continue;
+      if (!row.documentId) {
+        output.push({
+          id: row._id,
+          projectId: project._id,
+          projectTitle: project.title,
+          documentId: null,
+          name: project.title,
+          path: "/",
+          kind: "project" as const,
+          fileType: null,
+          trashed: false,
+          createdAt: row.createdAt,
+        });
+        continue;
+      }
+      const doc = await ctx.db.get(row.documentId);
+      if (!doc || doc.deletingAt || doc.projectId !== project._id) continue;
+      const path = doc.trashedAt ? `/${doc.name}` : await visiblePath(ctx, doc);
+      if (!path) continue;
+      output.push({
+        id: row._id,
+        projectId: project._id,
+        projectTitle: project.title,
+        documentId: doc._id,
+        name: doc.name,
+        path,
+        kind: doc.kind,
+        fileType: doc.fileType,
+        trashed: Boolean(doc.trashedAt),
+        createdAt: row.createdAt,
+      });
+    }
+    return output;
+  },
+});
+
 export const recordOpened = mutation({
   args: { documentId: v.id("documents") },
   handler: async (ctx, args) => {
@@ -357,6 +466,18 @@ export const recordOpened = mutation({
         userId: access.userId,
         clerkOrgId: doc.clerkOrgId,
       });
+    }
+    const unread = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_org_read", (q) =>
+        q.eq("recipientUserId", access.userId).eq("clerkOrgId", doc.clerkOrgId).eq("readAt", null),
+      )
+      .take(200);
+    const readAt = Date.now();
+    for (const notification of unread) {
+      if (notification.documentId === doc._id) {
+        await ctx.db.patch(notification._id, { readAt });
+      }
     }
     return true;
   },

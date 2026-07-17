@@ -139,6 +139,16 @@ export async function purgeAccessForUser(
     .withIndex("by_user_org_time", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
     .collect();
   for (const row of recent) await ctx.db.delete(row._id);
+  const favorites = await ctx.db
+    .query("favorites")
+    .withIndex("by_user_org", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
+    .collect();
+  for (const row of favorites) await ctx.db.delete(row._id);
+  const watches = await ctx.db
+    .query("documentWatches")
+    .withIndex("by_user_org", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
+    .collect();
+  for (const row of watches) await ctx.db.delete(row._id);
   const notifications = await ctx.db
     .query("notifications")
     .withIndex("by_recipient_org", (q) =>
@@ -153,6 +163,21 @@ export async function purgeAccessForUser(
   for (const row of preferences) {
     if (row.clerkOrgId === clerkOrgId) await ctx.db.delete(row._id);
   }
+  const emailPreference = await ctx.db
+    .query("emailPreferences")
+    .withIndex("by_user_org", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
+    .unique();
+  if (emailPreference) await ctx.db.delete(emailPreference._id);
+  const watchPreference = await ctx.db
+    .query("watchPreferences")
+    .withIndex("by_user_org", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
+    .unique();
+  if (watchPreference) await ctx.db.delete(watchPreference._id);
+  const digestRuns = await ctx.db
+    .query("emailDigestRuns")
+    .withIndex("by_user_org_day", (q) => q.eq("userId", userId).eq("clerkOrgId", clerkOrgId))
+    .collect();
+  for (const row of digestRuns) await ctx.db.delete(row._id);
 }
 
 async function tombstoneProject(ctx: MutationCtx, projectId: Doc<"projects">["_id"]) {
@@ -204,6 +229,24 @@ export const purgeBatch = internalMutation({
       await ctx.db.delete(recentDocument._id);
     }
     if (recentDocuments.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const favorites = await ctx.db
+      .query("favorites")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const favorite of favorites) await ctx.db.delete(favorite._id);
+    if (favorites.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const watches = await ctx.db
+      .query("documentWatches")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const watch of watches) await ctx.db.delete(watch._id);
+    if (watches.length > 0) {
       await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
       return;
     }

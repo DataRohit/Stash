@@ -1,15 +1,19 @@
 "use client";
 
+import { useQuery } from "convex/react";
 import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
   FilePlus,
+  Files,
   FolderInput,
   FolderPlus,
   Pencil,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import {
   type DragEvent,
@@ -23,12 +27,17 @@ import {
 } from "react";
 import { MoveDialog } from "@/app/dashboard/projects/[id]/editor/move-dialog";
 import { sortNodes, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { FavoriteButton } from "@/components/dashboard/favorite-button";
 import { FileIcon } from "@/components/file-icon";
-import { RASTER_ASSET_ACCEPT } from "@/lib/asset-formats";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
+import { ASSET_ACCEPT } from "@/lib/asset-formats";
 import { cn } from "@/lib/utils";
 
 type FileTreeProps = {
   nodes: TreeNode[];
+  projectId: string;
+  clerkOrgId: string;
   selectedId: string | null;
   canEdit: boolean;
   onSelect: (node: TreeNode) => void;
@@ -36,11 +45,28 @@ type FileTreeProps = {
   onCreateFile: (parentId: string | null, name: string) => Promise<void>;
   onRename: (id: string, name: string) => Promise<void>;
   onRemove: (node: TreeNode) => Promise<void>;
-  onUpload: (parentId: string | null, files: File[]) => Promise<void>;
+  onUpload: (
+    parentId: string | null,
+    files: File[],
+    update: (index: number, progress: number, status: UploadStatus, error?: string) => void,
+  ) => Promise<void>;
   onMove: (id: string, parentId: string | null) => Promise<void>;
   onDuplicate: (node: TreeNode) => Promise<void>;
+  onBulkMove: (ids: string[], parentId: string | null) => Promise<void>;
+  onBulkRemove: (nodes: TreeNode[]) => Promise<void>;
+  onBulkDuplicate: (nodes: TreeNode[]) => Promise<void>;
+  onBulkExport: (nodes: TreeNode[]) => Promise<void>;
   onOpenTrash: () => void;
   onOpenDocumentDialog: (parentId: string | null) => void;
+};
+
+type UploadStatus = "uploading" | "complete" | "failed";
+type UploadItem = {
+  id: string;
+  name: string;
+  progress: number;
+  status: UploadStatus;
+  error?: string;
 };
 
 type DraftKind = "folder" | "file";
@@ -67,13 +93,13 @@ function rowPadding(depth: number) {
 function NodeGlyph({ node }: { node: TreeNode }) {
   return (
     <span className="flex size-4 shrink-0 items-center justify-center">
-      <FileIcon kind={node.kind} fileType={node.fileType} />
+      <FileIcon kind={node.kind} fileType={node.fileType} mimeType={node.mimeType} />
     </span>
   );
 }
 
 function StaticNodeGlyph({ node }: { node: TreeNode }) {
-  return <FileIcon kind={node.kind} fileType={node.fileType} />;
+  return <FileIcon kind={node.kind} fileType={node.fileType} mimeType={node.mimeType} />;
 }
 
 function DraftGlyph({ kind }: { kind: DraftKind }) {
@@ -131,6 +157,8 @@ function ActionButton({
 
 export function FileTree({
   nodes,
+  projectId,
+  clerkOrgId,
   selectedId,
   canEdit,
   onSelect,
@@ -141,6 +169,10 @@ export function FileTree({
   onUpload,
   onMove,
   onDuplicate,
+  onBulkMove,
+  onBulkRemove,
+  onBulkDuplicate,
+  onBulkExport,
   onOpenTrash,
   onOpenDocumentDialog,
 }: FileTreeProps) {
@@ -153,6 +185,8 @@ export function FileTree({
   const [dragNodeId, setDragNodeId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [movingNode, setMovingNode] = useState<TreeNode | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const treeRef = useRef<HTMLDivElement>(null);
@@ -161,6 +195,17 @@ export function FileTree({
   const draftRef = useRef<HTMLInputElement>(null);
   const renameRef = useRef<HTMLInputElement>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
+  const selectionAnchorRef = useRef<string | null>(null);
+  const longPressRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressedRef = useRef(false);
+  const uploadClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (uploadClearRef.current) clearTimeout(uploadClearRef.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (draft) {
@@ -238,6 +283,19 @@ export function FileTree({
     return rows;
   }, [expanded, selectedAncestorIds, sortedChildrenByParent]);
   const visibleIds = useMemo(() => visibleRows.map((row) => row.node.id), [visibleRows]);
+  const favorites = useQuery(api.navigation.listFavorites, { clerkOrgId });
+  const unread = useQuery(api.watches.listUnread, {
+    projectId: projectId as Id<"projects">,
+    documentIds: visibleIds.slice(0, 200) as Id<"documents">[],
+  });
+  const favoriteIds = useMemo(
+    () =>
+      new Set<string>(
+        favorites?.flatMap((item) => (item.documentId ? [item.documentId] : [])) ?? [],
+      ),
+    [favorites],
+  );
+  const unreadIds = useMemo(() => new Set(unread?.documentIds ?? []), [unread]);
   const virtualEntries = useMemo<VirtualEntry[]>(() => {
     const entries: VirtualEntry[] = visibleRows.map((row) => ({ type: "node", ...row }));
     if (!draft) {
@@ -295,7 +353,39 @@ export function FileTree({
     });
   };
 
-  const activate = (node: TreeNode) => {
+  const selectForBulk = (node: TreeNode, range: boolean, toggleSelection: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (range && selectionAnchorRef.current) {
+        const from = visibleIds.indexOf(selectionAnchorRef.current);
+        const to = visibleIds.indexOf(node.id);
+        if (from >= 0 && to >= 0) {
+          for (const id of visibleIds.slice(Math.min(from, to), Math.max(from, to) + 1))
+            next.add(id);
+        }
+      } else if (toggleSelection && next.has(node.id)) {
+        next.delete(node.id);
+      } else {
+        next.add(node.id);
+      }
+      return next;
+    });
+    selectionAnchorRef.current = node.id;
+  };
+
+  const activate = (node: TreeNode, event?: MouseEvent<HTMLButtonElement>) => {
+    if (longPressedRef.current) {
+      longPressedRef.current = false;
+      return;
+    }
+    if (event?.metaKey || event?.ctrlKey || event?.shiftKey || selectedIds.size > 0) {
+      selectForBulk(
+        node,
+        Boolean(event?.shiftKey),
+        Boolean(event?.metaKey || event?.ctrlKey || selectedIds.size > 0),
+      );
+      return;
+    }
     if (node.kind === "folder") {
       toggle(node.id);
       setActiveFolderId(node.id);
@@ -303,6 +393,26 @@ export function FileTree({
     }
     onSelect(node);
     setActiveFolderId(node.parentId);
+  };
+
+  const runUpload = async (parentId: string | null, files: File[]) => {
+    if (uploadClearRef.current) clearTimeout(uploadClearRef.current);
+    setUploads(
+      files.map((file) => ({
+        id: crypto.randomUUID(),
+        name: file.name,
+        progress: 0,
+        status: "uploading",
+      })),
+    );
+    await onUpload(parentId, files, (index, progress, status, error) => {
+      setUploads((current) =>
+        current.map((item, itemIndex) =>
+          itemIndex === index ? { ...item, progress, status, error } : item,
+        ),
+      );
+    });
+    uploadClearRef.current = setTimeout(() => setUploads([]), 6000);
   };
 
   const focusNode = (id: string | undefined) => {
@@ -327,12 +437,30 @@ export function FileTree({
 
   const onNodeKey = (event: KeyboardEvent<HTMLButtonElement>, node: TreeNode) => {
     const index = visibleIds.indexOf(node.id);
-    if (event.key === "ArrowDown") {
+    if (event.key === " " && canEdit) {
       event.preventDefault();
-      focusNode(visibleIds[Math.min(visibleIds.length - 1, index + 1)]);
+      selectForBulk(node, event.shiftKey, true);
+    } else if (event.key === "Escape" && selectedIds.size > 0) {
+      event.preventDefault();
+      setSelectedIds(new Set());
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      const nextId = visibleIds[Math.min(visibleIds.length - 1, index + 1)];
+      if (event.shiftKey && canEdit) {
+        selectionAnchorRef.current ??= node.id;
+        const nextNode = nextId ? nodeById.get(nextId) : undefined;
+        if (nextNode) selectForBulk(nextNode, true, false);
+      }
+      focusNode(nextId);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      focusNode(visibleIds[Math.max(0, index - 1)]);
+      const nextId = visibleIds[Math.max(0, index - 1)];
+      if (event.shiftKey && canEdit) {
+        selectionAnchorRef.current ??= node.id;
+        const nextNode = nextId ? nodeById.get(nextId) : undefined;
+        if (nextNode) selectForBulk(nextNode, true, false);
+      }
+      focusNode(nextId);
     } else if (event.key === "Home") {
       event.preventDefault();
       focusNode(visibleIds[0]);
@@ -416,7 +544,7 @@ export function FileTree({
       }
       return;
     }
-    void onUpload(targetId, [...event.dataTransfer.files]);
+    void runUpload(targetId, [...event.dataTransfer.files]);
   };
 
   const startDraftIn = (kind: DraftKind, parentId: string | null) => {
@@ -501,7 +629,7 @@ export function FileTree({
         {!onlyNode && draft?.parentId === parentId ? renderDraft(depth) : null}
         {list.map((node) => {
           const isOpen = isExpanded(node.id);
-          const isSelected = node.id === selectedId;
+          const isSelected = selectedIds.has(node.id) || node.id === selectedId;
           const isActiveFolder = node.kind === "folder" && node.id === activeFolderId;
           const isRenaming = renaming === node.id;
           return (
@@ -562,8 +690,22 @@ export function FileTree({
                 ) : (
                   <button
                     type="button"
-                    onClick={() => activate(node)}
+                    onClick={(event) => activate(node, event)}
                     onKeyDown={(event) => onNodeKey(event, node)}
+                    onPointerDown={(event) => {
+                      if (!canEdit || event.pointerType === "mouse") return;
+                      longPressedRef.current = false;
+                      longPressRef.current = setTimeout(() => {
+                        longPressedRef.current = true;
+                        selectForBulk(node, false, true);
+                      }, 450);
+                    }}
+                    onPointerUp={() => {
+                      if (longPressRef.current) clearTimeout(longPressRef.current);
+                    }}
+                    onPointerCancel={() => {
+                      if (longPressRef.current) clearTimeout(longPressRef.current);
+                    }}
                     draggable={canEdit}
                     onDragStart={canEdit ? (event) => onNodeDragStart(event, node) : undefined}
                     onDragEnd={canEdit ? endDrag : undefined}
@@ -631,11 +773,28 @@ export function FileTree({
                     >
                       {node.name}
                     </span>
+                    {unreadIds.has(node.id as Id<"documents">) ? (
+                      <>
+                        <span
+                          className="size-1.5 shrink-0 rounded-full bg-info"
+                          aria-hidden="true"
+                        />
+                        <span className="sr-only">Has new activity</span>
+                      </>
+                    ) : null}
                   </button>
                 )}
-                {canEdit && !isRenaming ? (
+                {!isRenaming ? (
                   <div className="pointer-events-none absolute right-1 z-10 flex shrink-0 items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                    {node.kind === "folder" ? (
+                    <div className="pointer-events-auto">
+                      <FavoriteButton
+                        projectId={projectId}
+                        documentId={node.id}
+                        favorite={favoriteIds.has(node.id)}
+                        className="size-6 rounded-xs"
+                      />
+                    </div>
+                    {canEdit && node.kind === "folder" ? (
                       <>
                         <ActionButton
                           label="New document in folder"
@@ -651,26 +810,30 @@ export function FileTree({
                         </ActionButton>
                       </>
                     ) : null}
-                    {node.kind === "file" ? (
+                    {canEdit && node.kind === "file" ? (
                       <ActionButton label="Duplicate" onClick={() => void onDuplicate(node)}>
                         <Copy className="size-3.5" aria-hidden="true" />
                       </ActionButton>
                     ) : null}
-                    <ActionButton label="Move to folder" onClick={() => setMovingNode(node)}>
-                      <FolderInput className="size-3.5" aria-hidden="true" />
-                    </ActionButton>
-                    <ActionButton
-                      label="Rename"
-                      onClick={() => {
-                        setRenaming(node.id);
-                        setRenameName(node.name);
-                      }}
-                    >
-                      <Pencil className="size-3.5" aria-hidden="true" />
-                    </ActionButton>
-                    <ActionButton label="Delete" danger onClick={() => onRemove(node)}>
-                      <Trash2 className="size-3.5" aria-hidden="true" />
-                    </ActionButton>
+                    {canEdit ? (
+                      <>
+                        <ActionButton label="Move to folder" onClick={() => setMovingNode(node)}>
+                          <FolderInput className="size-3.5" aria-hidden="true" />
+                        </ActionButton>
+                        <ActionButton
+                          label="Rename"
+                          onClick={() => {
+                            setRenaming(node.id);
+                            setRenameName(node.name);
+                          }}
+                        >
+                          <Pencil className="size-3.5" aria-hidden="true" />
+                        </ActionButton>
+                        <ActionButton label="Delete" danger onClick={() => onRemove(node)}>
+                          <Trash2 className="size-3.5" aria-hidden="true" />
+                        </ActionButton>
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -731,6 +894,13 @@ export function FileTree({
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-auto py-1.5"
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+        onPaste={(event) => {
+          const files = [...event.clipboardData.files];
+          if (canEdit && files.length > 0) {
+            event.preventDefault();
+            void runUpload(activeParent, files);
+          }
+        }}
       >
         {nodes.length === 0 && !draft ? (
           <p className="px-3 py-4 text-muted-foreground/80 text-xs">
@@ -784,17 +954,120 @@ export function FileTree({
           </div>
         )}
       </div>
+      {uploads.length > 0 ? (
+        <div
+          className="shrink-0 border-hairline border-t bg-surface/95 px-3 py-2"
+          aria-live="polite"
+        >
+          <ul className="max-h-32 space-y-2 overflow-auto">
+            {uploads.map((upload) => (
+              <li key={upload.id}>
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="truncate">{upload.name}</span>
+                  <span
+                    className={cn(
+                      "shrink-0 font-mono text-[10px]",
+                      upload.status === "failed" ? "text-destructive" : "text-muted-foreground",
+                    )}
+                  >
+                    {upload.status === "failed"
+                      ? (upload.error ?? "Failed")
+                      : upload.status === "complete"
+                        ? "Uploaded"
+                        : `${upload.progress}%`}
+                  </span>
+                </div>
+                <div className="mt-1 h-1 overflow-hidden rounded-full bg-foreground/10">
+                  <div
+                    className={cn(
+                      "h-full transition-[width]",
+                      upload.status === "failed" ? "bg-destructive" : "bg-info",
+                    )}
+                    style={{ width: `${upload.status === "failed" ? 100 : upload.progress}%` }}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {canEdit && selectedIds.size > 0 ? (
+        <div
+          className="sticky bottom-0 z-20 flex min-h-11 shrink-0 items-center gap-1 border-hairline border-t bg-surface px-2 shadow-lg"
+          role="toolbar"
+          aria-label="Selected file actions"
+        >
+          <span className="mr-auto pl-1 font-mono text-xs">{selectedIds.size} selected</span>
+          <button
+            type="button"
+            onClick={() => setMovingNode(nodes.find((node) => selectedIds.has(node.id)) ?? null)}
+            className="flex size-11 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+            aria-label="Move selected items"
+            title="Move selected items"
+          >
+            <FolderInput className="size-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            disabled={[...selectedIds].some((id) => nodeById.get(id)?.kind !== "file")}
+            onClick={() =>
+              void onBulkDuplicate(nodes.filter((node) => selectedIds.has(node.id))).then(() =>
+                setSelectedIds(new Set()),
+              )
+            }
+            className="flex size-11 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-40"
+            aria-label="Duplicate selected documents"
+            title="Duplicate selected documents"
+          >
+            <Files className="size-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              void onBulkExport(nodes.filter((node) => selectedIds.has(node.id))).then(() =>
+                setSelectedIds(new Set()),
+              )
+            }
+            className="flex size-11 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+            aria-label="Export selected items"
+            title="Export selected items"
+          >
+            <Download className="size-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              void onBulkRemove(nodes.filter((node) => selectedIds.has(node.id))).then(() =>
+                setSelectedIds(new Set()),
+              )
+            }
+            className="flex size-11 items-center justify-center rounded-sm text-destructive hover:bg-destructive/10"
+            aria-label="Move selected items to trash"
+            title="Move selected items to trash"
+          >
+            <Trash2 className="size-4" aria-hidden="true" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setSelectedIds(new Set())}
+            className="flex size-11 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+            aria-label="Clear selection"
+          >
+            <X className="size-4" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
       <input
         ref={uploadRef}
         type="file"
-        accept={`${RASTER_ASSET_ACCEPT},.md,.html,text/markdown,text/html`}
+        accept={`${ASSET_ACCEPT},.md,.html`}
         multiple
         className="hidden"
         onChange={(event) => {
           const files = event.target.files ? [...event.target.files] : [];
           event.target.value = "";
           if (files.length > 0) {
-            void onUpload(activeParent, files);
+            void runUpload(activeParent, files);
           }
         }}
       />
@@ -802,7 +1075,11 @@ export function FileTree({
         <MoveDialog
           node={movingNode}
           nodes={nodes}
-          onMove={(parentId) => onMove(movingNode.id, parentId)}
+          onMove={(parentId) =>
+            selectedIds.size > 0
+              ? onBulkMove([...selectedIds], parentId).then(() => setSelectedIds(new Set()))
+              : onMove(movingNode.id, parentId)
+          }
           onClose={() => setMovingNode(null)}
         />
       ) : null}
