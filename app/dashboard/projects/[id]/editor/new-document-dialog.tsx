@@ -6,6 +6,7 @@ import {
   Columns3,
   FileCode,
   FileText,
+  LayoutDashboard,
   LayoutList,
   Loader2,
   NotebookPen,
@@ -61,6 +62,12 @@ const FILE_TYPES = [
     description: "Line, bar, area, and pie charts over a spreadsheet.",
     extension: ".chart",
   },
+  {
+    id: "dashboard",
+    name: "Dashboard",
+    description: "A live grid of charts and statistics.",
+    extension: ".dashboard",
+  },
 ] as const;
 
 function explicitFileType(name: string): FileType | null {
@@ -71,6 +78,7 @@ function explicitFileType(name: string): FileType | null {
   if (lower.endsWith(".board")) return "board";
   if (lower.endsWith(".view")) return "view";
   if (lower.endsWith(".chart")) return "chart";
+  if (lower.endsWith(".dashboard")) return "dashboard";
   return null;
 }
 
@@ -90,7 +98,10 @@ function fileNameWithExtension(name: string, fileType: FileType) {
   const sanitized = name.replaceAll("/", "").replaceAll("\\", "").trim();
   if (!sanitized) return "";
   if (hasUnsupportedExtension(sanitized)) return sanitized;
-  const withoutSupportedExtension = sanitized.replace(/\.(md|html|sheet|board|view|chart)$/i, "");
+  const withoutSupportedExtension = sanitized.replace(
+    /\.(md|html|sheet|board|view|chart|dashboard)$/i,
+    "",
+  );
   const stem = sanitized.toLowerCase().endsWith(extension)
     ? sanitized.slice(0, -extension.length)
     : withoutSupportedExtension;
@@ -132,7 +143,9 @@ export function NewDocumentDialog({
   const create = async () => {
     if (!name.trim()) return;
     if (hasUnsupportedExtension(name)) {
-      setError("Only .md, .html, .sheet, .board, .view, and .chart file extensions are supported.");
+      setError(
+        "Only .md, .html, .sheet, .board, .view, .chart, and .dashboard file extensions are supported.",
+      );
       return;
     }
     if (hasMissingBaseName(name)) {
@@ -166,7 +179,9 @@ export function NewDocumentDialog({
             ? LayoutList
             : fileType === "chart"
               ? BarChart3
-              : FileText;
+              : fileType === "dashboard"
+                ? LayoutDashboard
+                : FileText;
   const finalName = fileNameWithExtension(name, fileType);
   const invalidExtension = hasUnsupportedExtension(name);
   const missingBaseName = hasMissingBaseName(name);

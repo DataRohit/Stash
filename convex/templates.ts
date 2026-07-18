@@ -111,7 +111,8 @@ export const saveFromDocument = mutation({
       (doc.fileType === "sheet" ||
       doc.fileType === "board" ||
       doc.fileType === "view" ||
-      doc.fileType === "chart"
+      doc.fileType === "chart" ||
+      doc.fileType === "dashboard"
         ? state.byteLength + projectionBytes > MAX_STRUCTURED_BYTES
         : state.byteLength > MAX_BYTES)
     )

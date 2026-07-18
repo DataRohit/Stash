@@ -250,7 +250,7 @@ async function visibleNotificationTarget(
 ) {
   const project = await ctx.db.get(row.projectId);
   const doc = await ctx.db.get(row.documentId);
-  const thread = await ctx.db.get(row.commentId);
+  const thread = row.commentId ? await ctx.db.get(row.commentId) : null;
   const message = row.messageId ? await ctx.db.get(row.messageId) : null;
   let canAccessProject = projectAccess.get(row.projectId);
   if (canAccessProject === undefined) {
@@ -262,9 +262,8 @@ async function visibleNotificationTarget(
     project.deletedAt ||
     doc?.kind !== "file" ||
     (await isInactiveTree(ctx, doc)) ||
-    !thread ||
-    thread.documentId !== row.documentId ||
-    thread.projectId !== row.projectId ||
+    (row.kind !== "document-mention" &&
+      (!thread || thread.documentId !== row.documentId || thread.projectId !== row.projectId)) ||
     (row.messageId && (!message || message.commentId !== row.commentId)) ||
     !canAccessProject
   ) {
@@ -450,6 +449,32 @@ export const mentionCandidates = query({
   },
 });
 
+export const documentMentionCandidates = query({
+  args: { projectId: v.id("projects") },
+  handler: async (ctx, args) => {
+    const access = await accessForProject(ctx, args.projectId);
+    if (!access) return [];
+    const accessible = await accessibleMemberIds(ctx, access.project);
+    const members = await ctx.db
+      .query("members")
+      .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", access.project.clerkOrgId))
+      .collect();
+    return members
+      .filter((member) => member.status === "accepted" && member.memberUserId !== null)
+      .map((member) => ({
+        userId: member.memberUserId as string,
+        name: displayName(member),
+        email: member.email,
+        imageUrl: member.imageUrl,
+        hasAccess: accessible.has(member.memberUserId as string),
+      }))
+      .sort(
+        (left, right) =>
+          Number(right.hasAccess) - Number(left.hasAccess) || left.name.localeCompare(right.name),
+      );
+  },
+});
+
 export const createThread = mutation({
   args: {
     documentId: v.id("documents"),
@@ -471,7 +496,8 @@ export const createThread = mutation({
         doc.fileType === "sheet" ||
         doc.fileType === "board" ||
         doc.fileType === "view" ||
-        doc.fileType === "chart"
+        doc.fileType === "chart" ||
+        doc.fileType === "dashboard"
       ) {
         throw new Error("invalid-anchor");
       }
@@ -481,7 +507,12 @@ export const createThread = mutation({
       throw new Error("invalid-anchor");
     } else if (args.anchor.kind === "card" && (doc.fileType !== "board" || !state)) {
       throw new Error("invalid-anchor");
-    } else if (args.anchor.kind === "document" && doc.fileType !== "view") {
+    } else if (
+      args.anchor.kind === "document" &&
+      doc.fileType !== "view" &&
+      doc.fileType !== "chart" &&
+      doc.fileType !== "dashboard"
+    ) {
       throw new Error("invalid-anchor");
     }
     if (
@@ -815,7 +846,7 @@ export const listMine = query({
         createdAt: row.createdAt,
         projectTitle: target.project.title,
         documentName: target.doc.name,
-        threadStatus: target.thread.status,
+        threadStatus: target.thread?.status ?? "open",
       });
       if (visible.length >= 20) {
         break;

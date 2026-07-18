@@ -26,6 +26,7 @@ body{scrollbar-color:#6b7280 #0f1219;scrollbar-width:thin}
 .doc blockquote{border-left:3px solid #2a2f3a;margin:1em 0;padding-left:1rem;color:#9aa3b2}
 .doc hr{border:none;border-top:1px solid #2a2f3a;margin:1.5em 0}
 .doc a.missing-ref{color:#f87171;text-decoration-style:wavy}
+.doc .mention-chip{display:inline-flex;border-radius:999px;background:#1d4ed833;color:#93c5fd;padding:.05rem .42rem;font-weight:600}
 .mermaid{background:#12151c;border:1px solid #2a2f3a;border-radius:8px;color:#cbd5e1;margin:1em 0;overflow:auto;padding:1rem;white-space:pre}
 .mermaid-diagram{display:flex;justify-content:center;background:#12151c;border:1px solid #2a2f3a;border-radius:8px;margin:1em 0;overflow:auto;padding:1rem}
 .mermaid-diagram svg{max-width:100%;height:auto}
@@ -273,6 +274,13 @@ function rewriteRefs(
   }
   for (const anchor of doc.querySelectorAll("a[href]")) {
     const href = anchor.getAttribute("href") ?? "";
+    if (href.startsWith("user:")) {
+      const chip = doc.createElement("span");
+      chip.className = "mention-chip";
+      chip.textContent = `@${anchor.textContent ?? "Member"}`;
+      anchor.replaceWith(chip);
+      continue;
+    }
     const target = resolveRef(fromNode, href, nodes);
     if (target?.kind === "file") {
       const fileLink = fileLinkById[target.id];

@@ -133,6 +133,7 @@ export default async function SharedDocumentPage({
         boardPreview: result.boardPreview,
         viewPreview: result.viewPreview,
         chartPreview: result.chartPreview,
+        dashboardPreview: result.dashboardPreview,
         updatedAt: result.updatedAt,
         nodes: result.nodes as TreeNode[],
         fileLinks: result.fileLinks,

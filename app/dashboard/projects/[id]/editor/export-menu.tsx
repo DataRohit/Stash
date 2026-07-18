@@ -17,12 +17,16 @@ import type * as Y from "yjs";
 import { referencedAssetIds } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import {
   type BundleNode,
+  type DashboardExportTile,
   exportBoardHtml,
   exportBoardMarkdown,
   exportBoardPdf,
   exportChartHtml,
   exportChartPdf,
   exportChartSvg,
+  exportDashboardHtml,
+  exportDashboardPdf,
+  exportDashboardZip,
   exportHtml,
   exportMarkdown,
   exportPdf,
@@ -42,6 +46,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { type ChartData, resolveChartData } from "@/lib/chart-data";
 import { inspectChart } from "@/lib/chart-model";
+import { inspectDashboard } from "@/lib/dashboard-model";
 import { cn } from "@/lib/utils";
 import { inspectView, type ViewFilter } from "@/lib/view-model";
 
@@ -129,6 +134,7 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
   const isBoard = fileNode.fileType === "board";
   const isView = fileNode.fileType === "view";
   const isChart = fileNode.fileType === "chart";
+  const isDashboard = fileNode.fileType === "dashboard";
 
   const loadChartModel = async (): Promise<ChartData> => {
     if (!ydoc) throw new Error("chart-not-ready");
@@ -262,6 +268,32 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
     return { config, properties, records: filtered };
   };
 
+  const loadDashboardModel = async (): Promise<DashboardExportTile[]> => {
+    if (!ydoc) throw new Error("dashboard-not-ready");
+    return await Promise.all(
+      inspectDashboard(ydoc).map(async (tile): Promise<DashboardExportTile> => {
+        if (tile.kind === "chart") {
+          const result = await convex.query(api.charts.dashboardChartData, {
+            projectId,
+            chartDocumentId: tile.sourceDocId,
+          });
+          return !result || result.status === "missing"
+            ? { tile, unavailable: true }
+            : { tile, chart: resolveChartData(result.config, result.source) };
+        }
+        const result = await convex.query(api.charts.dashboardStatData, {
+          projectId,
+          viewDocumentId: tile.sourceDocId,
+          aggregate: tile.aggregate,
+          propertyId: tile.propertyId,
+        });
+        return !result || result.status === "missing"
+          ? { tile, unavailable: true }
+          : { tile, value: result.value, sampled: result.truncated };
+      }),
+    );
+  };
+
   return (
     <div ref={ref} className="relative">
       <button
@@ -346,6 +378,18 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
                   }
                 />
               ) : null}
+              {isDashboard && ydoc ? (
+                <ExportItem
+                  icon={<Package className="size-4 text-accent" aria-hidden="true" />}
+                  label="Dashboard tiles"
+                  hint=".zip"
+                  loading={busy === "zip"}
+                  disabled={Boolean(busy)}
+                  onClick={() =>
+                    run("zip", async () => exportDashboardZip(fileNode, await loadDashboardModel()))
+                  }
+                />
+              ) : null}
               <ExportItem
                 icon={<Globe className="size-4 text-info" aria-hidden="true" />}
                 label="Web page"
@@ -362,7 +406,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
                           ? exportViewHtml(fileNode, await loadViewModel())
                           : isChart && ydoc
                             ? exportChartHtml(fileNode, await loadChartModel())
-                            : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
+                            : isDashboard && ydoc
+                              ? exportDashboardHtml(fileNode, await loadDashboardModel())
+                              : exportHtml(fileNode, content, await nodesWithRenderedAssets()),
                   )
                 }
               />
@@ -382,7 +428,9 @@ export function ExportMenu({ projectId, fileNode, content, nodes, ydoc }: Export
                           ? exportViewPdf(fileNode, await loadViewModel())
                           : isChart && ydoc
                             ? exportChartPdf(fileNode, await loadChartModel())
-                            : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
+                            : isDashboard && ydoc
+                              ? exportDashboardPdf(fileNode, await loadDashboardModel())
+                              : exportPdf(fileNode, content, await nodesWithRenderedAssets()),
                   )
                 }
               />

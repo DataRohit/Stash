@@ -1,9 +1,16 @@
 import { v } from "convex/values";
 import * as Y from "yjs";
-import { resolveChartData } from "../lib/chart-data";
+import { type ChartSource, resolveChartData } from "../lib/chart-data";
 import { type ChartConfig, inspectChart } from "../lib/chart-model";
+import { inspectDashboard } from "../lib/dashboard-model";
 import { boardRenderModel, chartSourceFromSheet, sheetRenderModel } from "../lib/doc-projection";
-import { inspectView, type ViewConfig, type ViewFilter } from "../lib/view-model";
+import { inspectView, type ViewConfig } from "../lib/view-model";
+import {
+  aggregateViewRecords,
+  VIEW_BUILTIN_PROPERTIES,
+  viewRecordMatches,
+  viewRecordValue,
+} from "../lib/view-records";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -49,34 +56,6 @@ type SharedViewRecord = {
     dateEndValue?: number;
   }>;
 };
-
-function sharedViewValue(record: SharedViewRecord, propertyId: string): string {
-  if (propertyId === "title") return record.name;
-  if (propertyId === "fileType") return record.fileType ?? "Unknown";
-  if (propertyId === "updatedAt") return String(record.updatedAt);
-  return record.properties.find((value) => value.propertyId === propertyId)?.displayValue ?? "";
-}
-
-function sharedViewMatches(record: SharedViewRecord, filter: ViewFilter): boolean {
-  const value = sharedViewValue(record, filter.propertyId);
-  const left = value.toLocaleLowerCase();
-  const right = filter.value.trim().toLocaleLowerCase();
-  if (filter.operator === "is-empty") return value.length === 0;
-  if (filter.operator === "is-not-empty") return value.length > 0;
-  if (filter.operator === "contains") return left.includes(right);
-  if (filter.operator === "equals") return left === right;
-  if (filter.operator === "not-equals") return left !== right;
-  const propertyValue = record.properties.find((row) => row.propertyId === filter.propertyId);
-  const numeric =
-    filter.propertyId === "updatedAt"
-      ? record.updatedAt
-      : filter.operator === "before"
-        ? (propertyValue?.dateEndValue ?? propertyValue?.dateValue ?? Date.parse(value))
-        : (propertyValue?.dateValue ?? Date.parse(value));
-  const target = Date.parse(filter.value);
-  if (!Number.isFinite(numeric) || !Number.isFinite(target)) return false;
-  return filter.operator === "before" ? numeric < target : numeric > target;
-}
 
 async function sharedViewPreview(
   ctx: QueryCtx,
@@ -171,21 +150,21 @@ async function sharedViewPreview(
       .filter((property) => !property.deletedAt)
       .map((property) => property._id as string),
   );
-  const builtinProperties = new Set(["title", "fileType", "updatedAt", "boardDue", "boardColumn"]);
   const filtered = records.filter((record) =>
     config.filters.every(
       (filter) =>
-        (!builtinProperties.has(filter.propertyId) && !activeProperties.has(filter.propertyId)) ||
-        sharedViewMatches(record, filter),
+        (!VIEW_BUILTIN_PROPERTIES.has(filter.propertyId) &&
+          !activeProperties.has(filter.propertyId)) ||
+        viewRecordMatches(record, filter),
     ),
   );
   filtered.sort((left, right) => {
     for (const sort of config.sorts) {
-      if (!builtinProperties.has(sort.propertyId) && !activeProperties.has(sort.propertyId)) {
+      if (!VIEW_BUILTIN_PROPERTIES.has(sort.propertyId) && !activeProperties.has(sort.propertyId)) {
         continue;
       }
-      const result = sharedViewValue(left, sort.propertyId).localeCompare(
-        sharedViewValue(right, sort.propertyId),
+      const result = viewRecordValue(left, sort.propertyId).localeCompare(
+        viewRecordValue(right, sort.propertyId),
         undefined,
         { numeric: true, sensitivity: "base" },
       );
@@ -222,15 +201,47 @@ async function sharedChartPreview(
     if (
       sourceDoc?.kind === "file" &&
       sourceDoc.projectId === projectId &&
-      sourceDoc.fileType === "sheet" &&
+      sourceDoc.fileType === config.sourceType &&
       !(await isInactiveTree(ctx, sourceDoc))
     ) {
       const state = await documentState(ctx, sourceDoc);
       if (!state) return resolveChartData(config, null);
-      const sheet = new Y.Doc();
-      Y.applyUpdate(sheet, new Uint8Array(state));
-      source = chartSourceFromSheet(sheet, sourceDoc._id, sourceDoc.name);
-      sheet.destroy();
+      const sourceYdoc = new Y.Doc();
+      Y.applyUpdate(sourceYdoc, new Uint8Array(state));
+      if (config.sourceType === "sheet") {
+        source = chartSourceFromSheet(sourceYdoc, sourceDoc._id, sourceDoc.name);
+      } else {
+        const preview = await sharedViewPreview(
+          ctx,
+          projectId,
+          inspectView(sourceYdoc),
+          allowedDocumentIds,
+        );
+        const groupProperty = config.groupPropertyId
+          ? ctx.db.normalizeId("documentProperties", config.groupPropertyId)
+          : null;
+        const groupDefinition = groupProperty ? await ctx.db.get(groupProperty) : null;
+        const entries = aggregateViewRecords(preview.records, {
+          groupPropertyId: config.groupPropertyId,
+          valuePropertyId: config.valuePropertyId,
+          aggregate: config.aggregate,
+          groupOptions: groupDefinition?.options.map((option) => option.name),
+        });
+        source = {
+          documentId: sourceDoc._id,
+          name: sourceDoc.name,
+          columns: [
+            { id: "group", name: "Group" },
+            { id: "value", name: config.aggregate === "sum" ? "Total" : "Count" },
+          ],
+          rows: entries.map(([label, value], index) => ({
+            id: `aggregate:${index}`,
+            values: [label, String(value)],
+          })),
+          truncated: preview.truncated,
+        } satisfies ChartSource;
+      }
+      sourceYdoc.destroy();
     }
   }
   return resolveChartData(config, source);
@@ -749,6 +760,15 @@ export const redeemShare = query({
     let boardPreview: ReturnType<typeof boardRenderModel> | undefined;
     let viewPreview: Awaited<ReturnType<typeof sharedViewPreview>> | undefined;
     let chartPreview: Awaited<ReturnType<typeof sharedChartPreview>> | undefined;
+    let dashboardPreview:
+      | Array<{
+          tile: ReturnType<typeof inspectDashboard>[number];
+          status: "ok" | "missing";
+          chart?: Awaited<ReturnType<typeof sharedChartPreview>>;
+          value?: number;
+          truncated?: boolean;
+        }>
+      | undefined;
     const currentState = await documentState(ctx, doc);
     if (doc.fileType === "sheet" && currentState) {
       const sheet = new Y.Doc();
@@ -796,6 +816,75 @@ export const redeemShare = query({
       );
       chartPreview = await sharedChartPreview(ctx, doc.projectId, config, allowedDocumentIds);
     }
+    if (doc.fileType === "dashboard" && currentState) {
+      const dashboard = new Y.Doc();
+      Y.applyUpdate(dashboard, new Uint8Array(currentState));
+      const tiles = inspectDashboard(dashboard);
+      dashboard.destroy();
+      const allowedDocumentIds = new Set(
+        shares
+          .filter((row) => isShareLive(row) && modeRank(row.mode) >= modeRank(effectiveMode))
+          .map((row) => row.documentId as string),
+      );
+      dashboardPreview = [];
+      for (const tile of tiles) {
+        if (!allowedDocumentIds.has(tile.sourceDocId)) {
+          dashboardPreview.push({ tile, status: "missing" });
+          continue;
+        }
+        const sourceId = ctx.db.normalizeId("documents", tile.sourceDocId);
+        const sourceDoc = sourceId ? await ctx.db.get(sourceId) : null;
+        if (
+          sourceDoc?.kind !== "file" ||
+          sourceDoc.projectId !== doc.projectId ||
+          (await isInactiveTree(ctx, sourceDoc))
+        ) {
+          dashboardPreview.push({ tile, status: "missing" });
+          continue;
+        }
+        const state = await documentState(ctx, sourceDoc);
+        if (!state) {
+          dashboardPreview.push({ tile, status: "missing" });
+          continue;
+        }
+        const sourceYdoc = new Y.Doc();
+        Y.applyUpdate(sourceYdoc, new Uint8Array(state));
+        if (tile.kind === "chart" && sourceDoc.fileType === "chart") {
+          const chart = await sharedChartPreview(
+            ctx,
+            doc.projectId,
+            inspectChart(sourceYdoc),
+            allowedDocumentIds,
+          );
+          sourceYdoc.destroy();
+          dashboardPreview.push({ tile, status: "ok", chart });
+        } else if (tile.kind === "stat" && sourceDoc.fileType === "view") {
+          const preview = await sharedViewPreview(
+            ctx,
+            doc.projectId,
+            inspectView(sourceYdoc),
+            allowedDocumentIds,
+          );
+          sourceYdoc.destroy();
+          const value =
+            tile.aggregate === "count"
+              ? preview.records.length
+              : preview.records.reduce(
+                  (sum, record) =>
+                    sum +
+                    (Number(
+                      record.properties.find((property) => property.propertyId === tile.propertyId)
+                        ?.displayValue,
+                    ) || 0),
+                  0,
+                );
+          dashboardPreview.push({ tile, status: "ok", value, truncated: preview.truncated });
+        } else {
+          sourceYdoc.destroy();
+          dashboardPreview.push({ tile, status: "missing" });
+        }
+      }
+    }
     return {
       status: "ok" as const,
       mode: effectiveMode,
@@ -808,6 +897,7 @@ export const redeemShare = query({
       boardPreview,
       viewPreview,
       chartPreview,
+      dashboardPreview,
       updatedAt: doc.updatedAt,
       nodes,
       fileLinks,

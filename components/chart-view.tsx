@@ -11,6 +11,9 @@ const CHART_TYPE_LABEL: Record<ChartData["type"], string> = {
   bar: "Bar chart",
   area: "Area chart",
   pie: "Pie chart",
+  scatter: "Scatter chart",
+  "stacked-bar": "Stacked bar chart",
+  combo: "Combined bar and line chart",
 };
 
 const MIN_ZOOM = 1;

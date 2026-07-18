@@ -4,13 +4,17 @@ import { useAuth, useUser } from "@clerk/nextjs";
 import { useAction, useConvex, useMutation, useQuery } from "convex/react";
 import {
   ArrowLeft,
+  Bold,
   BookmarkPlus,
   Check,
   CircleHelp,
   Code2,
   Columns2,
   Eye,
+  Heading2,
   History,
+  ImageIcon,
+  Italic,
   Link2,
   List,
   Loader2,
@@ -18,6 +22,7 @@ import {
   MoreHorizontal,
   PanelLeft,
   Share2,
+  Upload,
   X,
 } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -45,6 +50,7 @@ import {
   type MentionCandidate,
   type ResolvedCommentRange,
 } from "@/app/dashboard/projects/[id]/editor/comments-rail";
+import { DashboardEditor } from "@/app/dashboard/projects/[id]/editor/dashboard-editor";
 import type {
   CommentFocusRequest,
   CommentRange,
@@ -55,7 +61,10 @@ import { DocEditor } from "@/app/dashboard/projects/[id]/editor/doc-editor";
 import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { ExportMenu } from "@/app/dashboard/projects/[id]/editor/export-menu";
 import { FileTree } from "@/app/dashboard/projects/[id]/editor/file-tree";
-import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
+import {
+  missingRefToast,
+  referencedAssetIds,
+} from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-format";
 import {
   type BundleNode,
@@ -84,10 +93,11 @@ import {
   SheetEditor,
 } from "@/app/dashboard/projects/[id]/editor/sheet-editor";
 import { TrashPanel } from "@/app/dashboard/projects/[id]/editor/trash-panel";
-import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+import { resolveRef, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { ViewEditor } from "@/app/dashboard/projects/[id]/editor/view-editor";
 import { FavoriteButton } from "@/components/dashboard/favorite-button";
 import { WatchButton } from "@/components/dashboard/watch-button";
+import { Button } from "@/components/ui/button";
 import { DataLoader, DataState } from "@/components/ui/data-state";
 import { Dialog } from "@/components/ui/dialog";
 import { useAnchoredPosition } from "@/components/ui/floating";
@@ -106,6 +116,9 @@ import {
 } from "@/lib/asset-formats";
 import { formatBytes, formatRelativeTime } from "@/lib/format";
 import { parseDelimited, sheetImportUpdates } from "@/lib/sheet-csv";
+import { MAX_SHEET_CELLS, MAX_SHEET_COLS, MAX_SHEET_ROWS } from "@/lib/sheet-model";
+import type { ExcelImportReport } from "@/lib/sheet-xlsx";
+import { fieldClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 
 type ProjectEditorProps = {
@@ -168,6 +181,10 @@ const MAX_FILE_BYTES = 512 * 1024;
 
 function sidebarStorageKey(projectId: string): string {
   return `stash:editor:sidebar:${projectId}`;
+}
+
+function markdownModeStorageKey(userId: string, documentId: string): string {
+  return `stash:markdown-mode:${userId}:${documentId}`;
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -453,6 +470,8 @@ export function ProjectEditor({
   const [viewMode, setViewMode] = useState<ViewMode>("split");
   const [mobileViewMode, setMobileViewMode] = useState<Exclude<ViewMode, "split">>("editor");
   const [buffer, setBuffer] = useState("");
+  const [markdownVisual, setMarkdownVisual] = useState(false);
+  const markdownModeLoadedRef = useRef("");
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
@@ -463,6 +482,11 @@ export function ProjectEditor({
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [commentsOpen, setCommentsOpen] = useState(false);
+  const [sheetImport, setSheetImport] = useState<
+    | { state: "parsing"; file: File }
+    | { state: "preview" | "importing"; file: File; values: string[][]; report: ExcelImportReport }
+    | null
+  >(null);
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [editorSelection, setEditorSelection] = useState<EditorSelectionState | null>(null);
   const [sheetSelection, setSheetSelection] = useState<SheetCellSelection | null>(null);
@@ -585,9 +609,15 @@ export function ProjectEditor({
   );
   const mentionCandidatesData = useQuery(
     api.comments.mentionCandidates,
-    (commentsOpen || selectedNode?.fileType === "board") && selectedFileId && !accessLost
+    (commentsOpen || selectedNode?.fileType === "board" || selectedNode?.fileType === "md") &&
+      selectedFileId &&
+      !accessLost
       ? { projectId: pid }
       : "skip",
+  );
+  const documentMentionCandidates = useQuery(
+    api.comments.documentMentionCandidates,
+    selectedNode?.fileType === "md" && selectedFileId && !accessLost ? { projectId: pid } : "skip",
   );
   const boardMembersData = useQuery(
     api.members.listByOrg,
@@ -612,6 +642,28 @@ export function ProjectEditor({
     () => (mentionCandidatesData ?? []) as MentionCandidate[],
     [mentionCandidatesData],
   );
+  const visualAssetIds = useMemo(() => {
+    if (selectedNode?.kind !== "file" || selectedNode.fileType !== "md") return [];
+    return referencedAssetIds(selectedNode, buffer || doc?.content || "", nodes);
+  }, [buffer, doc?.content, nodes, selectedNode]);
+  const visualAssetUrls = useQuery(
+    api.documents.getAssetUrls,
+    visualAssetIds.length > 0
+      ? { documentIds: visualAssetIds.map((id) => id as Id<"documents">) }
+      : "skip",
+  );
+  const visualAssetMap = useMemo(() => {
+    const urlsById = new Map((visualAssetUrls ?? []).map((entry) => [String(entry.id), entry.url]));
+    const result = new Map<string, string>();
+    if (selectedNode?.kind !== "file") return result;
+    for (const match of (buffer || doc?.content || "").matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)) {
+      const path = match[1] ?? "";
+      const target = resolveRef(selectedNode, path, nodes);
+      const url = target ? urlsById.get(target.id) : undefined;
+      if (url) result.set(path, url);
+    }
+    return result;
+  }, [buffer, doc?.content, nodes, selectedNode, visualAssetUrls]);
   const boardMembers = useMemo<MentionCandidate[]>(
     () =>
       (boardMembersData ?? []).flatMap((member) => {
@@ -756,6 +808,24 @@ export function ProjectEditor({
   }, [sidebarCollapsed, projectId]);
 
   useEffect(() => {
+    if (!selectedFileId || selectedNode?.fileType !== "md" || !user?.id) return;
+    const timer = window.setTimeout(() => {
+      const storageKey = markdownModeStorageKey(user.id, selectedFileId);
+      const stored = window.localStorage.getItem(markdownModeStorageKey(user.id, selectedFileId));
+      markdownModeLoadedRef.current = storageKey;
+      setMarkdownVisual(stored === null ? compactView : stored === "visual");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [compactView, selectedFileId, selectedNode?.fileType, user?.id]);
+
+  useEffect(() => {
+    if (!selectedFileId || selectedNode?.fileType !== "md" || !user?.id) return;
+    const storageKey = markdownModeStorageKey(user.id, selectedFileId);
+    if (markdownModeLoadedRef.current !== storageKey) return;
+    window.localStorage.setItem(storageKey, markdownVisual ? "visual" : "source");
+  }, [markdownVisual, selectedFileId, selectedNode?.fileType, user?.id]);
+
+  useEffect(() => {
     if (!moreOpen) {
       return;
     }
@@ -808,6 +878,16 @@ export function ProjectEditor({
         return;
       }
       if (
+        (event.ctrlKey || event.metaKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "m" &&
+        selectedNode?.fileType === "md"
+      ) {
+        event.preventDefault();
+        setMarkdownVisual((value) => !value);
+        return;
+      }
+      if (
         event.key === "?" &&
         !event.ctrlKey &&
         !event.metaKey &&
@@ -822,7 +902,7 @@ export function ProjectEditor({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [compactView]);
+  }, [compactView, selectedNode?.fileType]);
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
@@ -996,28 +1076,75 @@ export function ProjectEditor({
 
   const replaceSelectedSheet = async (file: File) => {
     if (!selectedFileId || !collab || selectedNode?.fileType !== "sheet") return;
-    if (!/\.(?:csv|tsv)$/i.test(file.name)) {
-      notify.error("Unsupported import", { description: "Choose a .csv or .tsv file." });
-      return;
-    }
-    if (
-      !window.confirm(
-        "Replace this spreadsheet? Existing cell comments remain, but comments on removed rows or columns will be marked as location removed.",
-      )
-    ) {
+    if (!/\.(?:csv|tsv|xlsx|xls)$/i.test(file.name)) {
+      notify.error("Unsupported import", {
+        description: "Choose a .csv, .tsv, .xlsx, or .xls file.",
+      });
       return;
     }
     try {
-      const delimiter = file.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
-      const values = parseDelimited(await file.text(), delimiter);
+      setSheetImport({ state: "parsing", file });
+      const preview = await parseSheetImport(file);
+      setSheetImport({ state: "preview", file, ...preview });
+    } catch (error) {
+      setSheetImport(null);
+      notify.error("Import failed", { description: mapDocError(error) });
+    }
+  };
+
+  const parseSheetImport = async (file: File, worksheet?: string) => {
+    if (/\.xlsx?$/i.test(file.name)) {
+      const { parseExcelFile } = await import("@/lib/sheet-xlsx");
+      const parsed = await parseExcelFile(
+        file,
+        { maxRows: MAX_SHEET_ROWS, maxCols: MAX_SHEET_COLS, maxCells: MAX_SHEET_CELLS },
+        worksheet,
+      );
+      return { values: parsed.values, report: parsed.report };
+    }
+    const delimiter = file.name.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+    const values = parseDelimited(await file.text(), delimiter);
+    const columns = Math.max(0, ...values.map((row) => row.length));
+    if (
+      values.length > MAX_SHEET_ROWS ||
+      columns > MAX_SHEET_COLS ||
+      values.length * columns > MAX_SHEET_CELLS
+    ) {
+      throw new Error("too-many-cells");
+    }
+    return {
+      values,
+      report: {
+        worksheet: file.name,
+        worksheetNames: [],
+        rows: values.length,
+        columns,
+        formulasDowngraded: 0,
+        numbers: 0,
+        dates: 0,
+        booleans: 0,
+        preview: values.slice(0, 5).map((row) => row.slice(0, 8)),
+      },
+    };
+  };
+
+  const confirmSheetImport = async () => {
+    if (sheetImport?.state !== "preview" || !selectedFileId || !collab) return;
+    const values = sheetImport.values;
+    setSheetImport({ ...sheetImport, state: "importing" });
+    try {
       const result = await replaceSheetFromImport({
         documentId: selectedFileId as Id<"documents">,
         expectedSeq: collab.seq,
         updates: sheetImportUpdates(values).map(toArrayBuffer),
       });
       if (!result.ok) throw new Error(result.error);
-      notify.success("Spreadsheet imported");
+      setSheetImport(null);
+      notify.success("Spreadsheet imported", {
+        description: `${sheetImport.report.rows} rows × ${sheetImport.report.columns} columns replaced the previous contents.`,
+      });
     } catch (error) {
+      setSheetImport({ ...sheetImport, state: "preview" });
       notify.error("Import failed", { description: mapDocError(error) });
     }
   };
@@ -1564,10 +1691,31 @@ export function ProjectEditor({
                   ) : null}
                 </button>
               ) : null}
+              {selectedNode?.fileType === "md" ? (
+                <button
+                  type="button"
+                  onClick={() => setMarkdownVisual((value) => !value)}
+                  aria-label={
+                    markdownVisual ? "Use Markdown source mode" : "Use visual Markdown mode"
+                  }
+                  aria-pressed={markdownVisual}
+                  title="Toggle visual Markdown (Ctrl/Command + Shift + M)"
+                  className={cn(
+                    "flex h-8 cursor-pointer items-center gap-1.5 rounded-sm border border-hairline px-2 font-medium text-[11px]",
+                    markdownVisual
+                      ? "bg-accent/10 text-accent"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Eye className="size-3.5" aria-hidden="true" />
+                  <span className="hidden sm:inline">{markdownVisual ? "Visual" : "Source"}</span>
+                </button>
+              ) : null}
               {selectedNode?.fileType !== "sheet" &&
               selectedNode?.fileType !== "board" &&
               selectedNode?.fileType !== "view" &&
-              selectedNode?.fileType !== "chart" ? (
+              selectedNode?.fileType !== "chart" &&
+              selectedNode?.fileType !== "dashboard" ? (
                 <button
                   type="button"
                   onClick={() => setOutlineOpen((value) => !value)}
@@ -1595,7 +1743,8 @@ export function ProjectEditor({
                     doc.fileType === "sheet" ||
                     doc.fileType === "board" ||
                     doc.fileType === "view" ||
-                    doc.fileType === "chart"
+                    doc.fileType === "chart" ||
+                    doc.fileType === "dashboard"
                       ? collab?.ydoc
                       : undefined
                   }
@@ -1634,7 +1783,8 @@ export function ProjectEditor({
                         {selectedNode?.fileType !== "sheet" &&
                         selectedNode?.fileType !== "board" &&
                         selectedNode?.fileType !== "view" &&
-                        selectedNode?.fileType !== "chart" ? (
+                        selectedNode?.fileType !== "chart" &&
+                        selectedNode?.fileType !== "dashboard" ? (
                           <button
                             ref={moreFirstRef}
                             type="button"
@@ -1654,7 +1804,8 @@ export function ProjectEditor({
                             selectedNode?.fileType === "sheet" ||
                             selectedNode?.fileType === "board" ||
                             selectedNode?.fileType === "view" ||
-                            selectedNode?.fileType === "chart"
+                            selectedNode?.fileType === "chart" ||
+                            selectedNode?.fileType === "dashboard"
                               ? moreFirstRef
                               : undefined
                           }
@@ -1705,7 +1856,8 @@ export function ProjectEditor({
               {selectedNode?.fileType !== "sheet" &&
               selectedNode?.fileType !== "board" &&
               selectedNode?.fileType !== "view" &&
-              selectedNode?.fileType !== "chart" ? (
+              selectedNode?.fileType !== "chart" &&
+              selectedNode?.fileType !== "dashboard" ? (
                 <fieldset className="flex min-w-0 items-center gap-0.5 rounded-sm border border-hairline p-0.5">
                   <legend className="sr-only">View mode</legend>
                   {(
@@ -1887,6 +2039,7 @@ export function ProjectEditor({
                     canEdit={canEdit && !collab.blocked}
                     members={boardMembers}
                     nodes={nodes}
+                    documentId={selectedFileId}
                     selectedCardId={boardSelection?.cardId ?? null}
                     onSelectionChange={setBoardSelection}
                     onOpenComments={() => setCommentsOpen(true)}
@@ -1903,6 +2056,8 @@ export function ProjectEditor({
                     ready={collab.ready}
                     canEdit={canEdit && !collab.blocked}
                     members={boardMembers}
+                    documentId={selectedFileId}
+                    userId={user?.id ?? "anonymous"}
                     onOpenDocument={selectNode}
                   />
                 </div>
@@ -1918,44 +2073,103 @@ export function ProjectEditor({
                     nodes={nodes}
                   />
                 </div>
+              ) : doc.fileType === "dashboard" && collab?.ydoc ? (
+                <div className="min-h-0 flex-1">
+                  <DashboardEditor
+                    key={selectedFileId}
+                    projectId={pid}
+                    ydoc={collab.ydoc}
+                    ready={collab.ready}
+                    canEdit={canEdit && !collab.blocked}
+                    nodes={nodes}
+                  />
+                </div>
               ) : (
                 <div className="flex min-h-0 flex-1">
                   {effectiveViewMode !== "preview" ? (
                     <div
                       className={cn(
-                        "min-w-0 overflow-auto",
+                        "flex min-w-0 flex-col overflow-hidden",
                         effectiveViewMode === "split"
                           ? "flex-1 border-hairline border-r"
                           : "flex-1",
                       )}
                     >
-                      <DocEditor
-                        ref={editorRef}
-                        key={`${selectedFileId}:${doc.fileType}`}
-                        initialContent={doc.content}
-                        language={doc.fileType === "html" ? "html" : "md"}
-                        readOnly={!canEdit || Boolean(collab?.blocked)}
-                        onChange={setBuffer}
-                        maxContentBytes={canEdit ? maxEditableBytes : undefined}
-                        onLimit={() =>
-                          notify.error("Edit is too large", {
-                            description: mapDocError(new Error("file-too-large")),
-                          })
-                        }
-                        ytext={collab?.ytext}
-                        awareness={collab?.awareness}
-                        commentRanges={commentRanges}
-                        activeCommentId={activeCommentId}
-                        focusRequest={focusRequest}
-                        onSelectionChange={setEditorSelection}
-                        onCommentRangeClick={(commentId) => {
-                          setCommentsOpen(true);
-                          focusThread(commentId);
-                        }}
-                        onInsertImage={canEdit ? insertImageAsset : undefined}
-                        fileNode={selectedNode}
-                        nodes={nodes}
-                      />
+                      {doc.fileType === "md" ? (
+                        <div
+                          role="toolbar"
+                          aria-label="Markdown formatting"
+                          className="thin-scrollbar flex h-11 shrink-0 items-center gap-1 overflow-x-auto border-hairline border-b bg-surface/70 px-2"
+                        >
+                          {(
+                            [
+                              ["bold", Bold, "Bold"],
+                              ["italic", Italic, "Italic"],
+                              ["heading", Heading2, "Heading"],
+                              ["list", List, "List"],
+                              ["link", Link2, "Link"],
+                              ["image", ImageIcon, "Image"],
+                              ["code", Code2, "Code"],
+                            ] as const
+                          ).map(([format, Icon, label]) => (
+                            <button
+                              type="button"
+                              key={format}
+                              disabled={!canEdit || Boolean(collab?.blocked)}
+                              aria-label={label}
+                              aria-pressed={
+                                editorSelection?.activeFormats.includes(format) ?? false
+                              }
+                              title={label}
+                              onClick={() => editorRef.current?.format(format)}
+                              className={cn(
+                                "flex size-9 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground disabled:opacity-40",
+                                editorSelection?.activeFormats.includes(format) &&
+                                  "bg-accent/10 text-accent",
+                              )}
+                            >
+                              <Icon className="size-4" aria-hidden="true" />
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                      <div className="min-h-0 flex-1 overflow-hidden">
+                        <DocEditor
+                          ref={editorRef}
+                          key={`${selectedFileId}:${doc.fileType}`}
+                          initialContent={doc.content}
+                          language={doc.fileType === "html" ? "html" : "md"}
+                          readOnly={!canEdit || Boolean(collab?.blocked)}
+                          onChange={setBuffer}
+                          maxContentBytes={canEdit ? maxEditableBytes : undefined}
+                          onLimit={() =>
+                            notify.error("Edit is too large", {
+                              description: mapDocError(new Error("file-too-large")),
+                            })
+                          }
+                          ytext={collab?.ytext}
+                          awareness={collab?.awareness}
+                          commentRanges={commentRanges}
+                          activeCommentId={activeCommentId}
+                          focusRequest={focusRequest}
+                          onSelectionChange={setEditorSelection}
+                          onCommentRangeClick={(commentId) => {
+                            setCommentsOpen(true);
+                            focusThread(commentId);
+                          }}
+                          onInsertImage={canEdit ? insertImageAsset : undefined}
+                          fileNode={selectedNode}
+                          nodes={nodes}
+                          visualMode={doc.fileType === "md" && markdownVisual}
+                          assetUrls={visualAssetMap}
+                          mentionCandidates={(documentMentionCandidates ?? []).map((candidate) => ({
+                            userId: candidate.userId,
+                            name: candidate.name,
+                            email: candidate.email,
+                            hasAccess: candidate.hasAccess,
+                          }))}
+                        />
+                      </div>
                     </div>
                   ) : null}
                   {effectiveViewMode !== "editor" ? (
@@ -2022,7 +2236,9 @@ export function ProjectEditor({
         selectedNode?.kind === "file" &&
         selectedNode.fileType !== "sheet" &&
         selectedNode.fileType !== "board" &&
-        selectedNode.fileType !== "view" ? (
+        selectedNode.fileType !== "view" &&
+        selectedNode.fileType !== "chart" &&
+        selectedNode.fileType !== "dashboard" ? (
           <OutlinePanel
             open={outlineOpen}
             items={outlineItems}
@@ -2045,7 +2261,9 @@ export function ProjectEditor({
                 ? "cell"
                 : selectedNode?.fileType === "board"
                   ? "card"
-                  : selectedNode?.fileType === "view"
+                  : selectedNode?.fileType === "view" ||
+                      selectedNode?.fileType === "chart" ||
+                      selectedNode?.fileType === "dashboard"
                     ? "document"
                     : "text"
             }
@@ -2099,6 +2317,103 @@ export function ProjectEditor({
         />
       ) : null}
       <Dialog
+        open={sheetImport !== null}
+        onClose={() => {
+          if (sheetImport?.state !== "importing") setSheetImport(null);
+        }}
+        title="Import into spreadsheet"
+        icon={<Upload className="size-4" aria-hidden="true" />}
+        description="Review what will be imported. This replaces the current sheet contents."
+        className="max-w-2xl"
+        mobileSheet
+      >
+        {sheetImport?.state === "parsing" ? (
+          <p className="p-6 text-center text-muted-foreground text-sm" aria-live="polite">
+            Reading {sheetImport.file.name}…
+          </p>
+        ) : sheetImport ? (
+          <div className="space-y-4 p-4">
+            {sheetImport.report.worksheetNames.length > 1 ? (
+              <label className="block text-xs">
+                Worksheet
+                <select
+                  className={cn(fieldClass, "mt-1 w-full")}
+                  value={sheetImport.report.worksheet}
+                  disabled={sheetImport.state === "importing"}
+                  onChange={async (event) => {
+                    const worksheet = event.target.value;
+                    try {
+                      const next = await parseSheetImport(sheetImport.file, worksheet);
+                      setSheetImport({ state: "preview", file: sheetImport.file, ...next });
+                    } catch (error) {
+                      notify.error("Worksheet unavailable", { description: mapDocError(error) });
+                    }
+                  }}
+                >
+                  {sheetImport.report.worksheetNames.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+              {[
+                ["Rows", sheetImport.report.rows.toLocaleString()],
+                ["Columns", sheetImport.report.columns.toLocaleString()],
+                ["Numbers", sheetImport.report.numbers.toLocaleString()],
+                ["Dates", sheetImport.report.dates.toLocaleString()],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="font-mono">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            {sheetImport.report.formulasDowngraded > 0 ? (
+              <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+                {sheetImport.report.formulasDowngraded.toLocaleString()} formula cells will import
+                their last computed value.
+              </p>
+            ) : null}
+            <div className="overflow-x-auto rounded-md border border-hairline">
+              <table className="w-full text-xs">
+                <tbody>
+                  {sheetImport.report.preview.map((row, rowIndex) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: preview rows have no stable id
+                    <tr key={rowIndex} className="border-hairline border-b last:border-b-0">
+                      {row.map((cell, cellIndex) => (
+                        // biome-ignore lint/suspicious/noArrayIndexKey: preview cells have no stable id
+                        <td key={cellIndex} className="max-w-40 truncate px-2 py-1">
+                          {cell}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-muted-foreground text-xs">
+              Existing cell comments remain, but comments on removed rows or columns will be marked
+              as location removed.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                disabled={sheetImport.state === "importing"}
+                onClick={() => setSheetImport(null)}
+              >
+                Cancel
+              </Button>
+              <Button onClick={confirmSheetImport} disabled={sheetImport.state === "importing"}>
+                {sheetImport.state === "importing" ? "Importing…" : "Replace spreadsheet"}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Dialog>
+      <Dialog
         open={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
         title="Keyboard shortcuts"
@@ -2114,6 +2429,7 @@ export function ProjectEditor({
             ["Find in file", "Ctrl / ⌘ F"],
             ["Select all", "Ctrl / ⌘ A"],
             ["Confirm automatic sync", "Ctrl / ⌘ S"],
+            ["Toggle visual Markdown", "Ctrl / ⌘ ⇧ M"],
             ["Open this reference", "?"],
             ["Close a dialog", "Esc"],
           ].map(([label, keys]) => (

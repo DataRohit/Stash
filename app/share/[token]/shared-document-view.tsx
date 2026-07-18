@@ -11,6 +11,7 @@ import { SheetTable } from "@/components/sheet-table";
 import { notify } from "@/components/ui/toast";
 import { ViewPreview, type ViewPreviewModel } from "@/components/view-preview";
 import type { ChartData } from "@/lib/chart-data";
+import type { DashboardTile } from "@/lib/dashboard-model";
 import type { BoardRenderModel, SheetRenderModel } from "@/lib/doc-projection";
 import type { FileType } from "@/lib/document-types";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
@@ -26,6 +27,13 @@ export type SharedDocument = {
   boardPreview?: BoardRenderModel;
   viewPreview?: ViewPreviewModel;
   chartPreview?: ChartData;
+  dashboardPreview?: Array<{
+    tile: DashboardTile;
+    status: "ok" | "missing";
+    chart?: ChartData;
+    value?: number;
+    truncated?: boolean;
+  }>;
   updatedAt: number;
   nodes: TreeNode[];
   fileLinks: { documentId: string; href: string }[];
@@ -100,6 +108,34 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
           <ViewPreview model={shared.viewPreview} className="h-full" />
         ) : shared.fileType === "chart" && shared.chartPreview ? (
           <ChartView model={shared.chartPreview} className="h-full" />
+        ) : shared.fileType === "dashboard" && shared.dashboardPreview ? (
+          <div className="thin-scrollbar grid h-full grid-cols-1 gap-4 overflow-y-auto bg-background p-4 lg:grid-cols-2">
+            {shared.dashboardPreview.map(({ tile, status, chart, value, truncated }) => (
+              <article
+                key={tile.id}
+                className={`overflow-hidden rounded-lg border border-hairline bg-surface ${tile.width === 2 ? "lg:col-span-2" : ""}`}
+              >
+                <h2 className="border-hairline border-b px-3 py-2 font-medium text-sm">
+                  {tile.title}
+                </h2>
+                {status === "missing" ? (
+                  <p className="p-8 text-center text-muted-foreground text-sm">
+                    This tile or its source is not shared.
+                  </p>
+                ) : chart ? (
+                  <ChartView model={chart} />
+                ) : (
+                  <div className="flex min-h-36 flex-col items-center justify-center gap-2">
+                    <strong className="font-mono text-4xl">{(value ?? 0).toLocaleString()}</strong>
+                    <span className="text-muted-foreground text-xs uppercase tracking-widest">
+                      {tile.aggregate === "sum" ? "Total" : "Records"}
+                      {truncated ? " · sampled" : ""}
+                    </span>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
         ) : fileNode ? (
           <DocPreview
             fileNode={fileNode}

@@ -280,6 +280,100 @@ function barNodes(
   return { nodes, marks };
 }
 
+function stackedBarNodes(
+  data: ChartData,
+  plot: Plot,
+  scaleY: (value: number) => number,
+): { nodes: ChartSceneNode[]; marks: ChartMark[] } {
+  const nodes: ChartSceneNode[] = [];
+  const marks: ChartMark[] = [];
+  const step = (plot.right - plot.left) / data.categories.length;
+  const width = step * 0.62;
+  data.categories.forEach((category, categoryIndex) => {
+    let positive = 0;
+    let negative = 0;
+    data.series.forEach((series) => {
+      const value = series.values[categoryIndex];
+      if (value === null || value === undefined) return;
+      const from = value >= 0 ? positive : negative;
+      const to = from + value;
+      if (value >= 0) positive = to;
+      else negative = to;
+      const y0 = scaleY(from);
+      const y1 = scaleY(to);
+      const rect = {
+        x: round(plot.left + step * categoryIndex + (step - width) / 2),
+        y: round(Math.min(y0, y1)),
+        w: round(Math.max(1, width)),
+        h: round(Math.max(1, Math.abs(y1 - y0))),
+      };
+      nodes.push({ t: "rect", ...rect, rx: 1, fill: series.color });
+      marks.push({
+        kind: "rect",
+        ...rect,
+        category,
+        series: series.name,
+        value,
+        color: series.color,
+      });
+    });
+  });
+  return { nodes, marks };
+}
+
+function scatterNodes(
+  data: ChartData,
+  plot: Plot,
+  scaleY: (value: number) => number,
+): { nodes: ChartSceneNode[]; marks: ChartMark[] } {
+  const nodes: ChartSceneNode[] = [];
+  const marks: ChartMark[] = [];
+  const xSeries = data.series[0];
+  if (!xSeries) return { nodes, marks };
+  const xValues = xSeries.values.filter((value): value is number => value !== null);
+  const minX = Math.min(...xValues, 0);
+  const maxX = Math.max(...xValues, 1);
+  const spanX = maxX - minX || 1;
+  const scaleX = (value: number) => plot.left + ((value - minX) / spanX) * (plot.right - plot.left);
+  const ySeries = data.series.length > 1 ? data.series.slice(1) : data.series;
+  for (const series of ySeries) {
+    series.values.forEach((value, index) => {
+      const rawX = data.series.length > 1 ? xSeries.values[index] : index;
+      if (value === null || rawX === null || rawX === undefined) return;
+      const x = round(scaleX(rawX));
+      const y = round(scaleY(value));
+      nodes.push({ t: "circle", cx: x, cy: y, r: 4, fill: series.color });
+      marks.push({
+        kind: "point",
+        x,
+        y,
+        category: data.categories[index] ?? String(rawX),
+        series: series.name,
+        value,
+        color: series.color,
+      });
+    });
+  }
+  return { nodes, marks };
+}
+
+function comboNodes(
+  data: ChartData,
+  plot: Plot,
+  scaleY: (value: number) => number,
+): { nodes: ChartSceneNode[]; marks: ChartMark[] } {
+  const bars = { ...data, series: data.series.filter((series) => series.role === "bar") };
+  const lines = { ...data, series: data.series.filter((series) => series.role === "line") };
+  const barBody = bars.series.length ? barNodes(bars, plot, scaleY) : { nodes: [], marks: [] };
+  const lineBody = lines.series.length
+    ? lineNodes(lines, plot, scaleY, false)
+    : { nodes: [], marks: [] };
+  return {
+    nodes: [...barBody.nodes, ...lineBody.nodes],
+    marks: [...barBody.marks, ...lineBody.marks],
+  };
+}
+
 function lineNodes(
   data: ChartData,
   plot: Plot,
@@ -445,11 +539,25 @@ export function buildChartScene(data: ChartData): ChartScene {
   };
   let min = 0;
   let max = 0;
-  for (const series of data.series) {
-    for (const value of series.values) {
-      if (value === null || value === undefined) continue;
-      min = Math.min(min, value);
-      max = Math.max(max, value);
+  if (data.type === "stacked-bar") {
+    data.categories.forEach((_, index) => {
+      let positive = 0;
+      let negative = 0;
+      for (const series of data.series) {
+        const value = series.values[index] ?? 0;
+        if (value >= 0) positive += value;
+        else negative += value;
+      }
+      min = Math.min(min, negative);
+      max = Math.max(max, positive);
+    });
+  } else {
+    for (const series of data.series) {
+      for (const value of series.values) {
+        if (value === null || value === undefined) continue;
+        min = Math.min(min, value);
+        max = Math.max(max, value);
+      }
     }
   }
   const ticks = niceTicks(min, max, 5);
@@ -464,7 +572,13 @@ export function buildChartScene(data: ChartData): ChartScene {
   const body =
     data.type === "bar"
       ? barNodes(data, plot, scaleY)
-      : lineNodes(data, plot, scaleY, data.type === "area");
+      : data.type === "stacked-bar"
+        ? stackedBarNodes(data, plot, scaleY)
+        : data.type === "scatter"
+          ? scatterNodes(data, plot, scaleY)
+          : data.type === "combo"
+            ? comboNodes(data, plot, scaleY)
+            : lineNodes(data, plot, scaleY, data.type === "area");
   nodes.push(...body.nodes);
   nodes.push(
     ...legendNodes(

@@ -9,6 +9,7 @@ import {
   FileVideo,
   Folder,
   Image as ImageIcon,
+  LayoutDashboard,
   LayoutList,
   TableProperties,
 } from "lucide-react";
@@ -61,6 +62,9 @@ export function FileIcon({ kind, fileType, mimeType, className }: FileIconProps)
   }
   if (fileType === "chart") {
     return <BarChart3 className={cn(base, "text-warning")} aria-hidden="true" />;
+  }
+  if (fileType === "dashboard") {
+    return <LayoutDashboard className={cn(base, "text-accent")} aria-hidden="true" />;
   }
   return <FileText className={cn(base, "text-accent")} aria-hidden="true" />;
 }

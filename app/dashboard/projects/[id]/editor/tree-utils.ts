@@ -25,6 +25,10 @@ export function pathOf(node: TreeNode, byId: Map<string, TreeNode>): string {
 }
 
 export function resolveRef(fromNode: TreeNode, ref: string, nodes: TreeNode[]): TreeNode | null {
+  const queryMatch = /(?:^|[?&])file=([A-Za-z0-9_-]+)/.exec(ref);
+  if (queryMatch?.[1]) {
+    return nodes.find((node) => node.id === queryMatch[1]) ?? null;
+  }
   const clean = ref.split("#")[0]?.split("?")[0]?.trim() ?? "";
   if (clean.length === 0 || /^[a-z]+:/i.test(clean)) {
     return null;

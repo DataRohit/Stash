@@ -1,6 +1,6 @@
 "use client";
 
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowDown,
   ArrowLeft,
@@ -8,8 +8,10 @@ import {
   ArrowUp,
   Filter,
   MessageSquarePlus,
+  Palette,
   Plus,
   Redo2,
+  Snowflake,
   Trash2,
   Undo2,
   Upload,
@@ -17,6 +19,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
+import { Button } from "@/components/ui/button";
+import { ColorPicker } from "@/components/ui/color-picker";
+import { Dialog } from "@/components/ui/dialog";
 import { notify } from "@/components/ui/toast";
 import { documentSize, project } from "@/lib/doc-projection";
 import { parseDelimited, serializeDelimited } from "@/lib/sheet-csv";
@@ -26,23 +31,31 @@ import {
   DEFAULT_COLUMN_WIDTH,
   DEFAULT_ROW_HEIGHT,
   displayedCellValue,
+  formatColorForCell,
   getSheetRoots,
   inspectSheet,
   MAX_COLUMN_WIDTH,
   MAX_ROW_HEIGHT,
   MAX_SHEET_CELLS,
   MAX_SHEET_COLS,
+  MAX_SHEET_FORMAT_RULES,
   MAX_SHEET_PROJECTION_BYTES,
   MAX_SHEET_ROWS,
   MAX_SHEET_STORED_BYTES,
   MAX_SHEET_UPDATE_BYTES,
+  MAX_SHEET_VALIDATION_RULES,
   MIN_COLUMN_WIDTH,
   MIN_ROW_HEIGHT,
   normalizeLiteral,
   readCell,
+  readFormatRules,
+  readSheetSettings,
+  readValidationRules,
   type SheetCell,
   SheetValidationError,
   setCell,
+  sheetRangeIndex,
+  validationForCell,
 } from "@/lib/sheet-model";
 import { cn } from "@/lib/utils";
 
@@ -148,6 +161,17 @@ export function SheetEditor({
   const [resizeTarget, setResizeTarget] = useState<{ kind: "row" | "col"; id: string } | null>(
     null,
   );
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [freezeOpen, setFreezeOpen] = useState(false);
+  const [freezeRows, setFreezeRows] = useState("0");
+  const [freezeCols, setFreezeCols] = useState("0");
+  const [formatCondition, setFormatCondition] = useState<
+    "empty" | "not-empty" | "equals" | "contains" | "greater" | "less"
+  >("not-empty");
+  const [formatValue, setFormatValue] = useState("");
+  const [formatColor, setFormatColor] = useState("#f59e0b");
+  const [validationValues, setValidationValues] = useState("");
+  const [scrollPosition, setScrollPosition] = useState({ left: 0, top: 0 });
 
   useEffect(() => {
     try {
@@ -246,7 +270,16 @@ export function SheetEditor({
           return (naturalIndex.get(left) ?? 0) - (naturalIndex.get(right) ?? 0);
         });
       }
-      return { roots, rows, naturalRows, cols };
+      return {
+        roots,
+        rows,
+        naturalRows,
+        cols,
+        formatRules: readFormatRules(roots),
+        validationRules: readValidationRules(roots),
+        rangeIndex: sheetRangeIndex(naturalRows, cols),
+        settings: readSheetSettings(roots, naturalRows.length, cols.length),
+      };
     } catch {
       return null;
     }
@@ -330,6 +363,12 @@ export function SheetEditor({
       return Number((rowId && model.roots.rowMeta.get(rowId)?.get("height")) ?? DEFAULT_ROW_HEIGHT);
     },
     overscan: 8,
+    rangeExtractor: (range) => [
+      ...new Set([
+        ...defaultRangeExtractor(range),
+        ...Array.from({ length: model?.settings.frozenRows ?? 0 }, (_, index) => index),
+      ]),
+    ],
   });
   const colVirtualizer = useVirtualizer({
     horizontal: true,
@@ -343,6 +382,12 @@ export function SheetEditor({
       );
     },
     overscan: 3,
+    rangeExtractor: (range) => [
+      ...new Set([
+        ...defaultRangeExtractor(range),
+        ...Array.from({ length: model?.settings.frozenCols ?? 0 }, (_, index) => index),
+      ]),
+    ],
   });
 
   useEffect(() => {
@@ -475,6 +520,21 @@ export function SheetEditor({
       if (!ydoc || !model || readOnly) return false;
       const current = readCell(model.roots, point.rowId, point.colId);
       if (raw === cellInput(current, model.naturalRows, model.cols)) return true;
+      const validation = validationForCell(
+        model.validationRules,
+        model.rangeIndex,
+        point.rowId,
+        point.colId,
+      );
+      if (raw && !raw.startsWith("=") && validation) {
+        const display = displayedCellValue(normalizeLiteral(raw));
+        if (!validation.allowedValues.includes(display)) {
+          notify.error("Value rejected", {
+            description: `Choose one of: ${validation.allowedValues.join(", ")}`,
+          });
+          return false;
+        }
+      }
       try {
         ydoc.transact(() => {
           if (!raw) {
@@ -586,6 +646,23 @@ export function SheetEditor({
           });
           return;
         }
+        let rejected = 0;
+        const acceptedValues = values.map((row, rowOffset) =>
+          row.map((raw, colOffset) => {
+            if (!raw || raw.startsWith("=")) return raw;
+            const rule = validationForCell(
+              model.validationRules,
+              model.rangeIndex,
+              itemAt(model.rows, rowStart + rowOffset),
+              itemAt(model.cols, colStart + colOffset),
+            );
+            if (!rule || rule.allowedValues.includes(displayedCellValue(normalizeLiteral(raw)))) {
+              return raw;
+            }
+            rejected += 1;
+            return "";
+          }),
+        );
         const preview = new Y.Doc();
         try {
           Y.applyUpdate(preview, Y.encodeStateAsUpdate(ydoc), "preview");
@@ -595,7 +672,7 @@ export function SheetEditor({
             model.rows,
             model.naturalRows,
             model.cols,
-            values,
+            acceptedValues,
             rowStart,
             colStart,
           );
@@ -620,7 +697,7 @@ export function SheetEditor({
           model.rows,
           model.naturalRows,
           model.cols,
-          values,
+          acceptedValues,
           rowStart,
           colStart,
         );
@@ -629,6 +706,11 @@ export function SheetEditor({
           colId: itemAt(model.cols, colStart + width - 1),
         };
         setSelection({ anchor: active, focus: nextFocus });
+        if (rejected > 0) {
+          notify.warning("Some pasted cells were rejected", {
+            description: `${rejected} ${rejected === 1 ? "value was" : "values were"} outside the allowed lists and left empty.`,
+          });
+        }
       } catch (error) {
         notify.error("Paste rejected", {
           description: error instanceof Error ? error.message : "The clipboard data is invalid.",
@@ -824,6 +906,64 @@ export function SheetEditor({
 
   const activeCell = active ? readCell(model.roots, active.rowId, active.colId) : null;
   const naturalView = !filter && !sort;
+  const activeValidation = active
+    ? validationForCell(model.validationRules, model.rangeIndex, active.rowId, active.colId)
+    : null;
+  const selectedRuleRange =
+    range &&
+    model.rows[range.rowStart] &&
+    model.rows[range.rowEnd] &&
+    model.cols[range.colStart] &&
+    model.cols[range.colEnd]
+      ? {
+          startRowId: itemAt(model.rows, range.rowStart),
+          endRowId: itemAt(model.rows, range.rowEnd),
+          startColId: itemAt(model.cols, range.colStart),
+          endColId: itemAt(model.cols, range.colEnd),
+        }
+      : null;
+
+  const addFormatRule = () => {
+    if (!selectedRuleRange || model.formatRules.length >= MAX_SHEET_FORMAT_RULES) return;
+    const ruleId = id();
+    const map = new Y.Map<unknown>();
+    for (const [key, value] of Object.entries(selectedRuleRange)) map.set(key, value);
+    map.set("condition", formatCondition);
+    map.set("value", formatValue.slice(0, 500));
+    map.set("color", formatColor);
+    map.set("enabled", true);
+    ydoc?.transact(() => {
+      model.roots.formatRules.set(ruleId, map);
+      model.roots.formatRuleOrder.push([ruleId]);
+    }, "sheet-format");
+  };
+
+  const addValidationRule = () => {
+    const allowed = [
+      ...new Set(
+        validationValues
+          .split(/[,\n]/)
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ].slice(0, 100);
+    if (
+      !selectedRuleRange ||
+      allowed.length === 0 ||
+      model.validationRules.length >= MAX_SHEET_VALIDATION_RULES
+    )
+      return;
+    const ruleId = id();
+    const map = new Y.Map<unknown>();
+    for (const [key, value] of Object.entries(selectedRuleRange)) map.set(key, value);
+    const values = new Y.Array<string>();
+    values.insert(0, allowed);
+    map.set("allowedValues", values);
+    ydoc?.transact(() => {
+      model.roots.validationRules.set(ruleId, map);
+      model.roots.validationRuleOrder.push([ruleId]);
+    }, "sheet-format");
+  };
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-background" aria-label="Spreadsheet editor">
@@ -948,6 +1088,29 @@ export function SheetEditor({
               <MessageSquarePlus />
             </button>
           ) : null}
+          <button
+            type="button"
+            onClick={() => setRulesOpen(true)}
+            disabled={readOnly || !selectedRuleRange}
+            className="sheet-tool-wide"
+          >
+            <Palette /> Rules
+          </button>
+          <button
+            type="button"
+            disabled={readOnly}
+            onClick={() => {
+              setFreezeRows(String(model.settings.frozenRows));
+              setFreezeCols(String(model.settings.frozenCols));
+              setFreezeOpen(true);
+            }}
+            className="sheet-tool-wide"
+          >
+            <Snowflake /> Freeze{" "}
+            {model.settings.frozenRows || model.settings.frozenCols
+              ? `${model.settings.frozenRows}×${model.settings.frozenCols}`
+              : ""}
+          </button>
         </div>
         <div className="sheet-toolbar-secondary">
           {onImportFile && !readOnly ? (
@@ -955,7 +1118,7 @@ export function SheetEditor({
               <Upload /> Import
               <input
                 type="file"
-                accept=".csv,.tsv,text/csv,text/tab-separated-values"
+                accept=".csv,.tsv,.xlsx,.xls,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                 className="sr-only"
                 onChange={(event) => {
                   const file = event.target.files?.[0];
@@ -985,42 +1148,73 @@ export function SheetEditor({
         </span>
         <span className="font-mono text-muted-foreground text-xs leading-none">fx</span>
         <div className="sheet-field h-8 min-w-0 flex-1 px-2">
-          <input
-            ref={inputRef}
-            value={editing ? draft : cellInput(activeCell, model.naturalRows, model.cols)}
-            readOnly={readOnly}
-            onFocus={() => beginEdit()}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                finishEdit(1, 0);
-              }
-              if (event.key === "Tab") {
-                event.preventDefault();
-                finishEdit(0, event.shiftKey ? -1 : 1);
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setEditing(false);
-                scrollRef.current?.focus();
-              }
-            }}
-            onBlur={() => {
-              if (editing && active) {
-                commitValue(draft, active);
-                setEditing(false);
-              }
-            }}
-            className="sheet-field-input h-full min-w-0 flex-1 font-mono text-sm"
-            aria-label="Formula bar"
-          />
+          {activeValidation && !editing ? (
+            <select
+              aria-label="Allowed cell value"
+              disabled={readOnly}
+              value={displayedCellValue(activeCell)}
+              onChange={(event) => {
+                if (active) commitValue(event.target.value, active);
+              }}
+              className="sheet-field-input h-full min-w-0 flex-1 text-sm"
+            >
+              <option value="">Choose a value</option>
+              {activeValidation.allowedValues.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+              {displayedCellValue(activeCell) &&
+              !activeValidation.allowedValues.includes(displayedCellValue(activeCell)) ? (
+                <option value={displayedCellValue(activeCell)}>
+                  Invalid: {displayedCellValue(activeCell)}
+                </option>
+              ) : null}
+            </select>
+          ) : (
+            <input
+              ref={inputRef}
+              value={editing ? draft : cellInput(activeCell, model.naturalRows, model.cols)}
+              readOnly={readOnly}
+              onFocus={() => beginEdit()}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  finishEdit(1, 0);
+                }
+                if (event.key === "Tab") {
+                  event.preventDefault();
+                  finishEdit(0, event.shiftKey ? -1 : 1);
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setEditing(false);
+                  scrollRef.current?.focus();
+                }
+              }}
+              onBlur={() => {
+                if (editing && active) {
+                  commitValue(draft, active);
+                  setEditing(false);
+                }
+              }}
+              className="sheet-field-input h-full min-w-0 flex-1 font-mono text-sm"
+              aria-label="Formula bar"
+            />
+          )}
         </div>
       </div>
       <div
         ref={scrollRef}
         role="application"
         onKeyDown={keyDown}
+        onScroll={(event) =>
+          setScrollPosition({
+            left: event.currentTarget.scrollLeft,
+            top: event.currentTarget.scrollTop,
+          })
+        }
         onPaste={(event) => {
           if (!readOnly) {
             event.preventDefault();
@@ -1086,9 +1280,10 @@ export function SheetEditor({
                 style={{
                   position: "absolute",
                   left: 0,
-                  transform: `translateX(${ROW_HEADER_WIDTH + virtualCol.start}px)`,
+                  transform: `translate(${ROW_HEADER_WIDTH + virtualCol.start + (virtualCol.index < model.settings.frozenCols ? scrollPosition.left : 0)}px, ${scrollPosition.top}px)`,
                   width: virtualCol.size,
                   height: HEADER_HEIGHT,
+                  zIndex: virtualCol.index < model.settings.frozenCols ? 28 : 20,
                 }}
                 title="Sort this column"
               >
@@ -1118,9 +1313,10 @@ export function SheetEditor({
                   position: "absolute",
                   top: 0,
                   left: 0,
-                  transform: `translateY(${HEADER_HEIGHT + virtualRow.start}px)`,
+                  transform: `translateY(${HEADER_HEIGHT + virtualRow.start + (virtualRow.index < model.settings.frozenRows ? scrollPosition.top : 0)}px)`,
                   height: virtualRow.size,
                   width: ROW_HEADER_WIDTH + colVirtualizer.getTotalSize(),
+                  zIndex: virtualRow.index < model.settings.frozenRows ? 8 : undefined,
                 }}
               >
                 <button
@@ -1186,6 +1382,23 @@ export function SheetEditor({
                       virtualCol.index <= value.colEnd,
                   );
                   const commented = activeComment?.rowId === rowId && activeComment.colId === colId;
+                  const validation = validationForCell(
+                    model.validationRules,
+                    model.rangeIndex,
+                    rowId,
+                    colId,
+                  );
+                  const display = displayedCellValue(cell);
+                  const invalid = Boolean(
+                    validation && display && !validation.allowedValues.includes(display),
+                  );
+                  const formatColor = formatColorForCell(
+                    model.formatRules,
+                    model.rangeIndex,
+                    rowId,
+                    colId,
+                    cell,
+                  );
                   return (
                     <button
                       key={colId}
@@ -1212,17 +1425,41 @@ export function SheetEditor({
                         focused && "z-[2] ring-2 ring-accent ring-inset",
                         commented &&
                           "after:absolute after:top-0 after:right-0 after:border-4 after:border-transparent after:border-t-warning after:border-r-warning",
+                        invalid &&
+                          "before:absolute before:top-0 before:left-0 before:border-4 before:border-transparent before:border-t-destructive before:border-l-destructive",
                       )}
                       style={{
-                        left: ROW_HEADER_WIDTH + virtualCol.start,
+                        left:
+                          ROW_HEADER_WIDTH +
+                          virtualCol.start +
+                          (virtualCol.index < model.settings.frozenCols ? scrollPosition.left : 0),
                         width: virtualCol.size,
                         height: virtualRow.size,
+                        backgroundColor: selected
+                          ? undefined
+                          : formatColor
+                            ? `${formatColor}26`
+                            : undefined,
+                        zIndex:
+                          virtualRow.index < model.settings.frozenRows ||
+                          virtualCol.index < model.settings.frozenCols
+                            ? 6
+                            : undefined,
                         boxShadow: remote
                           ? `inset 0 0 0 2px ${remote.state.user?.color ?? "#1d4ed8"}`
                           : undefined,
                       }}
                     >
-                      <span className="truncate">{displayedCellValue(cell)}</span>
+                      <span
+                        className="truncate"
+                        title={
+                          invalid
+                            ? `Invalid value. Allowed: ${validation?.allowedValues.join(", ")}`
+                            : undefined
+                        }
+                      >
+                        {display}
+                      </span>
                       {remote?.focus.rowId === rowId && remote.focus.colId === colId ? (
                         <span
                           className="absolute top-0 right-0 max-w-24 truncate px-1 text-[9px] text-white"
@@ -1255,6 +1492,249 @@ export function SheetEditor({
           </button>
         </div>
       ) : null}
+      <Dialog
+        open={freezeOpen}
+        onClose={() => setFreezeOpen(false)}
+        title="Freeze panes"
+        icon={<Snowflake className="size-4" />}
+        description="Frozen leading rows and columns stay visible while the rest of the sheet scrolls."
+        className="max-w-sm"
+        mobileSheet
+      >
+        <form
+          className="space-y-4 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const rows = Number(freezeRows);
+            const cols = Number(freezeCols);
+            const maxRows = Math.min(20, model.naturalRows.length);
+            const maxCols = Math.min(10, model.cols.length);
+            if (
+              !Number.isInteger(rows) ||
+              !Number.isInteger(cols) ||
+              rows < 0 ||
+              rows > maxRows ||
+              cols < 0 ||
+              cols > maxCols
+            ) {
+              notify.error("Freeze not applied", {
+                description: `Choose 0–${maxRows} rows and 0–${maxCols} columns.`,
+              });
+              return;
+            }
+            ydoc?.transact(() => {
+              model.roots.settings.set("frozenRows", rows);
+              model.roots.settings.set("frozenCols", cols);
+            }, "sheet-format");
+            setFreezeOpen(false);
+          }}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-xs">
+              Frozen rows
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={Math.min(20, model.naturalRows.length)}
+                value={freezeRows}
+                onChange={(event) => setFreezeRows(event.target.value)}
+                className="sheet-field mt-1 h-9 w-full px-2 text-xs"
+              />
+            </label>
+            <label className="block text-xs">
+              Frozen columns
+              <input
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={Math.min(10, model.cols.length)}
+                value={freezeCols}
+                onChange={(event) => setFreezeCols(event.target.value)}
+                className="sheet-field mt-1 h-9 w-full px-2 text-xs"
+              />
+            </label>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setFreezeOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="submit">Apply</Button>
+          </div>
+        </form>
+      </Dialog>
+      <Dialog
+        open={rulesOpen}
+        onClose={() => setRulesOpen(false)}
+        title="Format and validation rules"
+        icon={<Palette className="size-4" />}
+        description="Rules use stable row and column identities. Later formatting rules take precedence."
+        className="max-w-2xl"
+        mobileSheet
+      >
+        <div className="space-y-6 p-4">
+          <section className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-medium text-sm">Conditional formatting</h3>
+              <span className="text-muted-foreground text-xs">
+                {model.formatRules.length}/{MAX_SHEET_FORMAT_RULES}
+              </span>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto]">
+              <select
+                value={formatCondition}
+                onChange={(event) =>
+                  setFormatCondition(event.target.value as typeof formatCondition)
+                }
+                className="sheet-field h-9 px-2 text-xs"
+              >
+                <option value="empty">Is empty</option>
+                <option value="not-empty">Is not empty</option>
+                <option value="equals">Equals</option>
+                <option value="contains">Contains</option>
+                <option value="greater">Greater than</option>
+                <option value="less">Less than</option>
+              </select>
+              <input
+                value={formatValue}
+                onChange={(event) => setFormatValue(event.target.value)}
+                disabled={formatCondition === "empty" || formatCondition === "not-empty"}
+                className="sheet-field h-9 px-2 text-xs"
+                placeholder="Comparison value"
+              />
+              <ColorPicker
+                compact
+                label="Rule color"
+                value={formatColor}
+                disabled={readOnly}
+                onChange={setFormatColor}
+              />
+              <Button
+                size="sm"
+                disabled={
+                  readOnly ||
+                  !selectedRuleRange ||
+                  model.formatRules.length >= MAX_SHEET_FORMAT_RULES
+                }
+                onClick={addFormatRule}
+              >
+                <Plus className="size-3.5" /> Add
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {model.formatRules.map((rule, index) => (
+                <div
+                  key={rule.id}
+                  className="flex items-center gap-2 rounded-md border border-hairline p-2 text-xs"
+                >
+                  <input
+                    type="checkbox"
+                    checked={rule.enabled}
+                    disabled={readOnly}
+                    onChange={(event) =>
+                      model.roots.formatRules.get(rule.id)?.set("enabled", event.target.checked)
+                    }
+                  />
+                  <span className="size-4 rounded-sm" style={{ backgroundColor: rule.color }} />
+                  <span className="min-w-0 flex-1 truncate">
+                    {rule.condition}
+                    {rule.value ? ` · ${rule.value}` : ""}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={readOnly || index === 0}
+                    onClick={() => {
+                      const order = model.roots.formatRuleOrder;
+                      order.delete(index, 1);
+                      order.insert(index - 1, [rule.id]);
+                    }}
+                    className="sheet-tool"
+                    aria-label="Move rule earlier"
+                  >
+                    <ArrowUp />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={readOnly || index === model.formatRules.length - 1}
+                    onClick={() => {
+                      const order = model.roots.formatRuleOrder;
+                      order.delete(index, 1);
+                      order.insert(index + 1, [rule.id]);
+                    }}
+                    className="sheet-tool"
+                    aria-label="Move rule later"
+                  >
+                    <ArrowDown />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={readOnly}
+                    onClick={() => {
+                      model.roots.formatRules.delete(rule.id);
+                      model.roots.formatRuleOrder.delete(index, 1);
+                    }}
+                    className="sheet-tool"
+                    aria-label="Remove rule"
+                  >
+                    <Trash2 />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+          <section className="space-y-3 border-hairline border-t pt-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-medium text-sm">Allowed-value validation</h3>
+              <span className="text-muted-foreground text-xs">
+                {model.validationRules.length}/{MAX_SHEET_VALIDATION_RULES}
+              </span>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <textarea
+                value={validationValues}
+                onChange={(event) => setValidationValues(event.target.value)}
+                className="sheet-field min-h-20 flex-1 p-2 text-xs"
+                placeholder="Allowed values, separated by commas or lines"
+              />
+              <Button
+                className="self-end"
+                size="sm"
+                disabled={
+                  readOnly ||
+                  !selectedRuleRange ||
+                  !validationValues.trim() ||
+                  model.validationRules.length >= MAX_SHEET_VALIDATION_RULES
+                }
+                onClick={addValidationRule}
+              >
+                <Plus className="size-3.5" /> Add validation
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {model.validationRules.map((rule, index) => (
+                <div
+                  key={rule.id}
+                  className="flex items-center gap-2 rounded-md border border-hairline p-2 text-xs"
+                >
+                  <span className="min-w-0 flex-1 truncate">{rule.allowedValues.join(" · ")}</span>
+                  <button
+                    type="button"
+                    disabled={readOnly}
+                    onClick={() => {
+                      model.roots.validationRules.delete(rule.id);
+                      model.roots.validationRuleOrder.delete(index, 1);
+                    }}
+                    className="sheet-tool"
+                    aria-label="Remove validation"
+                  >
+                    <Trash2 />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </Dialog>
     </section>
   );
 }

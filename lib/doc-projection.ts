@@ -2,6 +2,7 @@ import * as Y from "yjs";
 import { getBoardRoots, inspectBoard, orderedCards, UNFILED_COLUMN_ID } from "./board-model";
 import { type ChartSource, MAX_CHART_SOURCE_ROWS } from "./chart-data";
 import { type ChartConfig, inspectChart, MAX_CHART_STATE_BYTES } from "./chart-model";
+import { inspectDashboard, MAX_DASHBOARD_STATE_BYTES } from "./dashboard-model";
 import type { FileType } from "./document-types";
 import {
   DEFAULT_COLUMN_WIDTH,
@@ -33,6 +34,7 @@ export type BoardRenderModel = {
       linkedDocRemoved?: boolean;
       color: string;
       priority: "low" | "medium" | "high" | "critical" | null;
+      checklist: Array<{ id: string; text: string; done: boolean }>;
     }>;
   }>;
   unfiledCards: number;
@@ -81,6 +83,14 @@ function trimmedSheet(ydoc: Y.Doc) {
 }
 
 export function project(fileType: FileType, ydoc: Y.Doc): string {
+  if (fileType === "dashboard") {
+    return inspectDashboard(ydoc)
+      .map(
+        (tile) =>
+          `${tile.title || (tile.kind === "chart" ? "Chart" : "Statistic")}\n${tile.aggregate}`,
+      )
+      .join("\n\n");
+  }
   if (fileType === "chart") {
     const chart = inspectChart(ydoc);
     return [
@@ -112,7 +122,14 @@ export function project(fileType: FileType, ydoc: Y.Doc): string {
     const sections = inspection.columns.map((columnId) => {
       const name = String(roots.columnMeta.get(columnId)?.get("name") ?? "");
       const cards = orderedCards(roots, inspection, columnId);
-      return [name, ...cards.flatMap((card) => [card.title, plainMarkdown(card.description)])]
+      return [
+        name,
+        ...cards.flatMap((card) => [
+          card.title,
+          plainMarkdown(card.description),
+          ...card.checklist.map((item) => `${item.done ? "[x]" : "[ ]"} ${item.text}`),
+        ]),
+      ]
         .filter(Boolean)
         .join("\n");
     });
@@ -163,6 +180,7 @@ export function boardRenderModel(ydoc: Y.Doc): BoardRenderModel {
     linkedDocRemoved: false,
     color: card.color,
     priority: card.priority,
+    checklist: card.checklist,
   });
   return {
     columns: [
@@ -215,7 +233,13 @@ export function documentSize(fileType: FileType, ydoc: Y.Doc): number {
   const stateBytes = Y.encodeStateAsUpdate(ydoc).byteLength;
   if (fileType === "view" && stateBytes > MAX_VIEW_STATE_BYTES) return Number.POSITIVE_INFINITY;
   if (fileType === "chart" && stateBytes > MAX_CHART_STATE_BYTES) return Number.POSITIVE_INFINITY;
-  return fileType === "sheet" || fileType === "board" || fileType === "view" || fileType === "chart"
+  if (fileType === "dashboard" && stateBytes > MAX_DASHBOARD_STATE_BYTES)
+    return Number.POSITIVE_INFINITY;
+  return fileType === "sheet" ||
+    fileType === "board" ||
+    fileType === "view" ||
+    fileType === "chart" ||
+    fileType === "dashboard"
     ? contentBytes + stateBytes
     : contentBytes;
 }

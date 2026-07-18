@@ -83,6 +83,7 @@ const schema = defineSchema({
       v.literal("board"),
       v.literal("view"),
       v.literal("chart"),
+      v.literal("dashboard"),
     ),
     content: v.string(),
     contentState: v.optional(v.bytes()),
@@ -107,6 +108,7 @@ const schema = defineSchema({
       v.literal("board"),
       v.literal("view"),
       v.literal("chart"),
+      v.literal("dashboard"),
       v.null(),
     ),
     content: v.string(),
@@ -151,6 +153,7 @@ const schema = defineSchema({
       v.literal("board"),
       v.literal("view"),
       v.literal("chart"),
+      v.literal("dashboard"),
       v.null(),
     ),
     size: v.number(),
@@ -175,8 +178,17 @@ const schema = defineSchema({
       v.literal("date"),
       v.literal("status"),
       v.literal("person"),
+      v.literal("formula"),
+      v.literal("rollup"),
     ),
     options: v.array(v.object({ id: v.string(), name: v.string(), color: v.string() })),
+    expression: v.optional(v.string()),
+    rollup: v.optional(
+      v.object({
+        operation: v.union(v.literal("count"), v.literal("sum"), v.literal("latest")),
+        propertyId: v.optional(v.id("documentProperties")),
+      }),
+    ),
     deletedAt: v.optional(v.number()),
     createdBy: v.string(),
     createdAt: v.number(),
@@ -198,6 +210,8 @@ const schema = defineSchema({
       v.literal("date"),
       v.literal("status"),
       v.literal("person"),
+      v.literal("formula"),
+      v.literal("rollup"),
     ),
     displayValue: v.string(),
     textValue: v.optional(v.string()),
@@ -224,6 +238,7 @@ const schema = defineSchema({
     sourceDocumentId: v.id("documents"),
     sourceCardId: v.optional(v.string()),
     managedByBoard: v.optional(v.boolean()),
+    managedByText: v.optional(v.boolean()),
     targetProjectId: v.id("projects"),
     targetDocumentId: v.id("documents"),
     createdBy: v.string(),
@@ -245,6 +260,8 @@ const schema = defineSchema({
     title: v.string(),
     columnName: v.string(),
     due: v.optional(v.number()),
+    checklistCompleted: v.optional(v.number()),
+    checklistTotal: v.optional(v.number()),
     updatedAt: v.number(),
   })
     .index("by_project", ["projectId"])
@@ -420,13 +437,14 @@ const schema = defineSchema({
         v.literal("resolved"),
         v.literal("reopened"),
         v.literal("watching"),
+        v.literal("document-mention"),
       ),
     ),
     recipientUserId: v.string(),
     clerkOrgId: v.string(),
     projectId: v.id("projects"),
     documentId: v.id("documents"),
-    commentId: v.id("comments"),
+    commentId: v.optional(v.id("comments")),
     messageId: v.optional(v.id("commentMessages")),
     actorUserId: v.string(),
     actorName: v.string(),
@@ -458,6 +476,19 @@ const schema = defineSchema({
   })
     .index("by_user_org", ["userId", "clerkOrgId"])
     .index("by_user", ["userId"]),
+
+  documentMentions: defineTable({
+    clerkOrgId: v.string(),
+    projectId: v.id("projects"),
+    documentId: v.id("documents"),
+    mentionedUserId: v.string(),
+    displayName: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_document", ["documentId"])
+    .index("by_document_user", ["documentId", "mentionedUserId"])
+    .index("by_user_org", ["mentionedUserId", "clerkOrgId", "createdAt"]),
 
   emailDigestRuns: defineTable({
     clerkOrgId: v.string(),

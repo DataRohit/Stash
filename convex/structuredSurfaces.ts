@@ -22,6 +22,8 @@ const propertyTypeValidator = v.union(
   v.literal("date"),
   v.literal("status"),
   v.literal("person"),
+  v.literal("formula"),
+  v.literal("rollup"),
 );
 
 const optionValidator = v.object({ id: v.string(), name: v.string(), color: v.string() });
@@ -72,6 +74,275 @@ function memberName(member: Doc<"members">): string {
   return [member.firstName, member.lastName].filter(Boolean).join(" ") || member.email;
 }
 
+type RecordProperty = {
+  propertyId: Id<"documentProperties">;
+  type: Doc<"documentPropertyValues">["type"];
+  displayValue: string;
+  textValue?: string;
+  numberValue?: number;
+  booleanValue?: boolean;
+  dateValue?: number;
+  dateEndValue?: number;
+  statusOptionId?: string;
+  personUserId?: string;
+  computed?: boolean;
+  error?: string;
+  includesRestricted?: boolean;
+  truncated?: boolean;
+};
+
+function numericExpression(source: string): number | null {
+  const tokens = source.match(/\d+(?:\.\d+)?|[()+\-*/]/g);
+  if (!tokens || tokens.join("") !== source.replace(/\s/g, "")) return null;
+  let index = 0;
+  const primary = (): number => {
+    const token = tokens[index++];
+    if (token === "(") {
+      const value = add();
+      if (tokens[index++] !== ")") throw new Error("formula");
+      return value;
+    }
+    if (token === "-") return -primary();
+    const value = Number(token);
+    if (!Number.isFinite(value)) throw new Error("formula");
+    return value;
+  };
+  const multiply = (): number => {
+    let value = primary();
+    while (tokens[index] === "*" || tokens[index] === "/") {
+      const operator = tokens[index++];
+      const right = primary();
+      value = operator === "*" ? value * right : value / right;
+    }
+    return value;
+  };
+  const add = (): number => {
+    let value = multiply();
+    while (tokens[index] === "+" || tokens[index] === "-") {
+      const operator = tokens[index++];
+      const right = multiply();
+      value = operator === "+" ? value + right : value - right;
+    }
+    return value;
+  };
+  try {
+    const value = add();
+    return index === tokens.length && Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function formulaValue(
+  expression: string,
+  values: Map<string, RecordProperty>,
+): RecordProperty["displayValue"] | null {
+  const reference = (id: string) => values.get(id)?.displayValue ?? "";
+  const join = /^JOIN\(([^,]*),(.+)\)$/i.exec(expression.trim());
+  if (join) {
+    const separator = (join[1] ?? "").trim().replace(/^['"]|['"]$/g, "");
+    return [...(join[2] ?? "").matchAll(/\{([A-Za-z0-9_-]+)\}/g)]
+      .map((match) => reference(match[1] ?? ""))
+      .filter(Boolean)
+      .join(separator);
+  }
+  const dateDiff = /^DATEDIFF\(\{([^}]+)\},\{([^}]+)\}\)$/i.exec(expression.trim());
+  if (dateDiff) {
+    const left = values.get(dateDiff[1] ?? "")?.dateValue;
+    const right = values.get(dateDiff[2] ?? "")?.dateValue;
+    return left === undefined || right === undefined
+      ? ""
+      : String(Math.round((left - right) / 86_400_000));
+  }
+  const condition = /^IF\(\{([^}]+)\},([^,]*),(.*)\)$/i.exec(expression.trim());
+  if (condition) {
+    const value = values.get(condition[1] ?? "");
+    const truthy = Boolean(value?.booleanValue ?? value?.displayValue);
+    return (truthy ? condition[2] : condition[3])?.trim().replace(/^['"]|['"]$/g, "") ?? "";
+  }
+  const numeric = expression.replace(/\{([A-Za-z0-9_-]+)\}/g, (_match, id: string) => {
+    const value = values.get(id)?.numberValue;
+    return value === undefined ? "NaN" : String(value);
+  });
+  const result = numericExpression(numeric);
+  return result === null ? null : String(result);
+}
+
+const ROLLUP_LINKS_PER_RECORD = 100;
+const ROLLUP_TRAVERSAL_BUDGET = 2_000;
+
+type ComputedContext = {
+  definitions: Doc<"documentProperties">[];
+  definitionById: Map<string, Doc<"documentProperties">>;
+  documents: Map<string, Doc<"documents"> | null>;
+  access: Map<string, boolean>;
+  budget: { remaining: number };
+};
+
+function orderComputedDefinitions(
+  definitions: Doc<"documentProperties">[],
+): Doc<"documentProperties">[] {
+  const byId = new Map(definitions.map((definition) => [String(definition._id), definition]));
+  const ordered: Doc<"documentProperties">[] = [];
+  const placed = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (definition: Doc<"documentProperties">): void => {
+    const id = String(definition._id);
+    if (placed.has(id) || visiting.has(id)) return;
+    visiting.add(id);
+    if (definition.type === "formula") {
+      for (const match of (definition.expression ?? "").matchAll(/\{([A-Za-z0-9_-]+)\}/g)) {
+        const dependency = byId.get(match[1] ?? "");
+        if (dependency && dependency.type === "formula") visit(dependency);
+      }
+    }
+    visiting.delete(id);
+    placed.add(id);
+    ordered.push(definition);
+  };
+  for (const definition of definitions) visit(definition);
+  return ordered;
+}
+
+async function computedContext(ctx: QueryCtx, projectId: Id<"projects">): Promise<ComputedContext> {
+  const definitions = await ctx.db
+    .query("documentProperties")
+    .withIndex("by_project", (q) => q.eq("projectId", projectId))
+    .collect();
+  return {
+    definitions: orderComputedDefinitions(definitions.filter((item) => !item.deletedAt)),
+    definitionById: new Map(definitions.map((definition) => [String(definition._id), definition])),
+    documents: new Map(),
+    access: new Map(),
+    budget: { remaining: ROLLUP_TRAVERSAL_BUDGET },
+  };
+}
+
+async function cachedDocument(
+  ctx: QueryCtx,
+  context: ComputedContext,
+  documentId: Id<"documents">,
+): Promise<Doc<"documents"> | null> {
+  const key = String(documentId);
+  const cached = context.documents.get(key);
+  if (cached !== undefined) return cached;
+  const document = await ctx.db.get(documentId);
+  context.documents.set(key, document);
+  return document;
+}
+
+async function cachedAccess(
+  ctx: QueryCtx,
+  context: ComputedContext,
+  projectId: Id<"projects">,
+): Promise<boolean> {
+  const key = String(projectId);
+  const cached = context.access.get(key);
+  if (cached !== undefined) return cached;
+  const allowed = Boolean(await accessForProject(ctx, projectId));
+  context.access.set(key, allowed);
+  return allowed;
+}
+
+async function computedProperties(
+  ctx: QueryCtx,
+  document: Doc<"documents">,
+  base: RecordProperty[],
+  context: ComputedContext,
+): Promise<RecordProperty[]> {
+  const { definitions, definitionById } = context;
+  const values = new Map(base.map((value) => [String(value.propertyId), value]));
+  const result: RecordProperty[] = [];
+  for (const definition of definitions) {
+    if (definition.type === "formula") {
+      const referenced = [...(definition.expression ?? "").matchAll(/\{([A-Za-z0-9_-]+)\}/g)].map(
+        (match) => match[1] ?? "",
+      );
+      const removedReference = referenced.some((id) => {
+        const target = definitionById.get(id);
+        return !target || Boolean(target.deletedAt);
+      });
+      const displayValue = removedReference
+        ? null
+        : formulaValue(definition.expression ?? "", values);
+      const computed: RecordProperty = {
+        propertyId: definition._id,
+        type: "formula",
+        displayValue: displayValue ?? "#ERROR",
+        computed: true,
+        error:
+          displayValue === null
+            ? removedReference
+              ? "A referenced property was removed."
+              : "A referenced property is missing or invalid."
+            : undefined,
+      };
+      values.set(String(definition._id), computed);
+      result.push(computed);
+    } else if (definition.type === "rollup") {
+      const outgoing = await ctx.db
+        .query("documentLinks")
+        .withIndex("by_source_document", (q) => q.eq("sourceDocumentId", document._id))
+        .take(ROLLUP_LINKS_PER_RECORD + 1);
+      const incoming = await ctx.db
+        .query("documentLinks")
+        .withIndex("by_target_document", (q) => q.eq("targetDocumentId", document._id))
+        .take(ROLLUP_LINKS_PER_RECORD + 1);
+      const links = [...outgoing, ...incoming].slice(0, ROLLUP_LINKS_PER_RECORD);
+      const targets = links.map((link) =>
+        link.sourceDocumentId === document._id ? link.targetDocumentId : link.sourceDocumentId,
+      );
+      const operation = definition.rollup?.operation ?? "count";
+      let restricted = false;
+      let truncated = false;
+      const numbers: number[] = [];
+      const dates: number[] = [];
+      for (const targetId of targets) {
+        if (context.budget.remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        context.budget.remaining -= 1;
+        const target = await cachedDocument(ctx, context, targetId);
+        if (!target || !(await cachedAccess(ctx, context, target.projectId))) {
+          restricted = true;
+          continue;
+        }
+        const rollupPropertyId = definition.rollup?.propertyId;
+        if (operation !== "count" && rollupPropertyId) {
+          const row = await ctx.db
+            .query("documentPropertyValues")
+            .withIndex("by_document_property", (q) =>
+              q.eq("documentId", targetId).eq("propertyId", rollupPropertyId),
+            )
+            .unique();
+          if (row?.numberValue !== undefined) numbers.push(row.numberValue);
+          if (row?.dateValue !== undefined) dates.push(row.dateValue);
+        }
+      }
+      const displayValue =
+        operation === "count"
+          ? String(targets.length)
+          : operation === "sum"
+            ? String(numbers.reduce((sum, value) => sum + value, 0))
+            : dates.length > 0
+              ? new Date(Math.max(...dates)).toISOString().slice(0, 10)
+              : "";
+      const computed: RecordProperty = {
+        propertyId: definition._id,
+        type: "rollup",
+        displayValue,
+        computed: true,
+        includesRestricted: restricted,
+        truncated: truncated || undefined,
+      };
+      values.set(String(definition._id), computed);
+      result.push(computed);
+    }
+  }
+  return result;
+}
+
 export const listProperties = query({
   args: { projectId: v.id("projects"), includeDeleted: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
@@ -88,6 +359,8 @@ export const listProperties = query({
         name: row.name,
         type: row.type,
         options: row.options,
+        expression: row.expression,
+        rollup: row.rollup,
         deleted: Boolean(row.deletedAt),
       }));
   },
@@ -99,6 +372,13 @@ export const createProperty = mutation({
     name: v.string(),
     type: propertyTypeValidator,
     options: v.optional(v.array(optionValidator)),
+    expression: v.optional(v.string()),
+    rollup: v.optional(
+      v.object({
+        operation: v.union(v.literal("count"), v.literal("sum"), v.literal("latest")),
+        propertyId: v.optional(v.id("documentProperties")),
+      }),
+    ),
   },
   handler: async (ctx, args) => {
     const access = await requireProjectEditor(ctx, args.projectId);
@@ -120,6 +400,58 @@ export const createProperty = mutation({
     }
     if (active.length >= MAX_PROPERTY_ROWS) throw new Error("too-many-properties");
     const options = args.type === "status" ? cleanOptions(args.options ?? []) : [];
+    const expression =
+      args.type === "formula" ? (args.expression ?? "").trim().slice(0, 1000) : undefined;
+    if (args.type === "formula" && !expression) throw new Error("invalid-property");
+    const rollup = args.type === "rollup" ? args.rollup : undefined;
+    if (args.type === "rollup" && !rollup) throw new Error("invalid-property");
+    if (rollup && rollup.operation !== "count" && !rollup.propertyId) {
+      throw new Error("invalid-property");
+    }
+    if (rollup?.propertyId) {
+      const target = await ctx.db.get(rollup.propertyId);
+      if (!target || target.projectId !== args.projectId || target.deletedAt) {
+        throw new Error("invalid-property");
+      }
+    }
+    if (expression) {
+      const referenced = [...expression.matchAll(/\{([A-Za-z0-9_-]+)\}/g)].map(
+        (match) => match[1] ?? "",
+      );
+      for (const id of referenced) {
+        const targetId = id ? ctx.db.normalizeId("documentProperties", id) : null;
+        const target = targetId ? await ctx.db.get(targetId) : null;
+        if (!target || target.projectId !== args.projectId || target.deletedAt) {
+          throw new Error("invalid-property");
+        }
+      }
+      const dependencies = new Map<string, string[]>();
+      for (const property of active.filter(
+        (property) => !property.deletedAt && property.type === "formula",
+      )) {
+        dependencies.set(
+          String(property._id),
+          [...(property.expression ?? "").matchAll(/\{([A-Za-z0-9_-]+)\}/g)].map(
+            (match) => match[1] ?? "",
+          ),
+        );
+      }
+      dependencies.set("candidate", referenced);
+      const visiting = new Set<string>();
+      const visited = new Set<string>();
+      const visit = (id: string): boolean => {
+        if (visiting.has(id)) return true;
+        if (visited.has(id)) return false;
+        visiting.add(id);
+        for (const dependency of dependencies.get(id) ?? []) {
+          if (dependencies.has(dependency) && visit(dependency)) return true;
+        }
+        visiting.delete(id);
+        visited.add(id);
+        return false;
+      };
+      if ([...dependencies.keys()].some(visit)) throw new Error("formula-cycle");
+    }
     const now = Date.now();
     return await ctx.db.insert("documentProperties", {
       projectId: args.projectId,
@@ -128,6 +460,8 @@ export const createProperty = mutation({
       normalizedName,
       type: args.type,
       options,
+      expression,
+      rollup,
       createdBy: access.userId,
       createdAt: now,
       updatedAt: now,
@@ -205,6 +539,9 @@ export const setPropertyValue = mutation({
     if (args.value === null) {
       if (existing) await ctx.db.delete(existing._id);
       return;
+    }
+    if (property.type === "formula" || property.type === "rollup") {
+      throw new Error("computed-property-read-only");
     }
     if (args.value.type !== property.type) throw new Error("invalid-property-value");
     let displayValue = "";
@@ -291,6 +628,7 @@ export const listRecords = query({
       .withIndex("by_project_kind", (q) => q.eq("projectId", args.projectId).eq("kind", "file"))
       .order("desc")
       .paginate(args.paginationOpts);
+    const context = await computedContext(ctx, args.projectId);
     const page = [];
     for (const document of result.page) {
       if (await isInactiveTree(ctx, document)) continue;
@@ -298,23 +636,25 @@ export const listRecords = query({
         .query("documentPropertyValues")
         .withIndex("by_document", (q) => q.eq("documentId", document._id))
         .collect();
+      const properties: RecordProperty[] = values.map((value) => ({
+        propertyId: value.propertyId,
+        type: value.type,
+        displayValue: value.displayValue,
+        textValue: value.textValue,
+        numberValue: value.numberValue,
+        booleanValue: value.booleanValue,
+        dateValue: value.dateValue,
+        dateEndValue: value.dateEndValue,
+        statusOptionId: value.statusOptionId,
+        personUserId: value.personUserId,
+      }));
+      properties.push(...(await computedProperties(ctx, document, properties, context)));
       page.push({
         id: document._id,
         name: document.name,
         fileType: document.fileType,
         updatedAt: document.updatedAt,
-        properties: values.map((value) => ({
-          propertyId: value.propertyId,
-          type: value.type,
-          displayValue: value.displayValue,
-          textValue: value.textValue,
-          numberValue: value.numberValue,
-          booleanValue: value.booleanValue,
-          dateValue: value.dateValue,
-          dateEndValue: value.dateEndValue,
-          statusOptionId: value.statusOptionId,
-          personUserId: value.personUserId,
-        })),
+        properties,
       });
     }
     return { ...result, page };
@@ -346,6 +686,8 @@ export const listBoardCardRecords = query({
         updatedAt: card.updatedAt,
         boardColumn: card.columnName,
         boardDue: card.due,
+        checklistCompleted: card.checklistCompleted ?? 0,
+        checklistTotal: card.checklistTotal ?? 0,
         properties: [],
       });
     }
@@ -368,23 +710,32 @@ export const getRecord = query({
       .query("documentPropertyValues")
       .withIndex("by_document", (q) => q.eq("documentId", document._id))
       .collect();
+    const properties: RecordProperty[] = values.map((value) => ({
+      propertyId: value.propertyId,
+      type: value.type,
+      displayValue: value.displayValue,
+      textValue: value.textValue,
+      numberValue: value.numberValue,
+      booleanValue: value.booleanValue,
+      dateValue: value.dateValue,
+      dateEndValue: value.dateEndValue,
+      statusOptionId: value.statusOptionId,
+      personUserId: value.personUserId,
+    }));
+    properties.push(
+      ...(await computedProperties(
+        ctx,
+        document,
+        properties,
+        await computedContext(ctx, document.projectId),
+      )),
+    );
     return {
       id: document._id,
       name: document.name,
       fileType: document.fileType,
       updatedAt: document.updatedAt,
-      properties: values.map((value) => ({
-        propertyId: value.propertyId,
-        type: value.type,
-        displayValue: value.displayValue,
-        textValue: value.textValue,
-        numberValue: value.numberValue,
-        booleanValue: value.booleanValue,
-        dateValue: value.dateValue,
-        dateEndValue: value.dateEndValue,
-        statusOptionId: value.statusOptionId,
-        personUserId: value.personUserId,
-      })),
+      properties,
     };
   },
 });

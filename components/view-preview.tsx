@@ -8,7 +8,7 @@ import type { ViewConfig } from "@/lib/view-model";
 type ViewPreviewProperty = {
   id: string;
   name: string;
-  type: "text" | "number" | "boolean" | "date" | "status" | "person";
+  type: "text" | "number" | "boolean" | "date" | "status" | "person" | "formula" | "rollup";
   deleted?: boolean;
 };
 

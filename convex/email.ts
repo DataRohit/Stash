@@ -18,13 +18,14 @@ const notificationKind = v.union(
   v.literal("resolved"),
   v.literal("reopened"),
   v.literal("watching"),
+  v.literal("document-mention"),
 );
 const unsubscribeKind = v.union(notificationKind, v.literal("digest"));
 const DIGEST_PAGE = 200;
 const DIGEST_ITEMS = 100;
 const RETRY_DELAYS = [5 * 60 * 1000, 30 * 60 * 1000, 2 * 60 * 60 * 1000];
 
-type Kind = "mention" | "reply" | "resolved" | "reopened" | "watching";
+type Kind = "mention" | "reply" | "resolved" | "reopened" | "watching" | "document-mention";
 type Choice = "immediate" | "digest" | "off";
 
 const defaults: Record<Kind, Choice> = {
@@ -33,6 +34,7 @@ const defaults: Record<Kind, Choice> = {
   resolved: "digest",
   reopened: "digest",
   watching: "digest",
+  "document-mention": "immediate",
 };
 
 function kindFor(row: Doc<"notifications">): Kind {
@@ -40,6 +42,7 @@ function kindFor(row: Doc<"notifications">): Kind {
 }
 
 function preferenceFor(row: Doc<"emailPreferences"> | null, kind: Kind): Choice {
+  if (kind === "document-mention") return row?.mention ?? defaults["document-mention"];
   return row?.[kind] ?? defaults[kind];
 }
 
@@ -57,6 +60,7 @@ function escapeHtml(value: string): string {
 }
 
 function labelFor(kind: Kind): string {
+  if (kind === "document-mention") return "mentioned you in a document";
   if (kind === "mention") return "mentioned you";
   if (kind === "reply") return "replied to a thread";
   if (kind === "resolved") return "resolved a thread";
@@ -149,7 +153,7 @@ export const notificationPayload = internalQuery({
         .unique(),
       ctx.db.get(row.projectId),
       ctx.db.get(row.documentId),
-      ctx.db.get(row.commentId),
+      row.commentId ? ctx.db.get(row.commentId) : Promise.resolve(null),
     ]);
     if (
       preferenceFor(preference, kind) !== "immediate" ||
@@ -160,7 +164,7 @@ export const notificationPayload = internalQuery({
       !document ||
       document.deletingAt ||
       document.trashedAt ||
-      !thread ||
+      (kind !== "document-mention" && !thread) ||
       !(await recipientCanAccess(ctx, row))
     ) {
       return null;
@@ -261,7 +265,7 @@ export const sendNotification = internalAction({
     });
     if (!payload) return;
     const site = process.env.NEXT_PUBLIC_SITE_URL ?? "";
-    const link = `${site}/dashboard/projects/${payload.projectId}/editor?file=${payload.documentId}&thread=${payload.commentId}`;
+    const link = `${site}/dashboard/projects/${payload.projectId}/editor?file=${payload.documentId}${payload.commentId ? `&thread=${payload.commentId}` : ""}`;
     const unsubscribe = await unsubscribeUrl(
       payload.recipientUserId,
       payload.clerkOrgId,
@@ -269,8 +273,8 @@ export const sendNotification = internalAction({
     );
     const action = labelFor(payload.kind);
     const subject = `${payload.actorName} ${action} in ${payload.documentName}`;
-    const text = `${payload.actorName} ${action} in ${payload.projectTitle} / ${payload.documentName}\n\n${payload.snippet}\n\nOpen thread: ${link}\n\nTurn off these emails: ${unsubscribe}`;
-    const html = `<main style="font-family:ui-sans-serif,system-ui;max-width:560px;margin:auto;padding:24px;color:#171717"><p style="color:#666">${escapeHtml(payload.projectTitle)} / ${escapeHtml(payload.documentName)}</p><h1 style="font-size:22px">${escapeHtml(payload.actorName)} ${escapeHtml(action)}</h1><blockquote style="margin:20px 0;padding:12px 16px;border-left:3px solid #7c3aed;background:#f5f3ff">${escapeHtml(payload.snippet)}</blockquote><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;background:#171717;color:white;text-decoration:none;border-radius:8px">Open thread</a><p style="margin-top:28px;font-size:12px;color:#777"><a href="${escapeHtml(unsubscribe)}">Turn off these emails</a></p></main>`;
+    const text = `${payload.actorName} ${action} in ${payload.projectTitle} / ${payload.documentName}\n\n${payload.snippet}\n\nOpen document: ${link}\n\nTurn off these emails: ${unsubscribe}`;
+    const html = `<main style="font-family:ui-sans-serif,system-ui;max-width:560px;margin:auto;padding:24px;color:#171717"><p style="color:#666">${escapeHtml(payload.projectTitle)} / ${escapeHtml(payload.documentName)}</p><h1 style="font-size:22px">${escapeHtml(payload.actorName)} ${escapeHtml(action)}</h1><blockquote style="margin:20px 0;padding:12px 16px;border-left:3px solid #7c3aed;background:#f5f3ff">${escapeHtml(payload.snippet)}</blockquote><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;background:#171717;color:white;text-decoration:none;border-radius:8px">Open document</a><p style="margin-top:28px;font-size:12px;color:#777"><a href="${escapeHtml(unsubscribe)}">Turn off these emails</a></p></main>`;
     try {
       const sent = await sendResend({
         to: payload.email,
@@ -403,7 +407,7 @@ export const digestPayload = internalQuery({
         projectTitle: project.title,
         documentName: document.name,
         snippet: row.bodySnippet,
-        link: `/dashboard/projects/${row.projectId}/editor?file=${row.documentId}&thread=${row.commentId}`,
+        link: `/dashboard/projects/${row.projectId}/editor?file=${row.documentId}${row.commentId ? `&thread=${row.commentId}` : ""}`,
       });
     }
     return items.length > 0

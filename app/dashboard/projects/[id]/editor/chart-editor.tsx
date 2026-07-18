@@ -41,6 +41,9 @@ const CHART_TYPES: Array<{ id: ChartType; label: string; icon: typeof LineChart 
   { id: "line", label: "Line", icon: LineChart },
   { id: "area", label: "Area", icon: AreaChart },
   { id: "pie", label: "Pie", icon: PieChart },
+  { id: "scatter", label: "Scatter", icon: LineChart },
+  { id: "stacked-bar", label: "Stacked", icon: BarChart3 },
+  { id: "combo", label: "Combo", icon: BarChart3 },
 ];
 
 function Select({
@@ -165,13 +168,18 @@ export function ChartEditor({
   const sourceResult = useQuery(api.charts.sourceData, {
     projectId,
     sourceDocId: config?.sourceDocId ?? null,
+    sourceType: config?.sourceType,
+    groupPropertyId: config?.groupPropertyId,
+    valuePropertyId: config?.valuePropertyId,
+    aggregate: config?.aggregate,
   });
+  const propertyResult = useQuery(api.structuredSurfaces.listProperties, { projectId });
   const source = sourceResult?.source ?? null;
   const data = useMemo(() => (config ? resolveChartData(config, source) : null), [config, source]);
 
   const sheetNodes = useMemo(
-    () => nodes.filter((node) => node.kind === "file" && node.fileType === "sheet"),
-    [nodes],
+    () => nodes.filter((node) => node.kind === "file" && node.fileType === config?.sourceType),
+    [config?.sourceType, nodes],
   );
 
   if (!ready || !config || !data) {
@@ -192,6 +200,26 @@ export function ChartEditor({
       for (const key of [...roots.series.keys()]) roots.series.delete(key);
       roots.seriesOrder.delete(0, roots.seriesOrder.length);
     });
+  const setSourceType = (sourceType: "sheet" | "view") =>
+    edit(() => {
+      roots.config.set("sourceType", sourceType);
+      roots.config.set("sourceDocId", null);
+      roots.config.set("labelColId", sourceType === "view" ? "group" : null);
+      roots.config.set("headerRow", sourceType === "sheet");
+      for (const key of [...roots.series.keys()]) roots.series.delete(key);
+      roots.seriesOrder.delete(0, roots.seriesOrder.length);
+      if (sourceType === "view") {
+        const id = chartId();
+        const entry = new Y.Map<unknown>();
+        entry.set("colId", "value");
+        entry.set("color", chartColor(0));
+        entry.set("role", "bar");
+        roots.series.set(id, entry);
+        roots.seriesOrder.push([id]);
+      }
+    });
+  const setAggregateField = (key: "groupPropertyId" | "valuePropertyId", value: string) =>
+    edit(() => roots.config.set(key, value || null));
   const setLabel = (colId: string) => edit(() => roots.config.set("labelColId", colId || null));
   const setHeaderRow = (value: boolean) =>
     edit(() => {
@@ -212,6 +240,7 @@ export function ChartEditor({
       const entry = new Y.Map<unknown>();
       entry.set("colId", nextColumn.id);
       entry.set("color", chartColor(config.series.length));
+      entry.set("role", config.type === "combo" && config.series.length > 0 ? "line" : "bar");
       roots.series.set(id, entry);
       roots.seriesOrder.push([id]);
     });
@@ -220,6 +249,8 @@ export function ChartEditor({
     edit(() => roots.series.get(id)?.set("colId", colId));
   const setSeriesColor = (id: string, color: string) =>
     edit(() => roots.series.get(id)?.set("color", color));
+  const setSeriesRole = (id: string, role: "bar" | "line") =>
+    edit(() => roots.series.get(id)?.set("role", role));
   const removeSeries = (id: string) =>
     edit(() => {
       roots.series.delete(id);
@@ -232,7 +263,7 @@ export function ChartEditor({
     { value: "", label: "None" },
     ...sheetNodes.map((node) => ({ value: node.id, label: node.name })),
     ...(removedSource
-      ? [{ value: config.sourceDocId as string, label: "Removed spreadsheet" }]
+      ? [{ value: config.sourceDocId as string, label: `Removed ${config.sourceType}` }]
       : []),
   ];
   const columnOptions: SelectOption[] = (source?.columns ?? []).map((column) => ({
@@ -253,6 +284,17 @@ export function ChartEditor({
       label: text ? `Row ${index + offset} — ${text}` : `Row ${index + offset}`,
     };
   });
+  const properties = (propertyResult ?? []).filter((property) => !property.deleted);
+  const propertyOptions = [
+    { value: "", label: "None" },
+    ...properties.map((property) => ({ value: property.id, label: property.name })),
+  ];
+  const numericPropertyOptions = [
+    { value: "", label: "Choose number property" },
+    ...properties
+      .filter((property) => property.type === "number")
+      .map((property) => ({ value: property.id, label: property.name })),
+  ];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background lg:flex-row">
@@ -281,6 +323,28 @@ export function ChartEditor({
           </div>
         </div>
         <div>
+          <PanelLabel>Data source</PanelLabel>
+          <div className="grid grid-cols-2 gap-1.5">
+            {(["sheet", "view"] as const).map((sourceType) => (
+              <button
+                type="button"
+                key={sourceType}
+                disabled={!canEdit}
+                aria-pressed={config.sourceType === sourceType}
+                onClick={() => setSourceType(sourceType)}
+                className={cn(
+                  "h-9 rounded-md border text-xs capitalize",
+                  config.sourceType === sourceType
+                    ? "border-accent/50 bg-accent/10"
+                    : "border-hairline",
+                )}
+              >
+                {sourceType === "sheet" ? "Spreadsheet" : "Team view"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
           <PanelLabel>Title</PanelLabel>
           <input
             key={config.title}
@@ -293,7 +357,9 @@ export function ChartEditor({
           />
         </div>
         <div>
-          <PanelLabel>Source spreadsheet</PanelLabel>
+          <PanelLabel>
+            Source {config.sourceType === "sheet" ? "spreadsheet" : "team view"}
+          </PanelLabel>
           <Select
             label="Source spreadsheet"
             value={config.sourceDocId ?? ""}
@@ -302,72 +368,117 @@ export function ChartEditor({
             onChange={setSource}
           />
         </div>
-        <div>
-          <button
-            type="button"
-            disabled={!canEdit || !source}
-            aria-pressed={config.headerRow}
-            onClick={() => setHeaderRow(!config.headerRow)}
-            className="flex w-full cursor-pointer items-start gap-2.5 rounded-md border border-hairline p-2.5 text-left transition-colors hover:bg-foreground/[0.03] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span
-              className={cn(
-                "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-xs border border-hairline",
-                config.headerRow && "border-accent bg-accent text-accent-foreground",
-              )}
-            >
-              {config.headerRow ? <Check className="size-3" /> : null}
-            </span>
-            <span className="min-w-0">
-              <span className="block font-medium text-xs">First row is a header</span>
-              <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                Excludes row 1 from the chart and names each series after its header cell.
-              </span>
-            </span>
-          </button>
-        </div>
-        <div>
-          <PanelLabel>{config.type === "pie" ? "Slice labels" : "Category axis"}</PanelLabel>
-          <Select
-            label="Category axis"
-            value={config.labelColId ?? ""}
-            options={labelOptions}
-            disabled={!canEdit || !source}
-            onChange={setLabel}
-          />
-        </div>
-        <div>
-          <PanelLabel>Rows to plot</PanelLabel>
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="w-8 shrink-0 text-[11px] text-muted-foreground">From</span>
-              <div className="min-w-0 flex-1">
+        {config.sourceType === "view" ? (
+          <div className="space-y-3">
+            <div>
+              <PanelLabel>Group records by</PanelLabel>
+              <Select
+                label="Group records by"
+                value={config.groupPropertyId ?? ""}
+                options={propertyOptions}
+                disabled={!canEdit}
+                onChange={(value) => setAggregateField("groupPropertyId", value)}
+              />
+            </div>
+            <div>
+              <PanelLabel>Calculation</PanelLabel>
+              <Select
+                label="Calculation"
+                value={config.aggregate}
+                options={[
+                  { value: "count", label: "Count records" },
+                  { value: "sum", label: "Sum a number property" },
+                ]}
+                disabled={!canEdit}
+                onChange={(value) => edit(() => roots.config.set("aggregate", value))}
+              />
+            </div>
+            {config.aggregate === "sum" ? (
+              <div>
+                <PanelLabel>Number property</PanelLabel>
                 <Select
-                  label="First row to plot"
-                  value={config.startRowId ?? ""}
-                  options={[{ value: "", label: "First row" }, ...rowOptions]}
-                  disabled={!canEdit || !source}
-                  onChange={(rowId) => setRowBound("startRowId", rowId)}
+                  label="Number property"
+                  value={config.valuePropertyId ?? ""}
+                  options={numericPropertyOptions}
+                  disabled={!canEdit}
+                  onChange={(value) => setAggregateField("valuePropertyId", value)}
                 />
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-8 shrink-0 text-[11px] text-muted-foreground">To</span>
-              <div className="min-w-0 flex-1">
-                <Select
-                  label="Last row to plot"
-                  value={config.endRowId ?? ""}
-                  options={[{ value: "", label: "Last row" }, ...rowOptions]}
-                  disabled={!canEdit || !source}
-                  onChange={(rowId) => setRowBound("endRowId", rowId)}
-                />
-              </div>
-            </div>
+            ) : null}
           </div>
-          <p className="mt-1.5 text-[11px] text-muted-foreground">
-            Narrow the range to leave out totals or notes below your data.
-          </p>
-        </div>
+        ) : null}
+        {config.sourceType === "sheet" ? (
+          <div>
+            <button
+              type="button"
+              disabled={!canEdit || !source}
+              aria-pressed={config.headerRow}
+              onClick={() => setHeaderRow(!config.headerRow)}
+              className="flex w-full cursor-pointer items-start gap-2.5 rounded-md border border-hairline p-2.5 text-left transition-colors hover:bg-foreground/[0.03] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <span
+                className={cn(
+                  "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-xs border border-hairline",
+                  config.headerRow && "border-accent bg-accent text-accent-foreground",
+                )}
+              >
+                {config.headerRow ? <Check className="size-3" /> : null}
+              </span>
+              <span className="min-w-0">
+                <span className="block font-medium text-xs">First row is a header</span>
+                <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                  Excludes row 1 from the chart and names each series after its header cell.
+                </span>
+              </span>
+            </button>
+          </div>
+        ) : null}
+        {config.sourceType === "sheet" ? (
+          <div>
+            <PanelLabel>{config.type === "pie" ? "Slice labels" : "Category axis"}</PanelLabel>
+            <Select
+              label="Category axis"
+              value={config.labelColId ?? ""}
+              options={labelOptions}
+              disabled={!canEdit || !source}
+              onChange={setLabel}
+            />
+          </div>
+        ) : null}
+        {config.sourceType === "sheet" ? (
+          <div>
+            <PanelLabel>Rows to plot</PanelLabel>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="w-8 shrink-0 text-[11px] text-muted-foreground">From</span>
+                <div className="min-w-0 flex-1">
+                  <Select
+                    label="First row to plot"
+                    value={config.startRowId ?? ""}
+                    options={[{ value: "", label: "First row" }, ...rowOptions]}
+                    disabled={!canEdit || !source}
+                    onChange={(rowId) => setRowBound("startRowId", rowId)}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-8 shrink-0 text-[11px] text-muted-foreground">To</span>
+                <div className="min-w-0 flex-1">
+                  <Select
+                    label="Last row to plot"
+                    value={config.endRowId ?? ""}
+                    options={[{ value: "", label: "Last row" }, ...rowOptions]}
+                    disabled={!canEdit || !source}
+                    onChange={(rowId) => setRowBound("endRowId", rowId)}
+                  />
+                </div>
+              </div>
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Narrow the range to leave out totals or notes below your data.
+            </p>
+          </div>
+        ) : null}
         <div>
           <div className="mb-1.5 flex items-center justify-between">
             <PanelLabel>{config.type === "pie" ? "Values" : "Series"}</PanelLabel>
@@ -421,6 +532,18 @@ export function ChartEditor({
                     disabled={!canEdit}
                     onChange={(color) => setSeriesColor(series.id, color)}
                   />
+                  {config.type === "combo" ? (
+                    <Select
+                      label={`Series ${index + 1} rendering`}
+                      value={series.role}
+                      options={[
+                        { value: "bar", label: "Bar" },
+                        { value: "line", label: "Line" },
+                      ]}
+                      disabled={!canEdit}
+                      onChange={(value) => setSeriesRole(series.id, value as "bar" | "line")}
+                    />
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -438,10 +561,9 @@ export function ChartEditor({
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
             <BarChart3 className="size-8 text-muted-foreground/50" />
-            <p className="font-medium text-sm">Choose a source spreadsheet</p>
+            <p className="font-medium text-sm">Choose a data source</p>
             <p className="max-w-xs text-muted-foreground text-xs">
-              Charts visualize live data from a spreadsheet in this project. Pick a source, then add
-              series to plot.
+              Charts visualize live spreadsheet ranges or grouped team-view records in this project.
             </p>
           </div>
         )}

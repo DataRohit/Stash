@@ -15,6 +15,9 @@ export const MAX_COLUMN_WIDTH = 600;
 export const DEFAULT_ROW_HEIGHT = 28;
 export const MIN_ROW_HEIGHT = 24;
 export const MAX_ROW_HEIGHT = 200;
+export const MAX_SHEET_FORMAT_RULES = 64;
+export const MAX_SHEET_VALIDATION_RULES = 64;
+const MAX_VALIDATION_VALUES = 100;
 
 export type SheetCellType = "text" | "number" | "bool" | "date";
 export type SheetCellValue = string | number | boolean | null;
@@ -27,12 +30,44 @@ export type SheetCell = {
   display: string;
 };
 
+type SheetRange = {
+  startRowId: string;
+  endRowId: string;
+  startColId: string;
+  endColId: string;
+};
+
+type SheetFormatCondition = "empty" | "not-empty" | "equals" | "contains" | "greater" | "less";
+
+export type SheetFormatRule = SheetRange & {
+  id: string;
+  condition: SheetFormatCondition;
+  value: string;
+  color: string;
+  enabled: boolean;
+};
+
+export type SheetValidationRule = SheetRange & {
+  id: string;
+  allowedValues: string[];
+};
+
+export type SheetSettings = {
+  frozenRows: number;
+  frozenCols: number;
+};
+
 export type SheetRoots = {
   rows: Y.Array<string>;
   cols: Y.Array<string>;
   cells: Y.Map<Y.Map<unknown>>;
   colMeta: Y.Map<Y.Map<unknown>>;
   rowMeta: Y.Map<Y.Map<unknown>>;
+  formatRules: Y.Map<Y.Map<unknown>>;
+  formatRuleOrder: Y.Array<string>;
+  validationRules: Y.Map<Y.Map<unknown>>;
+  validationRuleOrder: Y.Array<string>;
+  settings: Y.Map<unknown>;
 };
 
 export type SheetInspection = {
@@ -83,6 +118,11 @@ export function getSheetRoots(ydoc: Y.Doc): SheetRoots {
     cells: ydoc.getMap<Y.Map<unknown>>("cells"),
     colMeta: ydoc.getMap<Y.Map<unknown>>("colMeta"),
     rowMeta: ydoc.getMap<Y.Map<unknown>>("rowMeta"),
+    formatRules: ydoc.getMap<Y.Map<unknown>>("sheetFormatRules"),
+    formatRuleOrder: ydoc.getArray<string>("sheetFormatRuleOrder"),
+    validationRules: ydoc.getMap<Y.Map<unknown>>("sheetValidationRules"),
+    validationRuleOrder: ydoc.getArray<string>("sheetValidationRuleOrder"),
+    settings: ydoc.getMap("sheetSettings"),
   };
 }
 
@@ -199,7 +239,254 @@ export function inspectSheet(ydoc: Y.Doc): SheetInspection {
   if (rows.some((id) => !roots.rowMeta.has(id)) || cols.some((id) => !roots.colMeta.has(id))) {
     throw new SheetValidationError("invalid-update");
   }
+  const formatRules = readFormatRules(roots);
+  const validationRules = readValidationRules(roots);
+  readSheetSettings(roots, rows.length, cols.length);
+  for (const rule of [...formatRules, ...validationRules]) {
+    if (
+      !rowSet.has(rule.startRowId) ||
+      !rowSet.has(rule.endRowId) ||
+      !colSet.has(rule.startColId) ||
+      !colSet.has(rule.endColId)
+    ) {
+      throw new SheetValidationError("invalid-update");
+    }
+  }
   return { rows, cols, rowSet, colSet, dimensions: { rows: rows.length, cols: cols.length } };
+}
+
+export function invalidValidationCells(ydoc: Y.Doc): Map<string, string> {
+  const inspection = inspectSheet(ydoc);
+  const roots = getSheetRoots(ydoc);
+  const rules = readValidationRules(roots);
+  const result = new Map<string, string>();
+  if (rules.length === 0) return result;
+  const index = sheetRangeIndex(inspection.rows, inspection.cols);
+  const allowed = new Map(rules.map((rule) => [rule.id, new Set(rule.allowedValues)]));
+  for (const key of roots.cells.keys()) {
+    const separator = key.indexOf(":");
+    const rowId = key.slice(0, separator);
+    const colId = key.slice(separator + 1);
+    if (!index.rows.has(rowId) || !index.cols.has(colId)) continue;
+    const rule = ruleForCell(rules, index, rowId, colId);
+    if (!rule) continue;
+    const display = displayedCellValue(readCell(roots, rowId, colId));
+    if (display && !allowed.get(rule.id)?.has(display)) result.set(key, display);
+  }
+  return result;
+}
+
+function orderedRuleIds(
+  order: Y.Array<string>,
+  values: Y.Map<Y.Map<unknown>>,
+  cap: number,
+): string[] {
+  const ids = uniqueIds(order.toArray());
+  if (ids.length > cap || values.size > cap || ids.some((id) => !values.has(id))) {
+    throw new SheetValidationError("invalid-update");
+  }
+  return ids;
+}
+
+function rangeFromMap(id: string, map: Y.Map<unknown>): SheetRange & { id: string } {
+  const startRowId = map.get("startRowId");
+  const endRowId = map.get("endRowId");
+  const startColId = map.get("startColId");
+  const endColId = map.get("endColId");
+  if (![startRowId, endRowId, startColId, endColId].every(isValidSheetId)) {
+    throw new SheetValidationError("invalid-update");
+  }
+  return {
+    id,
+    startRowId: startRowId as string,
+    endRowId: endRowId as string,
+    startColId: startColId as string,
+    endColId: endColId as string,
+  };
+}
+
+export function readFormatRules(roots: SheetRoots): SheetFormatRule[] {
+  return orderedRuleIds(roots.formatRuleOrder, roots.formatRules, MAX_SHEET_FORMAT_RULES).map(
+    (id) => {
+      const map = roots.formatRules.get(id);
+      if (!map) throw new SheetValidationError("invalid-update");
+      const condition = map.get("condition");
+      const value = map.get("value");
+      const color = map.get("color");
+      const enabled = map.get("enabled");
+      if (
+        !["empty", "not-empty", "equals", "contains", "greater", "less"].includes(
+          String(condition),
+        ) ||
+        typeof value !== "string" ||
+        value.length > 500 ||
+        typeof color !== "string" ||
+        !/^#[0-9a-f]{6}$/i.test(color) ||
+        typeof enabled !== "boolean" ||
+        [...map.keys()].some(
+          (key) =>
+            ![
+              "startRowId",
+              "endRowId",
+              "startColId",
+              "endColId",
+              "condition",
+              "value",
+              "color",
+              "enabled",
+            ].includes(key),
+        )
+      ) {
+        throw new SheetValidationError("invalid-update");
+      }
+      return {
+        ...rangeFromMap(id, map),
+        condition: condition as SheetFormatCondition,
+        value,
+        color,
+        enabled,
+      };
+    },
+  );
+}
+
+export function readValidationRules(roots: SheetRoots): SheetValidationRule[] {
+  return orderedRuleIds(
+    roots.validationRuleOrder,
+    roots.validationRules,
+    MAX_SHEET_VALIDATION_RULES,
+  ).map((id) => {
+    const map = roots.validationRules.get(id);
+    if (!map) throw new SheetValidationError("invalid-update");
+    const allowed = map.get("allowedValues");
+    if (
+      !(allowed instanceof Y.Array) ||
+      allowed.length === 0 ||
+      allowed.length > MAX_VALIDATION_VALUES ||
+      allowed.toArray().some((value) => typeof value !== "string" || value.length > 200) ||
+      [...map.keys()].some(
+        (key) =>
+          !["startRowId", "endRowId", "startColId", "endColId", "allowedValues"].includes(key),
+      )
+    ) {
+      throw new SheetValidationError("invalid-update");
+    }
+    return { ...rangeFromMap(id, map), allowedValues: [...new Set(allowed.toArray() as string[])] };
+  });
+}
+
+export function readSheetSettings(
+  roots: SheetRoots,
+  rowCount = MAX_SHEET_ROWS,
+  colCount = MAX_SHEET_COLS,
+): SheetSettings {
+  const frozenRows = roots.settings.get("frozenRows") ?? 0;
+  const frozenCols = roots.settings.get("frozenCols") ?? 0;
+  if (
+    !Number.isInteger(frozenRows) ||
+    !Number.isInteger(frozenCols) ||
+    Number(frozenRows) < 0 ||
+    Number(frozenCols) < 0 ||
+    Number(frozenRows) > Math.min(rowCount, 20) ||
+    Number(frozenCols) > Math.min(colCount, 10) ||
+    [...roots.settings.keys()].some((key) => key !== "frozenRows" && key !== "frozenCols")
+  ) {
+    throw new SheetValidationError("invalid-update");
+  }
+  return { frozenRows: Number(frozenRows), frozenCols: Number(frozenCols) };
+}
+
+export type SheetRangeIndex = { rows: Map<string, number>; cols: Map<string, number> };
+
+export function sheetRangeIndex(rows: string[], cols: string[]): SheetRangeIndex {
+  return {
+    rows: new Map(rows.map((id, position) => [id, position])),
+    cols: new Map(cols.map((id, position) => [id, position])),
+  };
+}
+
+function cellInRange(
+  index: SheetRangeIndex,
+  rowId: string,
+  colId: string,
+  range: SheetRange,
+): boolean {
+  const row = index.rows.get(rowId);
+  const col = index.cols.get(colId);
+  const rowA = index.rows.get(range.startRowId);
+  const rowB = index.rows.get(range.endRowId);
+  const colA = index.cols.get(range.startColId);
+  const colB = index.cols.get(range.endColId);
+  if (
+    row === undefined ||
+    col === undefined ||
+    rowA === undefined ||
+    rowB === undefined ||
+    colA === undefined ||
+    colB === undefined
+  ) {
+    return false;
+  }
+  return (
+    row >= Math.min(rowA, rowB) &&
+    row <= Math.max(rowA, rowB) &&
+    col >= Math.min(colA, colB) &&
+    col <= Math.max(colA, colB)
+  );
+}
+
+function ruleForCell<T extends SheetRange>(
+  rules: T[],
+  index: SheetRangeIndex,
+  rowId: string,
+  colId: string,
+): T | null {
+  for (let position = rules.length - 1; position >= 0; position -= 1) {
+    const rule = rules[position];
+    if (rule && cellInRange(index, rowId, colId, rule)) return rule;
+  }
+  return null;
+}
+
+export function formatColorForCell(
+  rules: SheetFormatRule[],
+  index: SheetRangeIndex,
+  rowId: string,
+  colId: string,
+  cell: SheetCell | null,
+): string | null {
+  const display = displayedCellValue(cell);
+  let color: string | null = null;
+  for (const rule of rules) {
+    if (!rule.enabled || !cellInRange(index, rowId, colId, rule)) continue;
+    const numeric = Number(display.replace(/,/g, ""));
+    const expected = Number(rule.value.replace(/,/g, ""));
+    const matches =
+      (rule.condition === "empty" && display.length === 0) ||
+      (rule.condition === "not-empty" && display.length > 0) ||
+      (rule.condition === "equals" && display === rule.value) ||
+      (rule.condition === "contains" &&
+        display.toLocaleLowerCase().includes(rule.value.toLocaleLowerCase())) ||
+      (rule.condition === "greater" &&
+        Number.isFinite(numeric) &&
+        Number.isFinite(expected) &&
+        numeric > expected) ||
+      (rule.condition === "less" &&
+        Number.isFinite(numeric) &&
+        Number.isFinite(expected) &&
+        numeric < expected);
+    if (matches) color = rule.color;
+  }
+  return color;
+}
+
+export function validationForCell(
+  rules: SheetValidationRule[],
+  index: SheetRangeIndex,
+  rowId: string,
+  colId: string,
+): SheetValidationRule | null {
+  return ruleForCell(rules, index, rowId, colId);
 }
 
 function isCellType(value: unknown): value is SheetCellType {

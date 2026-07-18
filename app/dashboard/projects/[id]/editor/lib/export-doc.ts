@@ -9,6 +9,7 @@ import { buildZip, type ZipEntry } from "@/app/dashboard/projects/[id]/editor/li
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import type { ChartData } from "@/lib/chart-data";
 import { renderChartSvg } from "@/lib/chart-svg";
+import type { DashboardTile } from "@/lib/dashboard-model";
 import { boardRenderModel, sheetRenderModel } from "@/lib/doc-projection";
 import type { FileType } from "@/lib/document-types";
 import { serializeDelimited } from "@/lib/sheet-csv";
@@ -305,6 +306,56 @@ export async function exportChartPdf(fileNode: TreeNode, model: ChartData): Prom
   await printHtml(chartHtml(fileNode, model));
 }
 
+export type DashboardExportTile = {
+  tile: DashboardTile;
+  chart?: ChartData;
+  value?: number;
+  unavailable?: boolean;
+  sampled?: boolean;
+};
+
+function dashboardHtml(fileNode: TreeNode, tiles: DashboardExportTile[]): string {
+  const body = tiles
+    .map(({ tile, chart, value, unavailable, sampled }) => {
+      const content = unavailable
+        ? '<p class="empty">Source unavailable</p>'
+        : chart
+          ? renderChartSvg(chart)
+          : `<div class="stat"><strong>${escaped(String(value ?? 0))}</strong><span>${tile.aggregate === "sum" ? "Total" : "Records"}${sampled ? " · sampled" : ""}</span></div>`;
+      return `<article class="${tile.width === 2 ? "wide" : ""}"><h2>${escaped(tile.title)}</h2>${content}</article>`;
+    })
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escaped(stem(fileNode.name))}</title><style>body{margin:0;background:#fff;color:#111;font:14px system-ui}main{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;max-width:1100px;margin:24px auto;padding:0 24px}article{break-inside:avoid;border:1px solid #ddd;border-radius:10px;overflow:hidden}.wide{grid-column:1/-1}h2{font-size:14px;margin:0;padding:10px 14px;border-bottom:1px solid #ddd}svg{width:100%;height:auto}.stat{min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center}.stat strong{font:700 42px ui-monospace}.stat span,.empty{color:#666;text-align:center}@media(max-width:700px){main{grid-template-columns:1fr}.wide{grid-column:auto}}@media print{main{margin:0;max-width:none}}</style></head><body><main>${body}</main></body></html>`;
+}
+
+export function exportDashboardHtml(fileNode: TreeNode, tiles: DashboardExportTile[]): void {
+  download(
+    `${stem(fileNode.name)}.html`,
+    dashboardHtml(fileNode, tiles),
+    "text/html;charset=utf-8",
+  );
+}
+
+export async function exportDashboardPdf(
+  fileNode: TreeNode,
+  tiles: DashboardExportTile[],
+): Promise<void> {
+  await printHtml(dashboardHtml(fileNode, tiles));
+}
+
+export function exportDashboardZip(fileNode: TreeNode, tiles: DashboardExportTile[]): void {
+  const encoder = new TextEncoder();
+  const entries: ZipEntry[] = tiles.map(({ tile, chart, value, unavailable }) => ({
+    path: chart
+      ? `${safeFileName(tile.title || tile.id)}.svg`
+      : `${safeFileName(tile.title || tile.id)}.txt`,
+    data: encoder.encode(
+      chart ? renderChartSvg(chart) : unavailable ? "Source unavailable" : String(value ?? 0),
+    ),
+  }));
+  download(`${stem(fileNode.name)}.zip`, buildZip(entries), "application/zip");
+}
+
 export async function exportHtml(
   fileNode: TreeNode,
   content: string,
@@ -417,7 +468,9 @@ export async function exportProjectZip(projectTitle: string, nodes: BundleNode[]
                 ? path.replace(/\.view$/i, ".json")
                 : node.fileType === "chart"
                   ? path.replace(/\.chart$/i, ".svg")
-                  : path,
+                  : node.fileType === "dashboard"
+                    ? path.replace(/\.dashboard$/i, ".json")
+                    : path,
         data: encoder.encode(node.content),
       });
     } else if (node.kind === "asset" && node.assetUrl) {

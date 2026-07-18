@@ -8,6 +8,11 @@ import { type ChartSource, resolveChartData } from "../lib/chart-data";
 import { MAX_CHART_STORED_BYTES, seedChart } from "../lib/chart-model";
 import { renderChartSvg } from "../lib/chart-svg";
 import {
+  inspectDashboard,
+  MAX_DASHBOARD_STORED_BYTES,
+  seedDashboard,
+} from "../lib/dashboard-model";
+import {
   boardRenderModel,
   chartRenderModel,
   chartSourceFromSheet,
@@ -200,6 +205,9 @@ function fileTypeFromName(name: string): FileType | null {
   if (lower.endsWith(".chart")) {
     return "chart";
   }
+  if (lower.endsWith(".dashboard")) {
+    return "dashboard";
+  }
   return null;
 }
 
@@ -222,7 +230,7 @@ function nameForFileType(raw: string, fileType: FileType): string {
   const extension = `.${fileType}`;
   const sanitized = raw.replaceAll("/", "").replaceAll("\\", "").trim();
   const withoutSupportedExtension = sanitized.replace(
-    /\.(md|html|sheet|board|view|chart|csv|tsv)$/i,
+    /\.(md|html|sheet|board|view|chart|dashboard|csv|tsv)$/i,
     "",
   );
   const stem = sanitized.toLowerCase().endsWith(extension)
@@ -641,6 +649,12 @@ export async function purgeDocCollabBatch(
   if (comments.length > 0) {
     return true;
   }
+  const documentMentions = await ctx.db
+    .query("documentMentions")
+    .withIndex("by_document", (q) => q.eq("documentId", documentId))
+    .take(PURGE_COLLAB_BATCH);
+  for (const row of documentMentions) await ctx.db.delete(row._id);
+  if (documentMentions.length > 0) return true;
   const propertyValues = await ctx.db
     .query("documentPropertyValues")
     .withIndex("by_document", (q) => q.eq("documentId", documentId))
@@ -1112,6 +1126,20 @@ export const createFile = mutation({
       ) {
         throw new Error("project-full");
       }
+    } else if (fileType === "dashboard") {
+      const ydoc = new Y.Doc();
+      content = project(fileType, ydoc);
+      size = documentSize(fileType, ydoc);
+      contentState = toArrayBuffer(Y.encodeStateAsUpdate(ydoc));
+      contentSeq = 1;
+      ydoc.destroy();
+      if (size > MAX_DASHBOARD_STORED_BYTES) throw new Error("file-too-large");
+      if (
+        (await cachedProjectBytes(ctx, access.project)) + size >
+        (await maxProjectBytes(ctx, access.project))
+      ) {
+        throw new Error("project-full");
+      }
     }
     const now = Date.now();
     const id = await ctx.db.insert("documents", {
@@ -1175,6 +1203,7 @@ export const createFromTemplate = mutation({
       v.literal("board"),
       v.literal("view"),
       v.literal("chart"),
+      v.literal("dashboard"),
     ),
     templateId: v.optional(v.string()),
   },
@@ -1211,6 +1240,9 @@ export const createFromTemplate = mutation({
       seedView(ydoc);
     } else if (fileType === "chart") {
       seedChart(ydoc);
+    } else if (fileType === "dashboard") {
+      ydoc.getMap("dashboardTiles");
+      ydoc.getArray("dashboardTileOrder");
     } else if (content) {
       ydoc.getText("codemirror").insert(0, content);
     }
@@ -1225,7 +1257,8 @@ export const createFromTemplate = mutation({
       (fileType === "sheet" && size > MAX_SHEET_STORED_BYTES) ||
       (fileType === "board" && size > MAX_BOARD_STORED_BYTES) ||
       (fileType === "view" && size > MAX_VIEW_STORED_BYTES) ||
-      (fileType === "chart" && size > MAX_CHART_STORED_BYTES)
+      (fileType === "chart" && size > MAX_CHART_STORED_BYTES) ||
+      (fileType === "dashboard" && size > MAX_DASHBOARD_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }
@@ -1820,6 +1853,11 @@ export const duplicate = mutation({
       seedChart(seedDoc);
       state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
       seedDoc.destroy();
+    } else if (!state && doc.fileType === "dashboard") {
+      const seedDoc = new Y.Doc();
+      seedDashboard(seedDoc);
+      state = toArrayBuffer(Y.encodeStateAsUpdate(seedDoc));
+      seedDoc.destroy();
     } else if (!state && doc.content.length > 0) {
       const seedDoc = new Y.Doc();
       seedDoc.getText("codemirror").insert(0, doc.content);
@@ -1884,6 +1922,7 @@ export const duplicate = mutation({
         sourceDocumentId: id,
         sourceCardId: link.sourceCardId,
         managedByBoard: link.managedByBoard,
+        managedByText: link.managedByText,
         targetProjectId: link.targetProjectId,
         targetDocumentId: link.targetDocumentId,
         createdBy: access.userId,
@@ -1954,7 +1993,8 @@ export const setContent = mutation({
       doc.fileType === "sheet" ||
       doc.fileType === "board" ||
       doc.fileType === "view" ||
-      doc.fileType === "chart"
+      doc.fileType === "chart" ||
+      doc.fileType === "dashboard"
     ) {
       throw new Error("unsupported-filetype");
     }
@@ -2464,6 +2504,11 @@ export const exportBundle = query({
             }
           }
           content = renderChartSvg(resolveChartData(config, source));
+        } else if (doc.kind === "file" && doc.fileType === "dashboard" && state) {
+          const ydoc = new Y.Doc();
+          Y.applyUpdate(ydoc, new Uint8Array(state));
+          content = JSON.stringify(inspectDashboard(ydoc), null, 2);
+          ydoc.destroy();
         }
         return {
           id: doc._id,

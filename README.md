@@ -130,7 +130,8 @@ confirms that changes synchronize automatically.
   extension in the creation dialog selects the matching format automatically;
   names without an extension use the selected format and receive its canonical
   extension.
-- Multi-file `.md` and `.html` import plus atomic RFC-style CSV/TSV spreadsheet import.
+- Multi-file `.md` and `.html` import plus atomic RFC-style CSV/TSV and Excel
+  spreadsheet import with worksheet preview and formula-value reporting.
 - Multi-selection with keyboard, pointer, and long-press controls for bounded bulk
   move, trash, restore, and duplicate workflows.
 - File duplication with collision-safe names and independent collaboration state.
@@ -139,20 +140,24 @@ confirms that changes synchronize automatically.
 
 ### Editing and collaboration
 
-- CodeMirror 6 editors for Markdown and HTML.
+- CodeMirror 6 editors for Markdown and HTML, including a per-document visual Markdown
+  mode, formatting toolbar, identity-based document links, and inline teammate mentions.
 - A two-axis virtualized spreadsheet editor with typed cells, stable-id formulas,
-  range selection, clipboard interoperability, private sort/filter views,
-  structural editing, resize/reorder controls, and remote selections.
+  range selection, clipboard interoperability, private sort/filter views, conditional
+  formatting, data validation, frozen panes, structural editing, resize/reorder
+  controls, and remote selections.
 - Collaborative Kanban boards with ordered columns and cards, Markdown descriptions,
-  assignees, labels, due dates, project-document links, recoverable unfiled cards,
-  keyboard movement controls, and remote card/drag presence.
+  nested checklists, assignees, labels, due dates, local filters, swimlanes, WIP limits,
+  project-document links, recoverable unfiled cards, keyboard movement controls, and
+  remote card/drag presence.
 - Shared database-style views over canonical project documents with typed text,
-  number, checkbox, date-range, status, and person properties; table, grouped board,
-  timeline, and calendar layouts; paged records; shared filters, sorting, and fields;
-  and an unscheduled tray for records without dates.
-- Collaborative line, bar, area, and pie charts backed by spreadsheet data, with
-  configurable series, ranges, labels, colors, legends, hover inspection, and
-  version-aware previews.
+  number, checkbox, date-range, status, person, formula, and rollup properties; table,
+  grouped board, timeline, calendar, and gallery layouts; personal and shared saved
+  layouts; paged records; shared filters, sorting, and fields; and an unscheduled tray.
+- Collaborative line, bar, area, pie, scatter, stacked-bar, and combination charts
+  backed by spreadsheet or team-view data, with configurable series, ranges, labels,
+  colors, legends, hover inspection, version-aware previews, accessible data tables,
+  and responsive dashboard pages composed from chart and statistic tiles.
 - First-class document and card relationships with access-safe cross-project target
   search, maintained backlinks, opaque inaccessible targets, and purge cleanup.
 - Yjs incremental synchronization over Convex with snapshots and compaction.
@@ -186,7 +191,7 @@ confirms that changes synchronize automatically.
 - Organization policy that degrades public links to organization access.
 - Public-edge throttling isolated by token and IP.
 - Standalone HTML, print/PDF, Markdown, canonical CSV, board Markdown, view-record
-  CSV, chart SVG, and project ZIP export.
+  CSV, chart SVG, dashboard HTML/PDF/ZIP, and project ZIP export.
 
 ### Organizations and authorization
 
@@ -400,6 +405,8 @@ CI installs from the frozen lockfile and executes `pnpm check` for every push to
 - HTML preview runs in a sandboxed iframe.
 - Attachment uploads use a server-enforced MIME allowlist, file-signature checks,
   per-type size limits, project quotas, tree-depth limits, and node-count limits.
+- Spreadsheet imports are bounded before parsing by workbook size and by the sheet
+  row, column, and cell limits, and are previewed before they replace any content.
 - Notification queries revalidate visibility and reuse per-project access decisions only within the current query.
 - Secretlint runs locally and in CI.
 

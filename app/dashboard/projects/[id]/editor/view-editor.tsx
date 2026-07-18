@@ -8,6 +8,8 @@ import {
   ChevronDown,
   Columns3,
   Filter,
+  FunctionSquare,
+  GalleryVerticalEnd,
   LayoutList,
   Plus,
   Rows3,
@@ -30,15 +32,29 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { fieldClass } from "@/lib/ui";
 import { cn } from "@/lib/utils";
 import {
+  applySavedViewLayout,
+  applyViewConfig,
   BUILTIN_VIEW_PROPERTIES,
+  deleteSavedViewLayout,
   getViewRoots,
+  inspectSavedLayouts,
   inspectView,
+  renameSavedViewLayout,
+  saveCurrentViewLayout,
   type ViewFilterOperator,
   type ViewLayout,
   viewId,
 } from "@/lib/view-model";
 
-type PropertyType = "text" | "number" | "boolean" | "date" | "status" | "person";
+type PropertyType =
+  | "text"
+  | "number"
+  | "boolean"
+  | "date"
+  | "status"
+  | "person"
+  | "formula"
+  | "rollup";
 
 type PropertyDefinition = {
   id: string;
@@ -46,6 +62,8 @@ type PropertyDefinition = {
   type: PropertyType;
   options: Array<{ id: string; name: string; color: string }>;
   deleted: boolean;
+  expression?: string;
+  rollup?: { operation: "count" | "sum" | "latest"; propertyId?: string };
 };
 
 type PropertyValue = {
@@ -79,6 +97,7 @@ const LAYOUTS: Array<{ id: ViewLayout; label: string; icon: typeof Rows3 }> = [
   { id: "board", label: "Board", icon: Columns3 },
   { id: "timeline", label: "Timeline", icon: Rows3 },
   { id: "calendar", label: "Calendar", icon: CalendarDays },
+  { id: "gallery", label: "Gallery", icon: GalleryVerticalEnd },
 ];
 
 const PROPERTY_TYPE_OPTIONS: SelectOption[] = [
@@ -88,6 +107,8 @@ const PROPERTY_TYPE_OPTIONS: SelectOption[] = [
   { value: "date", label: "Date" },
   { value: "status", label: "Status" },
   { value: "person", label: "Person" },
+  { value: "formula", label: "Formula" },
+  { value: "rollup", label: "Rollup" },
 ];
 
 function MenuSelect({
@@ -164,6 +185,16 @@ function MenuSelect({
         : null}
     </div>
   );
+}
+
+function coverImageUrl(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 function builtinName(id: string): string | null {
@@ -243,6 +274,21 @@ function PropertyCell({
 }) {
   const setValue = useMutation(api.structuredSurfaces.setPropertyValue);
   const current = record.properties.find((value) => value.propertyId === property.id);
+  if (property.type === "formula" || property.type === "rollup") {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 text-xs"
+        title={
+          property.type === "formula"
+            ? property.expression
+            : `${property.rollup?.operation ?? "count"} linked records`
+        }
+      >
+        <FunctionSquare className="size-3.5 text-muted-foreground" />
+        {current?.displayValue || "—"}
+      </span>
+    );
+  }
   const save = async (
     value:
       | { type: "text"; value: string }
@@ -378,6 +424,8 @@ export function ViewEditor({
   ready,
   canEdit,
   members,
+  documentId,
+  userId,
   onOpenDocument,
 }: {
   projectId: Id<"projects">;
@@ -386,6 +434,8 @@ export function ViewEditor({
   ready: boolean;
   canEdit: boolean;
   members: MentionCandidate[];
+  documentId: string;
+  userId: string;
   onOpenDocument: (documentId: string) => void;
 }) {
   const [revision, setRevision] = useState(0);
@@ -394,6 +444,15 @@ export function ViewEditor({
   const [deletePropertyId, setDeletePropertyId] = useState<string | null>(null);
   const [propertyName, setPropertyName] = useState("");
   const [propertyType, setPropertyType] = useState<PropertyType>("text");
+  const [propertyExpression, setPropertyExpression] = useState("");
+  const [rollupOperation, setRollupOperation] = useState<"count" | "sum" | "latest">("count");
+  const [rollupPropertyId, setRollupPropertyId] = useState("");
+  const [personalLayouts, setPersonalLayouts] = useState<
+    Array<{ id: string; name: string; config: ReturnType<typeof inspectView> }>
+  >([]);
+  const [layoutDialog, setLayoutDialog] = useState(false);
+  const [layoutName, setLayoutName] = useState("");
+  const [layoutScope, setLayoutScope] = useState<"shared" | "personal">("personal");
   const [openMenu, setOpenMenu] = useState<"filter" | "sort" | "column" | null>(null);
   const toolbarMenuRef = useRef<HTMLDivElement>(null);
   const toolbarFloatingRef = useRef<HTMLDivElement>(null);
@@ -494,6 +553,31 @@ export function ViewEditor({
       return null;
     }
   }, [ready, revision, ydoc]);
+  const savedLayouts = useMemo(() => {
+    void revision;
+    if (!ready) return [];
+    try {
+      return inspectSavedLayouts(ydoc);
+    } catch {
+      return [];
+    }
+  }, [ready, revision, ydoc]);
+  useEffect(() => {
+    const key = `stash:view-layouts:${userId}:${documentId}`;
+    const timer = window.setTimeout(() => {
+      try {
+        const parsed = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+        setPersonalLayouts(
+          Array.isArray(parsed)
+            ? parsed.slice(0, 24).map((layout) => ({ ...layout, id: layout.id || viewId() }))
+            : [],
+        );
+      } catch {
+        setPersonalLayouts([]);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [documentId, userId]);
   const properties = useMemo(() => propertyRows ?? [], [propertyRows]);
   const propertyById = useMemo(
     () => new Map(properties.map((property) => [property.id, property])),
@@ -711,6 +795,50 @@ export function ViewEditor({
             </button>
           ))}
         </div>
+        <select
+          aria-label="Saved layouts"
+          defaultValue=""
+          onChange={(event) => {
+            const value = event.target.value;
+            event.currentTarget.value = "";
+            try {
+              if (value.startsWith("shared:")) {
+                applySavedViewLayout(ydoc, value.slice(7));
+              } else if (value.startsWith("personal:")) {
+                const personal = personalLayouts[Number(value.slice(9))];
+                if (personal) applyViewConfig(ydoc, personal.config);
+              }
+            } catch {
+              notify.error("Couldn’t apply that layout", {
+                description: "It refers to fields that no longer exist in this project.",
+              });
+            }
+          }}
+          className={cn(fieldClass, "h-9 max-w-48 text-xs")}
+        >
+          <option value="">Saved layouts</option>
+          {savedLayouts.map((layout) => (
+            <option key={layout.id} value={`shared:${layout.id}`}>
+              {layout.name} · shared
+            </option>
+          ))}
+          {personalLayouts.map((layout, index) => (
+            <option key={layout.id} value={`personal:${index}`}>
+              {layout.name} · personal
+            </option>
+          ))}
+        </select>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            setLayoutName("");
+            setLayoutScope(canEdit ? "shared" : "personal");
+            setLayoutDialog(true);
+          }}
+        >
+          Save layout
+        </Button>
         <label className="flex h-9 min-w-44 flex-1 items-center gap-2 rounded-md border border-hairline bg-surface px-3 sm:max-w-72">
           <Search className="size-3.5 text-muted-foreground" />
           <input
@@ -921,18 +1049,35 @@ export function ViewEditor({
           Shared view
         </span>
       </div>
-      {config.layout === "board" || config.layout === "timeline" || config.layout === "calendar" ? (
+      {config.layout === "board" ||
+      config.layout === "timeline" ||
+      config.layout === "calendar" ||
+      config.layout === "gallery" ? (
         <div className="flex shrink-0 items-center gap-2 border-hairline border-b bg-surface/40 px-3 py-2">
           <span className="text-muted-foreground text-xs">
-            {config.layout === "board" ? "Group by" : "Date property"}
+            {config.layout === "board"
+              ? "Group by"
+              : config.layout === "gallery"
+                ? "Cover property"
+                : "Date property"}
           </span>
           <MenuSelect
-            label={config.layout === "board" ? "Group property" : "Date property"}
+            label={
+              config.layout === "board"
+                ? "Group property"
+                : config.layout === "gallery"
+                  ? "Cover property"
+                  : "Date property"
+            }
             value={
-              config.layout === "board" ? groupProperty : (config.datePropertyId ?? "updatedAt")
+              config.layout === "board"
+                ? groupProperty
+                : config.layout === "gallery"
+                  ? (config.coverPropertyId ?? "title")
+                  : (config.datePropertyId ?? "updatedAt")
             }
             options={
-              config.layout === "board"
+              config.layout === "board" || config.layout === "gallery"
                 ? propertyOptions.filter((option) => option.value !== "updatedAt")
                 : propertyOptions
                     .filter(
@@ -945,7 +1090,14 @@ export function ViewEditor({
             disabled={!canEdit}
             className="w-56"
             onChange={(propertyId) =>
-              roots.config.set(config.layout === "board" ? "groupBy" : "datePropertyId", propertyId)
+              roots.config.set(
+                config.layout === "board"
+                  ? "groupBy"
+                  : config.layout === "gallery"
+                    ? "coverPropertyId"
+                    : "datePropertyId",
+                propertyId,
+              )
             }
           />
         </div>
@@ -999,6 +1151,42 @@ export function ViewEditor({
               ))}
             </tbody>
           </table>
+        ) : config.layout === "gallery" ? (
+          <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3">
+            {rows.map((record) => {
+              const cover = config.coverPropertyId
+                ? record.properties.find((value) => value.propertyId === config.coverPropertyId)
+                    ?.displayValue
+                : "";
+              return (
+                <button
+                  type="button"
+                  key={record.id}
+                  onClick={() => onOpenDocument(record.sourceDocumentId ?? record.id)}
+                  className="overflow-hidden rounded-lg border border-hairline bg-surface text-left shadow-sm hover:border-foreground/25"
+                >
+                  <div className="relative h-36 bg-gradient-to-br from-accent/20 via-info/10 to-warning/15">
+                    {coverImageUrl(cover) ? (
+                      // biome-ignore lint/performance/noImgElement: covers are arbitrary remote URLs, not optimizable assets
+                      <img
+                        src={coverImageUrl(cover) as string}
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        className="absolute inset-0 size-full object-cover"
+                      />
+                    ) : null}
+                  </div>
+                  <div className="p-3">
+                    <h3 className="truncate font-medium text-sm">{record.name}</h3>
+                    <p className="mt-1 text-muted-foreground text-xs">
+                      {record.fileType ?? "Document"} · {formatDate(record.updatedAt)}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         ) : config.layout === "board" ? (
           <div className="flex min-h-full min-w-max gap-3 p-3">
             {[...grouped.entries()].map(([group, records]) => (
@@ -1184,6 +1372,169 @@ export function ViewEditor({
         ) : null}
       </div>
       <Dialog
+        open={layoutDialog}
+        onClose={() => setLayoutDialog(false)}
+        title="Save layout"
+        icon={<LayoutList className="size-4" />}
+        description="Stores the current layout, filters, sorts, grouping, and visible fields."
+        className="max-w-md"
+        mobileSheet
+      >
+        <form
+          className="space-y-4 p-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const name = layoutName.trim().slice(0, 80);
+            if (!name || !config) return;
+            try {
+              if (layoutScope === "shared" && canEdit) {
+                saveCurrentViewLayout(ydoc, name);
+              } else {
+                const next = [...personalLayouts, { id: viewId(), name, config }].slice(-24);
+                setPersonalLayouts(next);
+                window.localStorage.setItem(
+                  `stash:view-layouts:${userId}:${documentId}`,
+                  JSON.stringify(next),
+                );
+              }
+              setLayoutDialog(false);
+            } catch {
+              notify.error("Couldn’t save that layout", {
+                description: "This view already has the maximum number of saved layouts.",
+              });
+            }
+          }}
+        >
+          <label className="block text-xs">
+            Layout name
+            <input
+              value={layoutName}
+              onChange={(event) => setLayoutName(event.target.value.slice(0, 80))}
+              className={cn(fieldClass, "mt-1 h-9 w-full px-2")}
+              placeholder="Overdue by owner"
+            />
+          </label>
+          <fieldset className="space-y-2">
+            <legend className="text-muted-foreground text-xs">Who can use it</legend>
+            {(
+              [
+                ["personal", "Only me", "Stored in this browser."],
+                ["shared", "The whole team", "Stored in the shared view."],
+              ] as const
+            ).map(([value, label, hint]) => (
+              <label
+                key={value}
+                className={cn(
+                  "flex items-start gap-2 rounded-md border border-hairline p-2 text-xs",
+                  value === "shared" && !canEdit && "opacity-50",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="layout-scope"
+                  value={value}
+                  checked={layoutScope === value}
+                  disabled={value === "shared" && !canEdit}
+                  onChange={() => setLayoutScope(value)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block font-medium">{label}</span>
+                  <span className="block text-muted-foreground">{hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setLayoutDialog(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!layoutName.trim()}>
+              Save
+            </Button>
+          </div>
+          {savedLayouts.length > 0 || personalLayouts.length > 0 ? (
+            <div className="border-hairline border-t pt-3">
+              <p className="mb-2 text-muted-foreground text-xs">Saved layouts</p>
+              <ul className="max-h-52 space-y-1 overflow-auto">
+                {savedLayouts.map((layout) => (
+                  <li key={layout.id} className="flex items-center gap-2">
+                    <input
+                      aria-label={`Rename ${layout.name}`}
+                      defaultValue={layout.name}
+                      disabled={!canEdit}
+                      onBlur={(event) => {
+                        const next = event.target.value.trim();
+                        if (!next || next === layout.name) {
+                          event.target.value = layout.name;
+                          return;
+                        }
+                        try {
+                          renameSavedViewLayout(ydoc, layout.id, next);
+                        } catch {
+                          event.target.value = layout.name;
+                        }
+                      }}
+                      className={cn(fieldClass, "h-8 min-w-0 flex-1 px-2 text-xs")}
+                    />
+                    <span className="shrink-0 text-[10px] text-muted-foreground">shared</span>
+                    <button
+                      type="button"
+                      disabled={!canEdit}
+                      aria-label={`Delete ${layout.name}`}
+                      onClick={() => deleteSavedViewLayout(ydoc, layout.id)}
+                      className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:text-destructive disabled:opacity-40"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+                {personalLayouts.map((layout, index) => (
+                  <li key={layout.id} className="flex items-center gap-2">
+                    <input
+                      aria-label={`Rename ${layout.name}`}
+                      defaultValue={layout.name}
+                      onBlur={(event) => {
+                        const next = event.target.value.trim().slice(0, 80);
+                        if (!next) {
+                          event.target.value = layout.name;
+                          return;
+                        }
+                        const updated = personalLayouts.map((item, position) =>
+                          position === index ? { ...item, name: next } : item,
+                        );
+                        setPersonalLayouts(updated);
+                        window.localStorage.setItem(
+                          `stash:view-layouts:${userId}:${documentId}`,
+                          JSON.stringify(updated),
+                        );
+                      }}
+                      className={cn(fieldClass, "h-8 min-w-0 flex-1 px-2 text-xs")}
+                    />
+                    <span className="shrink-0 text-[10px] text-muted-foreground">personal</span>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${layout.name}`}
+                      onClick={() => {
+                        const updated = personalLayouts.filter((_, position) => position !== index);
+                        setPersonalLayouts(updated);
+                        window.localStorage.setItem(
+                          `stash:view-layouts:${userId}:${documentId}`,
+                          JSON.stringify(updated),
+                        );
+                      }}
+                      className="shrink-0 rounded-sm p-1.5 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </form>
+      </Dialog>
+      <Dialog
         open={propertyDialog}
         onClose={() => setPropertyDialog(false)}
         title="New property"
@@ -1196,7 +1547,11 @@ export function ViewEditor({
               Cancel
             </Button>
             <Button
-              disabled={!propertyName.trim()}
+              disabled={
+                !propertyName.trim() ||
+                (propertyType === "formula" && !propertyExpression.trim()) ||
+                (propertyType === "rollup" && rollupOperation !== "count" && !rollupPropertyId)
+              }
               onClick={async () => {
                 const options =
                   propertyType === "status"
@@ -1212,9 +1567,21 @@ export function ViewEditor({
                     name: propertyName,
                     type: propertyType,
                     options,
+                    expression: propertyType === "formula" ? propertyExpression : undefined,
+                    rollup:
+                      propertyType === "rollup"
+                        ? {
+                            operation: rollupOperation,
+                            propertyId:
+                              rollupOperation === "count"
+                                ? undefined
+                                : (rollupPropertyId as Id<"documentProperties">),
+                          }
+                        : undefined,
                   });
                   setVisible(propertyId, true);
                   setPropertyName("");
+                  setPropertyExpression("");
                   setPropertyDialog(false);
                 } catch {
                   notify.error("Couldn’t create property");
@@ -1250,6 +1617,52 @@ export function ViewEditor({
               onChange={(value) => setPropertyType(value as PropertyType)}
             />
           </div>
+          {propertyType === "formula" ? (
+            <label className="block">
+              <span className="mb-1.5 block font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+                Expression
+              </span>
+              <textarea
+                value={propertyExpression}
+                onChange={(event) => setPropertyExpression(event.target.value.slice(0, 1000))}
+                className={cn(fieldClass, "min-h-24 w-full p-2 text-xs")}
+                placeholder={`{property-id} * 2 or JOIN(" · ",{property-id})`}
+              />
+              <span className="mt-1 block text-[10px] text-muted-foreground">
+                Reference fields with their stable id shown below.
+              </span>
+            </label>
+          ) : null}
+          {propertyType === "rollup" ? (
+            <div className="grid grid-cols-2 gap-2">
+              <MenuSelect
+                label="Rollup operation"
+                value={rollupOperation}
+                options={[
+                  { value: "count", label: "Count links" },
+                  { value: "sum", label: "Sum" },
+                  { value: "latest", label: "Latest date" },
+                ]}
+                onChange={(value) => setRollupOperation(value as typeof rollupOperation)}
+              />
+              {rollupOperation !== "count" ? (
+                <MenuSelect
+                  label="Rollup property"
+                  value={rollupPropertyId}
+                  options={properties
+                    .filter((property) =>
+                      rollupOperation === "sum"
+                        ? property.type === "number"
+                        : property.type === "date",
+                    )
+                    .map((property) => ({ value: property.id, label: property.name }))}
+                  onChange={setRollupPropertyId}
+                />
+              ) : (
+                <div />
+              )}
+            </div>
+          ) : null}
           {properties.length > 0 ? (
             <div className="border-hairline border-t pt-3">
               <p className="mb-2 text-muted-foreground text-xs">Existing properties</p>
@@ -1260,7 +1673,7 @@ export function ViewEditor({
                     className="flex items-center justify-between gap-2 rounded-sm px-2 py-1.5 hover:bg-foreground/[0.04]"
                   >
                     <span className="truncate text-xs">
-                      {property.name} · {property.type}
+                      {property.name} · {property.type} · {property.id}
                     </span>
                     {deletePropertyId === property.id ? (
                       <span className="flex items-center gap-1">

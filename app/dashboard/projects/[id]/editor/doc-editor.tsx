@@ -56,7 +56,17 @@ import {
   editorTheme,
   languageExtension,
 } from "@/app/dashboard/projects/[id]/editor/lib/editor-theme";
+import { markdownVisualExtension } from "@/app/dashboard/projects/[id]/editor/lib/markdown-visual";
 import { pathOf, type TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
+
+export type MarkdownFormat = "bold" | "italic" | "heading" | "list" | "link" | "image" | "code";
+
+export type InlineMentionCandidate = {
+  userId: string;
+  name: string;
+  email: string;
+  hasAccess?: boolean;
+};
 
 type DocEditorProps = {
   initialContent: string;
@@ -75,16 +85,21 @@ type DocEditorProps = {
   onInsertImage?: (file: File) => Promise<string | null>;
   fileNode?: TreeNode;
   nodes?: TreeNode[];
+  visualMode?: boolean;
+  assetUrls?: ReadonlyMap<string, string>;
+  mentionCandidates?: InlineMentionCandidate[];
 };
 
 export type DocEditorHandle = {
   focusRange: (from: number, to: number) => void;
+  format: (format: MarkdownFormat) => void;
 };
 
 export type EditorSelectionState = {
   from: number;
   to: number;
   text: string;
+  activeFormats: MarkdownFormat[];
 };
 
 export type CommentRange = {
@@ -133,6 +148,7 @@ const remoteCursorTheme = EditorView.theme({
     right: "-1px",
   },
 });
+const EMPTY_ASSET_URLS: ReadonlyMap<string, string> = new Map();
 
 const CARET_INFO_MARGIN = 4;
 
@@ -416,6 +432,7 @@ function fileCompletions(
       })
       .map((node) => ({
         label: relativePath(fileNode, node, nodes),
+        apply: `?file=${node.id}`,
         detail:
           node.parentId === fileNode.parentId
             ? "Same folder"
@@ -426,11 +443,34 @@ function fileCompletions(
   };
 }
 
+function mentionCompletions(getCandidates: () => InlineMentionCandidate[]) {
+  return (context: CompletionContext) => {
+    const before = context.matchBefore(/@[\p{L}\p{N}_.-]*/u);
+    if (
+      !before ||
+      (before.from > 0 && /[\w@]/.test(context.state.sliceDoc(before.from - 1, before.from)))
+    ) {
+      return null;
+    }
+    return {
+      from: before.from,
+      options: getCandidates().map((candidate) => ({
+        label: `@${candidate.name}`,
+        detail: candidate.hasAccess === false ? "No document access" : candidate.email,
+        type: "variable",
+        apply: `@[${candidate.name.replaceAll("]", "")}](user:${candidate.userId})`,
+      })),
+      validFor: /@[\p{L}\p{N}_.-]*/u,
+    };
+  };
+}
+
 function editorExtensions(
   language: "md" | "html",
   collab: boolean,
   getFileNode: () => TreeNode | undefined,
   getNodes: () => TreeNode[],
+  getMentionCandidates: () => InlineMentionCandidate[],
 ) {
   const editorKeymap = [
     closeBracketsKeymap,
@@ -459,7 +499,12 @@ function editorExtensions(
     syntaxHighlighting(editorHighlightStyle, { fallback: true }),
     bracketMatching(),
     closeBrackets(),
-    autocompletion({ override: [fileCompletions(language, getFileNode, getNodes)] }),
+    autocompletion({
+      override: [
+        mentionCompletions(getMentionCandidates),
+        fileCompletions(language, getFileNode, getNodes),
+      ],
+    }),
     rectangularSelection(),
     crosshairCursor(),
     search({ top: true, createPanel: createStashSearchPanel }),
@@ -480,6 +525,58 @@ function editorExtensions(
 
 function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+function activeMarkdownFormats(state: EditorState): MarkdownFormat[] {
+  const position = state.selection.main.head;
+  const line = state.doc.lineAt(position);
+  const offset = position - line.from;
+  const before = line.text.slice(0, offset);
+  const after = line.text.slice(offset);
+  const formats: MarkdownFormat[] = [];
+  if (/\*\*[^*]*$/.test(before) && /^[^*]*\*\*/.test(after)) formats.push("bold");
+  if (/(?:^|[^*])\*[^*]*$/.test(before) && /^[^*]*\*(?:[^*]|$)/.test(after)) formats.push("italic");
+  if (/^\s*#{1,6}\s/.test(line.text)) formats.push("heading");
+  if (/^\s*(?:[-*+] |\d+[.)] )/.test(line.text)) formats.push("list");
+  if (/\[[^\]]*$/.test(before) && /^[^\]]*\]\([^)]+\)/.test(after)) formats.push("link");
+  if (/`[^`]*$/.test(before) && /^[^`]*`/.test(after)) formats.push("code");
+  return formats;
+}
+
+function applyMarkdownFormat(view: EditorView, format: MarkdownFormat): void {
+  const selection = view.state.selection.main;
+  const selected = view.state.sliceDoc(selection.from, selection.to);
+  if (format === "heading" || format === "list") {
+    const line = view.state.doc.lineAt(selection.head);
+    const pattern = format === "heading" ? /^\s*#{1,6}\s+/ : /^\s*(?:[-*+] |\d+[.)] )/;
+    const match = pattern.exec(line.text);
+    const insert = match ? "" : format === "heading" ? "## " : "- ";
+    view.dispatch({
+      changes: { from: line.from, to: line.from + (match?.[0].length ?? 0), insert },
+      selection: { anchor: selection.head + insert.length - (match?.[0].length ?? 0) },
+    });
+    view.focus();
+    return;
+  }
+  const wrappers: Record<Exclude<MarkdownFormat, "heading" | "list">, [string, string]> = {
+    bold: ["**", "**"],
+    italic: ["*", "*"],
+    link: ["[", "](https://)"],
+    image: ["![", "](asset-path)"],
+    code: ["`", "`"],
+  };
+  const [opening, closing] = wrappers[format];
+  const wrapped = `${opening}${selected}${closing}`;
+  view.dispatch({
+    changes: { from: selection.from, to: selection.to, insert: wrapped },
+    selection: selected
+      ? {
+          anchor: selection.from + opening.length,
+          head: selection.from + opening.length + selected.length,
+        }
+      : { anchor: selection.from + opening.length },
+  });
+  view.focus();
 }
 
 function imageFilesFrom(data: DataTransfer | null): File[] {
@@ -541,6 +638,9 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
     onInsertImage,
     fileNode,
     nodes,
+    visualMode = false,
+    assetUrls = EMPTY_ASSET_URLS,
+    mentionCandidates = [],
   },
   ref,
 ) {
@@ -555,6 +655,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
   const activeCommentIdRef = useRef(activeCommentId);
   const fileNodeRef = useRef(fileNode);
   const nodesRef = useRef(nodes ?? []);
+  const mentionCandidatesRef = useRef(mentionCandidates);
   const initialContentRef = useRef(initialContent);
 
   useEffect(() => {
@@ -596,6 +697,10 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
   }, [nodes]);
 
   useEffect(() => {
+    mentionCandidatesRef.current = mentionCandidates;
+  }, [mentionCandidates]);
+
+  useEffect(() => {
     initialContentRef.current = initialContent;
   }, [initialContent]);
 
@@ -615,8 +720,12 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
         });
         view.focus();
       },
+      format(format) {
+        const view = viewRef.current;
+        if (view && language === "md" && !readOnly) applyMarkdownFormat(view, format);
+      },
     }),
-    [],
+    [language, readOnly],
   );
 
   useEffect(() => {
@@ -724,6 +833,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
           collab,
           () => fileNodeRef.current,
           () => nodesRef.current,
+          () => mentionCandidatesRef.current,
         ),
         EditorState.readOnly.of(readOnly),
         maxContentBytes
@@ -739,6 +849,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
             })
           : [],
         ...commentExtensions,
+        ...(visualMode && language === "md" ? [markdownVisualExtension(assetUrls)] : []),
         imageInsertHandlers,
         ...collabExtensions,
         EditorView.updateListener.of((update) => {
@@ -751,6 +862,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
               from: selection.from,
               to: selection.to,
               text: update.state.sliceDoc(selection.from, selection.to),
+              activeFormats: activeMarkdownFormats(update.state),
             });
           }
         }),
@@ -762,13 +874,14 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
       from: selection.from,
       to: selection.to,
       text: view.state.sliceDoc(selection.from, selection.to),
+      activeFormats: activeMarkdownFormats(view.state),
     });
     return () => {
       viewRef.current = null;
       view.destroy();
       undoManager?.destroy();
     };
-  }, [language, maxContentBytes, readOnly, ytext, awareness]);
+  }, [language, maxContentBytes, readOnly, ytext, awareness, visualMode, assetUrls]);
 
   useEffect(() => {
     const view = viewRef.current;

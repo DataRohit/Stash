@@ -46,8 +46,9 @@ export function NotificationBell() {
   const openNotification = async (notification: NonNullable<typeof notifications>[number]) => {
     await markRead({ notificationId: notification.id as Id<"notifications"> });
     setOpen(false);
+    const thread = notification.commentId ? `&thread=${notification.commentId}` : "";
     router.push(
-      `/dashboard/projects/${notification.projectId}/editor?file=${notification.documentId}&thread=${notification.commentId}`,
+      `/dashboard/projects/${notification.projectId}/editor?file=${notification.documentId}${thread}`,
     );
   };
 
@@ -236,15 +237,17 @@ export function NotificationBell() {
                         <span className="flex items-center justify-between gap-2">
                           <span className="min-w-0 truncate text-xs">
                             {notification.actorName}{" "}
-                            {notification.kind === "reply"
-                              ? "replied to a thread"
-                              : notification.kind === "resolved"
-                                ? "resolved a thread"
-                                : notification.kind === "reopened"
-                                  ? "reopened a thread"
-                                  : notification.kind === "watching"
-                                    ? "commented on a document you watch"
-                                    : "mentioned you"}
+                            {notification.kind === "document-mention"
+                              ? "mentioned you in a document"
+                              : notification.kind === "reply"
+                                ? "replied to a thread"
+                                : notification.kind === "resolved"
+                                  ? "resolved a thread"
+                                  : notification.kind === "reopened"
+                                    ? "reopened a thread"
+                                    : notification.kind === "watching"
+                                      ? "commented on a document you watch"
+                                      : "mentioned you"}
                           </span>
                           <time
                             dateTime={new Date(notification.createdAt).toISOString()}

@@ -1,7 +1,9 @@
 import * as Y from "yjs";
 
-const CHART_TYPES = ["line", "bar", "area", "pie"] as const;
+const CHART_TYPES = ["line", "bar", "area", "pie", "scatter", "stacked-bar", "combo"] as const;
 export type ChartType = (typeof CHART_TYPES)[number];
+type ChartSourceType = "sheet" | "view";
+type ChartAggregate = "count" | "sum";
 
 export const MAX_CHART_SERIES = 12;
 const MAX_CHART_TITLE_LENGTH = 200;
@@ -27,6 +29,7 @@ type ChartSeries = {
   id: string;
   colId: string;
   color: string;
+  role: "bar" | "line";
 };
 
 export type ChartConfig = {
@@ -38,6 +41,10 @@ export type ChartConfig = {
   startRowId: string | null;
   endRowId: string | null;
   series: ChartSeries[];
+  sourceType: ChartSourceType;
+  groupPropertyId: string | null;
+  valuePropertyId: string | null;
+  aggregate: ChartAggregate;
 };
 
 const CONFIG_KEYS = new Set([
@@ -48,6 +55,10 @@ const CONFIG_KEYS = new Set([
   "headerRow",
   "startRowId",
   "endRowId",
+  "sourceType",
+  "groupPropertyId",
+  "valuePropertyId",
+  "aggregate",
 ]);
 
 export type ChartRoots = {
@@ -111,6 +122,10 @@ export function inspectChart(ydoc: Y.Doc): ChartConfig {
   const headerRow = roots.config.get("headerRow") ?? true;
   const startRowId = roots.config.get("startRowId") ?? null;
   const endRowId = roots.config.get("endRowId") ?? null;
+  const sourceType = roots.config.get("sourceType") ?? "sheet";
+  const groupPropertyId = roots.config.get("groupPropertyId") ?? null;
+  const valuePropertyId = roots.config.get("valuePropertyId") ?? null;
+  const aggregate = roots.config.get("aggregate") ?? "count";
   if (
     !CHART_TYPES.includes(type as ChartType) ||
     typeof title !== "string" ||
@@ -120,6 +135,10 @@ export function inspectChart(ydoc: Y.Doc): ChartConfig {
     typeof headerRow !== "boolean" ||
     !(startRowId === null || isId(startRowId)) ||
     !(endRowId === null || isId(endRowId)) ||
+    (sourceType !== "sheet" && sourceType !== "view") ||
+    !(groupPropertyId === null || isId(groupPropertyId)) ||
+    !(valuePropertyId === null || isId(valuePropertyId)) ||
+    (aggregate !== "count" && aggregate !== "sum") ||
     [...roots.config.keys()].some((key) => !CONFIG_KEYS.has(key))
   ) {
     throw new ChartValidationError();
@@ -131,14 +150,16 @@ export function inspectChart(ydoc: Y.Doc): ChartConfig {
     if (!(entry instanceof Y.Map)) throw new ChartValidationError();
     const colId = entry.get("colId");
     const color = entry.get("color");
+    const role = entry.get("role") ?? "bar";
     if (
       !isId(colId) ||
       !isColor(color) ||
-      [...entry.keys()].some((key) => key !== "colId" && key !== "color")
+      (role !== "bar" && role !== "line") ||
+      [...entry.keys()].some((key) => key !== "colId" && key !== "color" && key !== "role")
     ) {
       throw new ChartValidationError();
     }
-    return { id, colId, color };
+    return { id, colId, color, role: role as ChartSeries["role"] };
   });
   return {
     type: type as ChartType,
@@ -149,6 +170,10 @@ export function inspectChart(ydoc: Y.Doc): ChartConfig {
     startRowId: startRowId as string | null,
     endRowId: endRowId as string | null,
     series,
+    sourceType: sourceType as ChartSourceType,
+    groupPropertyId: groupPropertyId as string | null,
+    valuePropertyId: valuePropertyId as string | null,
+    aggregate: aggregate as ChartAggregate,
   };
 }
 
@@ -163,6 +188,10 @@ export function seedChart(ydoc: Y.Doc): void {
     roots.config.set("headerRow", true);
     roots.config.set("startRowId", null);
     roots.config.set("endRowId", null);
+    roots.config.set("sourceType", "sheet");
+    roots.config.set("groupPropertyId", null);
+    roots.config.set("valuePropertyId", null);
+    roots.config.set("aggregate", "count");
   }, "seed");
 }
 
@@ -178,12 +207,17 @@ export function replaceChartState(current: Y.Doc, target: Y.Doc): void {
     currentRoots.config.set("headerRow", targetConfig.headerRow);
     currentRoots.config.set("startRowId", targetConfig.startRowId);
     currentRoots.config.set("endRowId", targetConfig.endRowId);
+    currentRoots.config.set("sourceType", targetConfig.sourceType);
+    currentRoots.config.set("groupPropertyId", targetConfig.groupPropertyId);
+    currentRoots.config.set("valuePropertyId", targetConfig.valuePropertyId);
+    currentRoots.config.set("aggregate", targetConfig.aggregate);
     for (const key of [...currentRoots.series.keys()]) currentRoots.series.delete(key);
     currentRoots.seriesOrder.delete(0, currentRoots.seriesOrder.length);
     for (const series of targetConfig.series) {
       const entry = new Y.Map<unknown>();
       entry.set("colId", series.colId);
       entry.set("color", series.color);
+      entry.set("role", series.role);
       currentRoots.series.set(series.id, entry);
     }
     currentRoots.seriesOrder.insert(

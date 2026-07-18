@@ -19,7 +19,7 @@ import {
   UserRound,
 } from "lucide-react";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Awareness } from "y-protocols/awareness";
 import * as Y from "yjs";
@@ -35,13 +35,17 @@ import {
   boardColor,
   boardColorForId,
   boardId,
+  columnWipLimit,
   createBoardCard,
+  createChecklistItem,
   getBoardRoots,
   inspectBoard,
   MAX_BOARD_CARDS,
   MAX_BOARD_COLUMNS,
   MAX_BOARD_LABELS,
+  MAX_CARD_CHECKLIST_ITEMS,
   orderedCards,
+  readBoardSettings,
   UNFILED_COLUMN_ID,
 } from "@/lib/board-model";
 import { fieldClass } from "@/lib/ui";
@@ -64,6 +68,7 @@ type NewCardDraft = {
   columnId: string;
   color: string;
   priority: BoardPriority | null;
+  checklist: Array<{ id: string; text: string; done: boolean }>;
 };
 
 const LABEL_COLORS = ["#2563eb", "#16a34a", "#ca8a04", "#dc2626", "#9333ea", "#0891b2"];
@@ -675,6 +680,7 @@ export function BoardEditor({
   canEdit,
   members,
   nodes,
+  documentId,
   selectedCardId,
   onSelectionChange,
   onOpenComments,
@@ -686,6 +692,7 @@ export function BoardEditor({
   canEdit: boolean;
   members: MentionCandidate[];
   nodes: TreeNode[];
+  documentId: string;
   selectedCardId: string | null;
   onSelectionChange: (selection: BoardCardSelection | null) => void;
   onOpenComments: () => void;
@@ -696,6 +703,30 @@ export function BoardEditor({
   const [detailCardId, setDetailCardId] = useState<string | null>(null);
   const [newCardDraft, setNewCardDraft] = useState<NewCardDraft | null>(null);
   const [newColumnName, setNewColumnName] = useState("");
+  const [assigneeFilter, setAssigneeFilter] = useState("");
+  const [labelFilter, setLabelFilter] = useState("");
+  const [dueFilter, setDueFilter] = useState<"" | "overdue" | "today" | "upcoming" | "none">("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        const value = JSON.parse(
+          window.localStorage.getItem(`stash:board-filters:${documentId}`) ?? "{}",
+        );
+        setAssigneeFilter(typeof value.assignee === "string" ? value.assignee : "");
+        setLabelFilter(typeof value.label === "string" ? value.label : "");
+        setDueFilter(["overdue", "today", "upcoming", "none"].includes(value.due) ? value.due : "");
+      } catch {}
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [documentId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      `stash:board-filters:${documentId}`,
+      JSON.stringify({ assignee: assigneeFilter, label: labelFilter, due: dueFilter }),
+    );
+  }, [assigneeFilter, documentId, dueFilter, labelFilter]);
 
   useEffect(() => {
     const update = () => setRevision((value) => value + 1);
@@ -734,7 +765,16 @@ export function BoardEditor({
         cards: orderedCards(roots, inspection, id),
       }));
       const unfiled = orderedCards(roots, inspection, UNFILED_COLUMN_ID);
-      return { roots, inspection, columns, unfiled };
+      return {
+        roots,
+        inspection,
+        columns: columns.map((column) => ({
+          ...column,
+          wipLimit: columnWipLimit(roots, column.id),
+        })),
+        unfiled,
+        settings: readBoardSettings(roots),
+      };
     } catch {
       return null;
     }
@@ -781,14 +821,43 @@ export function BoardEditor({
     });
   };
 
-  const moveCard = (cardId: string, targetColumnId: string, beforeCardId?: string) => {
+  const moveCard = (
+    cardId: string,
+    targetColumnId: string,
+    beforeCardId?: string,
+    laneId?: string,
+  ) => {
     if (!canEdit || !model) return;
     const card = model.roots.cards.get(cardId);
     const target = model.roots.cardOrder.get(targetColumnId);
     if (!card || !target) return;
+    const sourceColumnId = String(card.get("columnId"));
+    const limit =
+      targetColumnId === UNFILED_COLUMN_ID ? null : columnWipLimit(model.roots, targetColumnId);
+    const targetCount = model.inspection.cards.size
+      ? [...model.inspection.cards.values()].filter(
+          (candidate) => candidate.columnId === targetColumnId,
+        ).length
+      : 0;
+    if (
+      model.settings.enforceWipLimits &&
+      limit !== null &&
+      sourceColumnId !== targetColumnId &&
+      targetCount >= limit
+    ) {
+      notify.error("Work-in-progress limit reached", {
+        description: "Move another card out of this column first.",
+      });
+      finishDrag();
+      return;
+    }
     ydoc.transact(() => {
       removeFromOrders(ydoc, cardId);
       card.set("columnId", targetColumnId);
+      if (laneId !== undefined && model.settings.laneMode !== "none") {
+        const field = card.get(model.settings.laneMode === "assignee" ? "assignees" : "labels");
+        if (field instanceof Y.Array) replaceArray(field, laneId === "none" ? [] : [laneId]);
+      }
       const index = beforeCardId ? target.toArray().indexOf(beforeCardId) : -1;
       target.insert(index >= 0 ? index : target.length, [cardId]);
     }, "board-move");
@@ -826,6 +895,7 @@ export function BoardEditor({
       columnId,
       color: boardColorForId(boardId()),
       priority: null,
+      checklist: [],
     });
   };
 
@@ -862,12 +932,23 @@ export function BoardEditor({
         const description = live.get("description");
         const assignees = live.get("assignees");
         const labels = live.get("labels");
+        const checklist = live.get("checklist");
         if (description instanceof Y.Text && newCardDraft.description)
           description.insert(0, newCardDraft.description);
         if (assignees instanceof Y.Array && newCardDraft.assignees.length > 0)
           assignees.insert(0, newCardDraft.assignees);
         if (labels instanceof Y.Array && newCardDraft.labels.length > 0)
           labels.insert(0, newCardDraft.labels);
+        if (checklist instanceof Y.Array && newCardDraft.checklist.length > 0) {
+          checklist.insert(
+            0,
+            newCardDraft.checklist.map((item) => {
+              const map = createChecklistItem(item.text, item.id);
+              map.set("done", item.done);
+              return map;
+            }),
+          );
+        }
       }
       order.push([id]);
     }, "board-edit");
@@ -927,7 +1008,6 @@ export function BoardEditor({
     : [];
   const memberById = new Map(members.map((member) => [member.userId, member]));
   const linkedFiles = nodes.filter((node) => node.kind === "file");
-
   if (!ready || !model) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground text-sm">
@@ -935,17 +1015,130 @@ export function BoardEditor({
       </div>
     );
   }
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).valueOf();
+  const visibleCards = (cards: (typeof model.columns)[number]["cards"]) =>
+    cards.filter((card) => {
+      if (assigneeFilter && !card.assignees.includes(assigneeFilter)) return false;
+      if (labelFilter && !card.labels.includes(labelFilter)) return false;
+      if (dueFilter === "none" && card.due !== null) return false;
+      if (dueFilter === "overdue" && !(card.due !== null && card.due < todayStart)) return false;
+      if (
+        dueFilter === "today" &&
+        !(card.due !== null && card.due >= todayStart && card.due < todayStart + 86_400_000)
+      )
+        return false;
+      if (dueFilter === "upcoming" && !(card.due !== null && card.due >= todayStart + 86_400_000))
+        return false;
+      return true;
+    });
+  const laneIdFor = (card: (typeof model.columns)[number]["cards"][number]) =>
+    model.settings.laneMode === "assignee"
+      ? (card.assignees[0] ?? "none")
+      : model.settings.laneMode === "label"
+        ? (card.labels[0] ?? "none")
+        : "all";
+  const laneName = (id: string) =>
+    id === "none"
+      ? "None"
+      : model.settings.laneMode === "assignee"
+        ? (memberById.get(id)?.name ?? "Former member")
+        : String(model.roots.labelMeta.get(id)?.get("name") ?? "Removed label");
 
   return (
     <section
       className="flex h-full min-h-0 flex-col bg-background"
       aria-label="Kanban board editor"
     >
+      <div className="thin-scrollbar flex shrink-0 items-center gap-2 overflow-x-auto border-hairline border-b bg-surface/50 p-2">
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+          Filters
+        </span>
+        <select
+          aria-label="Filter by assignee"
+          value={assigneeFilter}
+          onChange={(event) => setAssigneeFilter(event.target.value)}
+          className={cn(fieldClass, "h-8 min-w-36 text-xs")}
+        >
+          <option value="">All assignees</option>
+          {members.map((member) => (
+            <option key={member.userId} value={member.userId}>
+              {member.name}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter by label"
+          value={labelFilter}
+          onChange={(event) => setLabelFilter(event.target.value)}
+          className={cn(fieldClass, "h-8 min-w-32 text-xs")}
+        >
+          <option value="">All labels</option>
+          {[...model.roots.labelMeta.entries()].map(([id, meta]) => (
+            <option key={id} value={id}>
+              {String(meta.get("name"))}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter by due date"
+          value={dueFilter}
+          onChange={(event) => setDueFilter(event.target.value as typeof dueFilter)}
+          className={cn(fieldClass, "h-8 min-w-32 text-xs")}
+        >
+          <option value="">Any due date</option>
+          <option value="overdue">Overdue</option>
+          <option value="today">Due today</option>
+          <option value="upcoming">Upcoming</option>
+          <option value="none">No due date</option>
+        </select>
+        {assigneeFilter || labelFilter || dueFilter ? (
+          <button
+            type="button"
+            onClick={() => {
+              setAssigneeFilter("");
+              setLabelFilter("");
+              setDueFilter("");
+            }}
+            className="shrink-0 rounded-full border border-hairline px-2 py-1 text-[10px] text-muted-foreground"
+          >
+            Clear filters
+          </button>
+        ) : null}
+        <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+          Swim lanes
+        </span>
+        <select
+          aria-label="Board swim lanes"
+          value={model.settings.laneMode}
+          disabled={!canEdit}
+          onChange={(event) => model.roots.settings.set("laneMode", event.target.value)}
+          className={cn(fieldClass, "h-8 min-w-32 text-xs")}
+        >
+          <option value="none">None</option>
+          <option value="assignee">Assignee</option>
+          <option value="label">Label</option>
+        </select>
+        <label className="flex shrink-0 items-center gap-1.5 text-muted-foreground text-xs">
+          <input
+            type="checkbox"
+            disabled={!canEdit}
+            checked={model.settings.enforceWipLimits}
+            onChange={(event) => model.roots.settings.set("enforceWipLimits", event.target.checked)}
+          />{" "}
+          Enforce limits
+        </label>
+      </div>
       <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-3">
         {model.columns.map((column) => (
           <fieldset
             key={column.id}
-            className="flex w-72 shrink-0 flex-col rounded-lg border border-hairline bg-surface/65"
+            className={cn(
+              "flex w-72 shrink-0 flex-col rounded-lg border bg-surface/65",
+              column.wipLimit !== null && column.cards.length > column.wipLimit
+                ? "border-warning"
+                : "border-hairline",
+            )}
             style={{
               ...(remoteStates.find(
                 (state) =>
@@ -1000,9 +1193,39 @@ export function BoardEditor({
                 }
                 className="min-w-0 flex-1 bg-transparent px-1 font-medium text-sm outline-none"
               />
-              <span className="rounded-full bg-foreground/[0.06] px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+              <button
+                type="button"
+                disabled={!canEdit}
+                onClick={() => {
+                  const raw = window.prompt(
+                    "Work-in-progress limit (leave blank for none)",
+                    column.wipLimit?.toString() ?? "",
+                  );
+                  if (raw === null) return;
+                  const meta = model.roots.columnMeta.get(column.id);
+                  if (!raw.trim()) meta?.delete("wipLimit");
+                  else {
+                    const value = Number(raw);
+                    if (Number.isInteger(value) && value > 0 && value <= MAX_BOARD_CARDS)
+                      meta?.set("wipLimit", value);
+                  }
+                }}
+                className={cn(
+                  "rounded-full px-2 py-0.5 font-mono text-[10px]",
+                  column.wipLimit !== null && column.cards.length > column.wipLimit
+                    ? "bg-warning/15 text-warning"
+                    : "bg-foreground/[0.06] text-muted-foreground",
+                )}
+                aria-label={`Set work-in-progress limit for ${column.name}`}
+                title={
+                  column.wipLimit === null
+                    ? "Set WIP limit"
+                    : `${column.cards.length} of ${column.wipLimit}${column.cards.length > column.wipLimit ? " · over limit" : ""}`
+                }
+              >
                 {column.cards.length}
-              </span>
+                {column.wipLimit === null ? "" : ` / ${column.wipLimit}`}
+              </button>
               {canEdit ? (
                 <>
                   <button
@@ -1054,155 +1277,206 @@ export function BoardEditor({
                     {state.user?.name} is moving a card here
                   </div>
                 ))}
-              {column.cards.map((card) => {
-                const remote = remoteForCard(card.id);
-                const due = card.due ? cardDueDetails(card.due) : null;
-                const assignees = card.assignees.map((id) => memberById.get(id));
-                const linkedDocument = card.linkedDocId
-                  ? linkedFiles.find((node) => node.id === card.linkedDocId)
-                  : null;
-                return (
-                  <button
-                    type="button"
-                    key={card.id}
-                    data-board-card={card.id}
-                    draggable={canEdit}
-                    onDragStart={() =>
-                      startDrag({ kind: "card", id: card.id, fromColumnId: column.id })
-                    }
-                    onDragOver={(event) => {
-                      event.preventDefault();
-                      announceDropTarget(column.id, card.id);
-                    }}
-                    onDrop={(event) => {
-                      event.stopPropagation();
-                      if (drag?.kind === "card") moveCard(drag.id, column.id, card.id);
-                    }}
-                    onClick={() => selectCard(card.id, card.title)}
-                    onDoubleClick={() => setDetailCardId(card.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        selectCard(card.id, card.title);
-                        setDetailCardId(card.id);
-                      }
-                    }}
-                    onDragEnd={finishDrag}
-                    className={cn(
-                      "group w-full cursor-pointer rounded-lg border p-3 text-left shadow-sm transition-all hover:shadow-md",
-                      selectedCardId === card.id
-                        ? "bg-foreground/[0.04]"
-                        : "bg-surface hover:bg-foreground/[0.02]",
-                    )}
-                    style={{
-                      borderColor: `${card.color}99`,
-                      ...(remote[0]?.user?.color
-                        ? { boxShadow: `0 0 0 2px ${remote[0].user.color}` }
-                        : selectedCardId === card.id
-                          ? { boxShadow: `0 0 0 1px ${card.color}` }
-                          : {}),
-                    }}
-                  >
-                    {card.priority || card.labels.length > 0 ? (
-                      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-                        {card.priority ? (
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-semibold text-[10px] uppercase tracking-wide",
-                              PRIORITIES.find((item) => item.value === card.priority)?.className,
-                            )}
-                          >
-                            <span className="size-1.5 rounded-full bg-current" />
-                            {card.priority}
-                          </span>
-                        ) : null}
-                        {card.labels.flatMap((labelId) => {
-                          const meta = model.roots.labelMeta.get(labelId);
-                          return meta ? (
-                            <span
-                              key={labelId}
-                              className="rounded-full px-2 py-0.5 font-medium text-[10px]"
-                              style={{
-                                backgroundColor: `${String(meta.get("color"))}22`,
-                                color: String(meta.get("color")),
-                              }}
-                            >
-                              {String(meta.get("name"))}
-                            </span>
-                          ) : (
-                            []
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                    <h3 className="line-clamp-2 break-words font-semibold text-foreground text-sm leading-snug">
-                      {card.title}
-                    </h3>
-                    {card.description ? (
-                      <p className="mt-1.5 line-clamp-2 whitespace-pre-wrap break-words text-muted-foreground text-xs leading-relaxed">
-                        {card.description}
-                      </p>
-                    ) : null}
-                    {due || assignees.length > 0 || card.linkedDocId || remote.length > 0 ? (
-                      <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-hairline border-t pt-2.5">
-                        {due ? (
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-medium text-[10px]",
-                              due.className,
-                            )}
-                          >
-                            <CalendarDays className="size-3" />
-                            {due.label}
-                          </span>
-                        ) : null}
-                        {card.linkedDocId ? (
-                          <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-hairline bg-foreground/[0.04] px-2 py-0.5 text-[10px] text-muted-foreground">
-                            <Link2 className="size-3 shrink-0" />
-                            <span className="truncate">
-                              {linkedDocument?.name ?? "Removed document"}
-                            </span>
-                          </span>
-                        ) : null}
-                        {assignees.length > 0 ? (
-                          <div className="w-full space-y-1.5">
-                            {assignees.slice(0, 3).map((member, index) => (
+              {visibleCards(column.cards)
+                .sort((left, right) => laneIdFor(left).localeCompare(laneIdFor(right)))
+                .map((card, index, cards) => {
+                  const remote = remoteForCard(card.id);
+                  const due = card.due ? cardDueDetails(card.due) : null;
+                  const assignees = card.assignees.map((id) => memberById.get(id));
+                  const linkedDocument = card.linkedDocId
+                    ? linkedFiles.find((node) => node.id === card.linkedDocId)
+                    : null;
+                  const laneId = laneIdFor(card);
+                  const previousCard = cards[index - 1];
+                  const showLane =
+                    model.settings.laneMode !== "none" &&
+                    (!previousCard || laneIdFor(previousCard) !== laneId);
+                  const completed = card.checklist.filter((item) => item.done).length;
+                  return (
+                    <Fragment key={card.id}>
+                      {showLane ? (
+                        <fieldset
+                          aria-label={`${laneName(laneId)} lane drop target`}
+                          className="sticky top-0 z-[2] flex items-center gap-2 rounded-sm border border-hairline bg-surface/95 px-2 py-1.5 font-medium text-[10px]"
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={(event) => {
+                            event.stopPropagation();
+                            if (drag?.kind === "card")
+                              moveCard(drag.id, column.id, undefined, laneId);
+                          }}
+                        >
+                          <ChevronDown className="size-3" /> {laneName(laneId)}
+                        </fieldset>
+                      ) : null}
+                      <button
+                        type="button"
+                        key={card.id}
+                        data-board-card={card.id}
+                        draggable={canEdit}
+                        onDragStart={() =>
+                          startDrag({ kind: "card", id: card.id, fromColumnId: column.id })
+                        }
+                        onDragOver={(event) => {
+                          event.preventDefault();
+                          announceDropTarget(column.id, card.id);
+                        }}
+                        onDrop={(event) => {
+                          event.stopPropagation();
+                          if (drag?.kind === "card") moveCard(drag.id, column.id, card.id);
+                        }}
+                        onClick={() => selectCard(card.id, card.title)}
+                        onDoubleClick={() => setDetailCardId(card.id)}
+                        onKeyDown={(event) => {
+                          if (
+                            event.shiftKey &&
+                            (event.key === "ArrowLeft" || event.key === "ArrowRight")
+                          ) {
+                            event.preventDefault();
+                            const index = model.columns.findIndex(
+                              (candidate) => candidate.id === column.id,
+                            );
+                            const target =
+                              model.columns[index + (event.key === "ArrowLeft" ? -1 : 1)];
+                            if (target) moveCard(card.id, target.id);
+                            return;
+                          }
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            selectCard(card.id, card.title);
+                            setDetailCardId(card.id);
+                          }
+                        }}
+                        onDragEnd={finishDrag}
+                        className={cn(
+                          "group w-full cursor-pointer rounded-lg border p-3 text-left shadow-sm transition-all hover:shadow-md",
+                          selectedCardId === card.id
+                            ? "bg-foreground/[0.04]"
+                            : "bg-surface hover:bg-foreground/[0.02]",
+                        )}
+                        style={{
+                          borderColor: `${card.color}99`,
+                          ...(remote[0]?.user?.color
+                            ? { boxShadow: `0 0 0 2px ${remote[0].user.color}` }
+                            : selectedCardId === card.id
+                              ? { boxShadow: `0 0 0 1px ${card.color}` }
+                              : {}),
+                        }}
+                      >
+                        {card.priority || card.labels.length > 0 ? (
+                          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                            {card.priority ? (
                               <span
-                                key={card.assignees[index]}
-                                className="flex min-w-0 items-center gap-2"
+                                className={cn(
+                                  "inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-semibold text-[10px] uppercase tracking-wide",
+                                  PRIORITIES.find((item) => item.value === card.priority)
+                                    ?.className,
+                                )}
                               >
-                                <Avatar member={member} px={24} className="size-6" />
-                                <span className="min-w-0 leading-tight">
-                                  <span className="block truncate text-xs">
-                                    {member?.name ?? "Former member"}
-                                  </span>
-                                  <span className="block truncate text-[10px] text-muted-foreground">
-                                    {member?.email ?? "No longer in this project"}
-                                  </span>
+                                <span className="size-1.5 rounded-full bg-current" />
+                                {card.priority}
+                              </span>
+                            ) : null}
+                            {card.labels.flatMap((labelId) => {
+                              const meta = model.roots.labelMeta.get(labelId);
+                              return meta ? (
+                                <span
+                                  key={labelId}
+                                  className="rounded-full px-2 py-0.5 font-medium text-[10px]"
+                                  style={{
+                                    backgroundColor: `${String(meta.get("color"))}22`,
+                                    color: String(meta.get("color")),
+                                  }}
+                                >
+                                  {String(meta.get("name"))}
+                                </span>
+                              ) : (
+                                []
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                        <h3 className="line-clamp-2 break-words font-semibold text-foreground text-sm leading-snug">
+                          {card.title}
+                        </h3>
+                        {card.description ? (
+                          <p className="mt-1.5 line-clamp-2 whitespace-pre-wrap break-words text-muted-foreground text-xs leading-relaxed">
+                            {card.description}
+                          </p>
+                        ) : null}
+                        {card.checklist.length > 0 ? (
+                          <div className="mt-2 space-y-1 text-[10px] text-muted-foreground">
+                            <span>
+                              {completed} of {card.checklist.length}
+                            </span>
+                            <span className="block h-1 overflow-hidden rounded-full bg-foreground/[0.08]">
+                              <span
+                                className="block h-full bg-accent"
+                                style={{ width: `${(completed / card.checklist.length) * 100}%` }}
+                              />
+                            </span>
+                          </div>
+                        ) : null}
+                        {due || assignees.length > 0 || card.linkedDocId || remote.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-hairline border-t pt-2.5">
+                            {due ? (
+                              <span
+                                className={cn(
+                                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-medium text-[10px]",
+                                  due.className,
+                                )}
+                              >
+                                <CalendarDays className="size-3" />
+                                {due.label}
+                              </span>
+                            ) : null}
+                            {card.linkedDocId ? (
+                              <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-hairline bg-foreground/[0.04] px-2 py-0.5 text-[10px] text-muted-foreground">
+                                <Link2 className="size-3 shrink-0" />
+                                <span className="truncate">
+                                  {linkedDocument?.name ?? "Removed document"}
                                 </span>
                               </span>
-                            ))}
-                            {assignees.length > 3 ? (
-                              <span className="block pl-8 text-[10px] text-muted-foreground">
-                                +{assignees.length - 3} more assignee
-                                {assignees.length - 3 === 1 ? "" : "s"}
+                            ) : null}
+                            {assignees.length > 0 ? (
+                              <div className="w-full space-y-1.5">
+                                {assignees.slice(0, 3).map((member, index) => (
+                                  <span
+                                    key={card.assignees[index]}
+                                    className="flex min-w-0 items-center gap-2"
+                                  >
+                                    <Avatar member={member} px={24} className="size-6" />
+                                    <span className="min-w-0 leading-tight">
+                                      <span className="block truncate text-xs">
+                                        {member?.name ?? "Former member"}
+                                      </span>
+                                      <span className="block truncate text-[10px] text-muted-foreground">
+                                        {member?.email ?? "No longer in this project"}
+                                      </span>
+                                    </span>
+                                  </span>
+                                ))}
+                                {assignees.length > 3 ? (
+                                  <span className="block pl-8 text-[10px] text-muted-foreground">
+                                    +{assignees.length - 3} more assignee
+                                    {assignees.length - 3 === 1 ? "" : "s"}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {remote.length > 0 ? (
+                              <span
+                                className="w-full truncate text-[10px]"
+                                style={{ color: remote[0]?.user?.color }}
+                              >
+                                {remote[0]?.user?.name} is viewing
                               </span>
                             ) : null}
                           </div>
                         ) : null}
-                        {remote.length > 0 ? (
-                          <span
-                            className="w-full truncate text-[10px]"
-                            style={{ color: remote[0]?.user?.color }}
-                          >
-                            {remote[0]?.user?.name} is viewing
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </button>
-                );
-              })}
+                      </button>
+                    </Fragment>
+                  );
+                })}
               {canEdit ? (
                 <button
                   type="button"
@@ -1583,6 +1857,111 @@ export function BoardEditor({
                 </p>
               ) : null}
             </div>
+            <fieldset disabled={!canEdit}>
+              <legend className="mb-1.5 font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+                Checklist
+              </legend>
+              <div className="space-y-2 rounded-md border border-hairline p-2">
+                {activeCard.checklist.map((item) => (
+                  <div key={item.id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={item.done}
+                      onChange={(event) => {
+                        if (detailCard) {
+                          const checklist = model.roots.cards.get(detailCard.id)?.get("checklist");
+                          if (checklist instanceof Y.Array) {
+                            const map = checklist
+                              .toArray()
+                              .find(
+                                (entry) => entry instanceof Y.Map && entry.get("id") === item.id,
+                              );
+                            if (map instanceof Y.Map) map.set("done", event.target.checked);
+                          }
+                        } else {
+                          setNewCardDraft((draft) =>
+                            draft
+                              ? {
+                                  ...draft,
+                                  checklist: draft.checklist.map((candidate) =>
+                                    candidate.id === item.id
+                                      ? { ...candidate, done: event.target.checked }
+                                      : candidate,
+                                  ),
+                                }
+                              : draft,
+                          );
+                        }
+                      }}
+                    />
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 text-sm",
+                        item.done && "text-muted-foreground line-through",
+                      )}
+                    >
+                      {item.text}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (detailCard) {
+                          const checklist = model.roots.cards.get(detailCard.id)?.get("checklist");
+                          if (checklist instanceof Y.Array) {
+                            const index = checklist
+                              .toArray()
+                              .findIndex(
+                                (entry) => entry instanceof Y.Map && entry.get("id") === item.id,
+                              );
+                            if (index >= 0) checklist.delete(index, 1);
+                          }
+                        } else
+                          setNewCardDraft((draft) =>
+                            draft
+                              ? {
+                                  ...draft,
+                                  checklist: draft.checklist.filter(
+                                    (candidate) => candidate.id !== item.id,
+                                  ),
+                                }
+                              : draft,
+                          );
+                      }}
+                      className="p-1 text-muted-foreground hover:text-destructive"
+                      aria-label={`Remove ${item.text}`}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  disabled={!canEdit || activeCard.checklist.length >= MAX_CARD_CHECKLIST_ITEMS}
+                  onClick={() => {
+                    const text = window.prompt("Checklist item")?.trim();
+                    if (!text) return;
+                    if (detailCard) {
+                      const checklist = model.roots.cards.get(detailCard.id)?.get("checklist");
+                      if (checklist instanceof Y.Array) checklist.push([createChecklistItem(text)]);
+                    } else
+                      setNewCardDraft((draft) =>
+                        draft
+                          ? {
+                              ...draft,
+                              checklist: [
+                                ...draft.checklist,
+                                { id: boardId(), text: text.slice(0, 500), done: false },
+                              ],
+                            }
+                          : draft,
+                      );
+                  }}
+                  className="flex items-center gap-1.5 rounded-sm px-2 py-1.5 text-accent text-xs disabled:opacity-40"
+                >
+                  <Plus className="size-3.5" /> Add item
+                </button>
+              </div>
+            </fieldset>
             <fieldset disabled={!canEdit}>
               <legend className="mb-1.5 font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
                 Labels

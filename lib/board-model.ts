@@ -3,6 +3,7 @@ import * as Y from "yjs";
 export const MAX_BOARD_COLUMNS = 100;
 export const MAX_BOARD_CARDS = 2_000;
 export const MAX_BOARD_LABELS = 100;
+export const MAX_CARD_CHECKLIST_ITEMS = 100;
 export const MAX_BOARD_STORED_BYTES = 896 * 1024;
 export const UNFILED_COLUMN_ID = "unfiled";
 const MAX_TITLE_LENGTH = 500;
@@ -28,6 +29,20 @@ export type BoardRoots = {
   cardOrder: Y.Map<Y.Array<string>>;
   cards: Y.Map<Y.Map<unknown>>;
   labelMeta: Y.Map<Y.Map<unknown>>;
+  settings: Y.Map<unknown>;
+};
+
+type BoardLaneMode = "none" | "assignee" | "label";
+
+type BoardChecklistItem = {
+  id: string;
+  text: string;
+  done: boolean;
+};
+
+export type BoardSettings = {
+  laneMode: BoardLaneMode;
+  enforceWipLimits: boolean;
 };
 
 export type BoardCard = {
@@ -42,6 +57,7 @@ export type BoardCard = {
   columnId: string;
   color: string;
   priority: BoardPriority | null;
+  checklist: BoardChecklistItem[];
 };
 
 export type BoardInspection = {
@@ -102,6 +118,7 @@ export function getBoardRoots(ydoc: Y.Doc): BoardRoots {
     cardOrder: ydoc.getMap<Y.Array<string>>("cardOrder"),
     cards: ydoc.getMap<Y.Map<unknown>>("cards"),
     labelMeta: ydoc.getMap<Y.Map<unknown>>("labelMeta"),
+    settings: ydoc.getMap("boardSettings"),
   };
 }
 
@@ -148,6 +165,7 @@ function readBoardCard(id: string, value: Y.Map<unknown>): BoardCard {
     "columnId",
     "color",
     "priority",
+    "checklist",
   ]);
   if ([...value.keys()].some((key) => !fields.has(key))) {
     throw new BoardValidationError("invalid-update");
@@ -161,6 +179,7 @@ function readBoardCard(id: string, value: Y.Map<unknown>): BoardCard {
   const columnId = value.get("columnId");
   const colorValue = value.get("color");
   const priorityValue = value.get("priority");
+  const checklistValue = value.get("checklist");
   const color = colorValue === undefined ? "#64748b" : colorValue;
   const priority = priorityValue === undefined ? null : priorityValue;
   if (
@@ -185,10 +204,12 @@ function readBoardCard(id: string, value: Y.Map<unknown>): BoardCard {
     !(linkedDocId === null || isBoardId(linkedDocId)) ||
     !isBoardId(columnId) ||
     !isColor(color) ||
-    !(priority === null || ["low", "medium", "high", "critical"].includes(String(priority)))
+    !(priority === null || ["low", "medium", "high", "critical"].includes(String(priority))) ||
+    !(checklistValue === undefined || checklistValue instanceof Y.Array)
   ) {
     throw new BoardValidationError("invalid-update");
   }
+  const checklist = checklistValue ? readChecklist(checklistValue as Y.Array<unknown>) : [];
   return {
     id,
     title,
@@ -201,7 +222,54 @@ function readBoardCard(id: string, value: Y.Map<unknown>): BoardCard {
     columnId,
     color,
     priority: priority as BoardPriority | null,
+    checklist,
   };
+}
+
+function readChecklist(value: Y.Array<unknown>): BoardChecklistItem[] {
+  if (value.length > MAX_CARD_CHECKLIST_ITEMS) throw new BoardValidationError("invalid-update");
+  const seen = new Set<string>();
+  return value.toArray().map((entry) => {
+    if (!(entry instanceof Y.Map)) throw new BoardValidationError("invalid-update");
+    const id = entry.get("id");
+    const text = entry.get("text");
+    const done = entry.get("done");
+    if (
+      !isBoardId(id) ||
+      seen.has(id) ||
+      typeof text !== "string" ||
+      text.trim().length === 0 ||
+      text.length > 500 ||
+      typeof done !== "boolean" ||
+      [...entry.keys()].some((key) => key !== "id" && key !== "text" && key !== "done")
+    ) {
+      throw new BoardValidationError("invalid-update");
+    }
+    seen.add(id);
+    return { id, text, done };
+  });
+}
+
+export function readBoardSettings(roots: BoardRoots): BoardSettings {
+  const laneMode = roots.settings.get("laneMode") ?? "none";
+  const enforceWipLimits = roots.settings.get("enforceWipLimits") ?? false;
+  if (
+    !["none", "assignee", "label"].includes(String(laneMode)) ||
+    typeof enforceWipLimits !== "boolean" ||
+    [...roots.settings.keys()].some((key) => key !== "laneMode" && key !== "enforceWipLimits")
+  ) {
+    throw new BoardValidationError("invalid-update");
+  }
+  return { laneMode: laneMode as BoardLaneMode, enforceWipLimits };
+}
+
+export function columnWipLimit(roots: BoardRoots, columnId: string): number | null {
+  const raw = roots.columnMeta.get(columnId)?.get("wipLimit");
+  if (raw === undefined || raw === null) return null;
+  if (!Number.isInteger(raw) || Number(raw) < 1 || Number(raw) > MAX_BOARD_CARDS) {
+    throw new BoardValidationError("invalid-update");
+  }
+  return Number(raw);
 }
 
 export function inspectBoard(ydoc: Y.Doc): BoardInspection {
@@ -220,7 +288,7 @@ export function inspectBoard(ydoc: Y.Doc): BoardInspection {
     const name = meta.get("name");
     const color = meta.get("color");
     if (
-      [...meta.keys()].some((key) => key !== "name" && key !== "color") ||
+      [...meta.keys()].some((key) => key !== "name" && key !== "color" && key !== "wipLimit") ||
       typeof name !== "string" ||
       name.trim().length === 0 ||
       name.length > 120 ||
@@ -228,6 +296,7 @@ export function inspectBoard(ydoc: Y.Doc): BoardInspection {
     ) {
       throw new BoardValidationError("invalid-update");
     }
+    columnWipLimit(roots, id);
   }
   if (columns.some((id) => !roots.columnMeta.has(id) || !roots.cardOrder.has(id))) {
     throw new BoardValidationError("invalid-update");
@@ -267,6 +336,7 @@ export function inspectBoard(ydoc: Y.Doc): BoardInspection {
       throw new BoardValidationError("invalid-update");
     }
   }
+  readBoardSettings(roots);
   return { columns, columnSet, cards, dimensions: { columns: columns.length, cards: cards.size } };
 }
 
@@ -285,7 +355,16 @@ export function createBoardCard(
   card.set("columnId", columnId);
   card.set("color", color);
   card.set("priority", null);
+  card.set("checklist", new Y.Array<Y.Map<unknown>>());
   return card;
+}
+
+export function createChecklistItem(text: string, itemId = boardId()): Y.Map<unknown> {
+  const item = new Y.Map<unknown>();
+  item.set("id", itemId);
+  item.set("text", text.trim().slice(0, 500));
+  item.set("done", false);
+  return item;
 }
 
 export function orderedCards(

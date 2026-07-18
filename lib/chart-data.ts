@@ -15,6 +15,7 @@ type ChartResolvedSeries = {
   name: string;
   color: string;
   values: Array<number | null>;
+  role: "bar" | "line";
 };
 
 export type ChartData = {
@@ -81,6 +82,7 @@ export function resolveChartData(config: ChartConfig, source: ChartSource | null
     name: (header?.values[index] ?? "").trim() || source.columns[index]?.name || "Series",
     color: definition.color,
     values: values[seriesIndex] ?? [],
+    role: definition.role,
   }));
   const hasNumbers = series.some((entry) => entry.values.some((value) => value !== null));
   if (series.length === 0 || categories.length === 0 || !hasNumbers) {

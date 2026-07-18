@@ -8,7 +8,7 @@ import {
   seedBoard,
   UNFILED_COLUMN_ID,
 } from "../lib/board-model";
-import { resolveChartData } from "../lib/chart-data";
+import { type ChartSource, resolveChartData } from "../lib/chart-data";
 import {
   ChartValidationError,
   inspectChart,
@@ -16,6 +16,12 @@ import {
   replaceChartState,
   seedChart,
 } from "../lib/chart-model";
+import {
+  DashboardValidationError,
+  inspectDashboard,
+  MAX_DASHBOARD_STORED_BYTES,
+  replaceDashboardState,
+} from "../lib/dashboard-model";
 import {
   boardRenderModel,
   chartRenderModel,
@@ -29,6 +35,7 @@ import type { FileType } from "../lib/document-types";
 import {
   getSheetRoots,
   inspectSheet,
+  invalidValidationCells,
   MAX_SHEET_STORED_BYTES,
   SheetValidationError,
   seedSheet,
@@ -62,6 +69,7 @@ import {
   HARD_MAX_HISTORY_RETENTION_DAYS,
   MIN_HISTORY_RETENTION_DAYS,
 } from "./limits";
+import { viewChartSource } from "./viewChartSource";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const COMPACT_OVERLAP = 64;
@@ -89,7 +97,8 @@ function docFileType(doc: Doc<"documents">): FileType {
     doc.fileType === "sheet" ||
     doc.fileType === "board" ||
     doc.fileType === "view" ||
-    doc.fileType === "chart"
+    doc.fileType === "chart" ||
+    doc.fileType === "dashboard"
   ) {
     return doc.fileType;
   }
@@ -208,9 +217,11 @@ async function materializedContent(
   const priorBoardLabels = new Set<string>();
   const duplicateBoardColumns = new Set<string>();
   let priorChartSource: string | null = null;
+  let priorInvalidSheetCells = new Map<string, string>();
   if (fileType === "sheet") {
     const inspection = inspectSheet(ydoc);
     const roots = getSheetRoots(ydoc);
+    priorInvalidSheetCells = invalidValidationCells(ydoc);
     const activeKeys = new Set<string>();
     for (const rowId of inspection.rows) {
       for (const colId of inspection.cols) activeKeys.add(`${rowId}:${colId}`);
@@ -389,8 +400,33 @@ async function materializedContent(
     if (changed) cleanupUpdate = toArrayBuffer(Y.encodeStateAsUpdate(ydoc, vector));
   }
   const sheetInspection = fileType === "sheet" ? inspectSheet(ydoc) : null;
+  if (fileType === "sheet") {
+    for (const [key, display] of invalidValidationCells(ydoc)) {
+      if (priorInvalidSheetCells.get(key) !== display) {
+        throw new SheetValidationError("invalid-update");
+      }
+    }
+  }
   const boardInspection = fileType === "board" ? inspectBoard(ydoc) : null;
   if (fileType === "view") inspectView(ydoc);
+  if (fileType === "dashboard") {
+    for (const tile of inspectDashboard(ydoc)) {
+      const id = ctx.db.normalizeId("documents", tile.sourceDocId);
+      const source = id ? await ctx.db.get(id) : null;
+      const validType =
+        tile.kind === "chart" ? source?.fileType === "chart" : source?.fileType === "view";
+      if (
+        !source ||
+        source.projectId !== doc.projectId ||
+        source.kind !== "file" ||
+        !validType ||
+        source.trashedAt ||
+        source.deletingAt
+      ) {
+        throw new DashboardValidationError();
+      }
+    }
+  }
   if (fileType === "chart") {
     const config = inspectChart(ydoc);
     if (config.sourceDocId && config.sourceDocId !== priorChartSource) {
@@ -400,7 +436,7 @@ async function materializedContent(
         !source ||
         source.projectId !== doc.projectId ||
         source.kind !== "file" ||
-        source.fileType !== "sheet" ||
+        source.fileType !== config.sourceType ||
         source.trashedAt ||
         source.deletingAt
       ) {
@@ -505,7 +541,13 @@ async function syncBoardLinkIndex(
         (card) =>
           [
             card.id,
-            { title: card.title, columnName: column.name, due: card.due ?? undefined },
+            {
+              title: card.title,
+              columnName: column.name,
+              due: card.due ?? undefined,
+              checklistCompleted: card.checklist.filter((item) => item.done).length,
+              checklistTotal: card.checklist.length,
+            },
           ] as const,
       ),
     ),
@@ -550,7 +592,13 @@ async function syncBoardLinkIndex(
       await ctx.db.delete(row._id);
       continue;
     }
-    if (row.title !== card.title || row.columnName !== card.columnName || row.due !== card.due) {
+    if (
+      row.title !== card.title ||
+      row.columnName !== card.columnName ||
+      row.due !== card.due ||
+      row.checklistCompleted !== card.checklistCompleted ||
+      row.checklistTotal !== card.checklistTotal
+    ) {
       await ctx.db.patch(row._id, { ...card, updatedAt: now });
     }
     desiredCards.delete(row.cardId);
@@ -563,6 +611,147 @@ async function syncBoardLinkIndex(
       cardId,
       ...card,
       updatedAt: now,
+    });
+  }
+}
+
+const TEXT_LINK_PATTERN = /\]\((?:[^)\s]*[?&])?file=([A-Za-z0-9_-]+)[^)]*\)/g;
+const TEXT_MENTION_PATTERN = /@\[([^\]]{1,120})\]\(user:([A-Za-z0-9_-]{1,128})\)/g;
+const MAX_TEXT_LINKS = 200;
+const MAX_TEXT_MENTIONS = 100;
+
+type TextRelationships = {
+  links: Set<string>;
+  mentions: Map<string, { displayName: string; snippet: string }>;
+};
+
+function extractTextRelationships(content: string): TextRelationships {
+  const links = new Set<string>();
+  for (const match of content.matchAll(TEXT_LINK_PATTERN)) {
+    if (links.size >= MAX_TEXT_LINKS) break;
+    if (match[1]) links.add(match[1]);
+  }
+  const mentions = new Map<string, { displayName: string; snippet: string }>();
+  for (const match of content.matchAll(TEXT_MENTION_PATTERN)) {
+    if (mentions.size >= MAX_TEXT_MENTIONS) break;
+    const mentionedUserId = match[2];
+    if (!mentionedUserId || mentions.has(mentionedUserId)) continue;
+    const paragraph =
+      content
+        .slice(0, match.index)
+        .split(/\n\s*\n/)
+        .at(-1) ?? match[0];
+    mentions.set(mentionedUserId, {
+      displayName: match[1] ?? "Member",
+      snippet:
+        paragraph.replace(/\s+/g, " ").trim().slice(0, 240) ||
+        match[0].replace(/\s+/g, " ").slice(0, 240),
+    });
+  }
+  return { links, mentions };
+}
+
+function sameRelationships(left: TextRelationships, right: TextRelationships): boolean {
+  if (left.links.size !== right.links.size || left.mentions.size !== right.mentions.size) {
+    return false;
+  }
+  for (const id of left.links) if (!right.links.has(id)) return false;
+  for (const id of left.mentions.keys()) if (!right.mentions.has(id)) return false;
+  return true;
+}
+
+async function syncTextRelationships(
+  ctx: MutationCtx,
+  doc: Doc<"documents">,
+  content: string,
+  userId: string,
+  actorName: string,
+): Promise<void> {
+  if (doc.fileType !== "md" && doc.fileType !== "html") return;
+  const desired = extractTextRelationships(content);
+  if (sameRelationships(desired, extractTextRelationships(doc.content))) return;
+  const desiredLinks = new Set<Id<"documents">>();
+  for (const raw of desired.links) {
+    const id = ctx.db.normalizeId("documents", raw);
+    const target = id ? await ctx.db.get(id) : null;
+    if (target?.kind === "file" && target.clerkOrgId === doc.clerkOrgId && !target.deletingAt) {
+      desiredLinks.add(target._id);
+    }
+  }
+  const existing = (
+    await ctx.db
+      .query("documentLinks")
+      .withIndex("by_source_document", (q) => q.eq("sourceDocumentId", doc._id))
+      .collect()
+  ).filter((link) => link.managedByText === true);
+  for (const link of existing) {
+    if (desiredLinks.has(link.targetDocumentId)) desiredLinks.delete(link.targetDocumentId);
+    else await ctx.db.delete(link._id);
+  }
+  const now = Date.now();
+  for (const targetDocumentId of desiredLinks) {
+    const target = await ctx.db.get(targetDocumentId);
+    if (!target) continue;
+    await ctx.db.insert("documentLinks", {
+      clerkOrgId: doc.clerkOrgId,
+      sourceProjectId: doc.projectId,
+      sourceDocumentId: doc._id,
+      managedByBoard: false,
+      managedByText: true,
+      targetProjectId: target.projectId,
+      targetDocumentId,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  const recorded = await ctx.db
+    .query("documentMentions")
+    .withIndex("by_document", (q) => q.eq("documentId", doc._id))
+    .take(MAX_TEXT_MENTIONS * 2);
+  const notified = new Set<string>();
+  for (const row of recorded) {
+    if (desired.mentions.has(row.mentionedUserId)) notified.add(row.mentionedUserId);
+    else await ctx.db.delete(row._id);
+  }
+  for (const [mentionedUserId, mention] of desired.mentions) {
+    if (mentionedUserId === userId || notified.has(mentionedUserId)) continue;
+    const member = await ctx.db
+      .query("members")
+      .withIndex("by_org_user", (q) =>
+        q.eq("clerkOrgId", doc.clerkOrgId).eq("memberUserId", mentionedUserId),
+      )
+      .first();
+    if (member?.status !== "accepted") continue;
+    const targetAccess = await ctx.db
+      .query("projectAccess")
+      .withIndex("by_project_user", (q) =>
+        q.eq("projectId", doc.projectId).eq("userId", mentionedUserId),
+      )
+      .first();
+    const projectAdmin = member.isOwner || member.role === "org:admin" || member.role === "admin";
+    if (!projectAdmin && !targetAccess) continue;
+    await ctx.db.insert("documentMentions", {
+      clerkOrgId: doc.clerkOrgId,
+      projectId: doc.projectId,
+      documentId: doc._id,
+      mentionedUserId,
+      displayName: mention.displayName,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("notifications", {
+      kind: "document-mention",
+      recipientUserId: mentionedUserId,
+      clerkOrgId: doc.clerkOrgId,
+      projectId: doc.projectId,
+      documentId: doc._id,
+      actorUserId: userId,
+      actorName,
+      quote: doc.name,
+      bodySnippet: mention.snippet,
+      readAt: null,
+      createdAt: now,
     });
   }
 }
@@ -634,25 +823,32 @@ function viewPreviewFromState(state: ArrayBuffer) {
 async function chartSourceForConfig(
   ctx: QueryCtx,
   projectId: Id<"projects">,
-  sourceDocId: string | null,
-) {
-  if (!sourceDocId) return null;
-  const id = ctx.db.normalizeId("documents", sourceDocId);
+  config: ReturnType<typeof chartRenderModel>,
+): Promise<ChartSource | null> {
+  if (!config.sourceDocId) return null;
+  const id = ctx.db.normalizeId("documents", config.sourceDocId);
   const source = id ? await ctx.db.get(id) : null;
   if (
     source?.kind !== "file" ||
     source.projectId !== projectId ||
-    source.fileType !== "sheet" ||
+    source.fileType !== config.sourceType ||
     (await isInactiveTree(ctx, source))
   ) {
     return null;
   }
   const state = await materializedState(ctx, source);
-  const sheet = new Y.Doc();
-  Y.applyUpdate(sheet, new Uint8Array(state));
-  const result = chartSourceFromSheet(sheet, source._id, source.name);
-  sheet.destroy();
-  return result;
+  if (config.sourceType === "sheet") {
+    const sheet = new Y.Doc();
+    Y.applyUpdate(sheet, new Uint8Array(state));
+    const result = chartSourceFromSheet(sheet, source._id, source.name);
+    sheet.destroy();
+    return result;
+  }
+  return await viewChartSource(ctx, projectId, source, state, {
+    groupPropertyId: config.groupPropertyId,
+    valuePropertyId: config.valuePropertyId,
+    aggregate: config.aggregate,
+  });
 }
 
 async function chartPreviewFromState(ctx: QueryCtx, doc: Doc<"documents">, state: ArrayBuffer) {
@@ -660,7 +856,7 @@ async function chartPreviewFromState(ctx: QueryCtx, doc: Doc<"documents">, state
   Y.applyUpdate(ydoc, new Uint8Array(state));
   const config = chartRenderModel(ydoc);
   ydoc.destroy();
-  const source = await chartSourceForConfig(ctx, doc.projectId, config.sourceDocId);
+  const source = await chartSourceForConfig(ctx, doc.projectId, config);
   return resolveChartData(config, source);
 }
 
@@ -851,6 +1047,10 @@ function replaceDocumentState(current: Y.Doc, target: Y.Doc, fileType: FileType)
   }
   if (fileType === "chart") {
     replaceChartState(current, target);
+    return;
+  }
+  if (fileType === "dashboard") {
+    replaceDashboardState(current, target);
     return;
   }
   if (fileType !== "sheet" && fileType !== "board") {
@@ -1085,7 +1285,11 @@ export const pushUpdateV2 = mutation({
       if (error instanceof SheetValidationError || error instanceof BoardValidationError) {
         return { ok: false as const, error: error.code };
       }
-      if (error instanceof ViewValidationError || error instanceof ChartValidationError) {
+      if (
+        error instanceof ViewValidationError ||
+        error instanceof ChartValidationError ||
+        error instanceof DashboardValidationError
+      ) {
         return { ok: false as const, error: "invalid-update" as const };
       }
       return { ok: false as const, error: "invalid-update" as const };
@@ -1099,7 +1303,8 @@ export const pushUpdateV2 = mutation({
       (doc.fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
       (doc.fileType === "board" && newSize > MAX_BOARD_STORED_BYTES) ||
       (doc.fileType === "view" && newSize > MAX_VIEW_STORED_BYTES) ||
-      (doc.fileType === "chart" && newSize > MAX_CHART_STORED_BYTES)
+      (doc.fileType === "chart" && newSize > MAX_CHART_STORED_BYTES) ||
+      (doc.fileType === "dashboard" && newSize > MAX_DASHBOARD_STORED_BYTES)
     ) {
       return { ok: false as const, error: "file-too-large" as const };
     }
@@ -1133,6 +1338,14 @@ export const pushUpdateV2 = mutation({
       });
     }
     await syncBoardLinkIndex(ctx, doc, state, access.userId);
+    const identity = await ctx.auth.getUserIdentity();
+    await syncTextRelationships(
+      ctx,
+      doc,
+      content,
+      access.userId,
+      displayName(access, identity?.name, identity?.email),
+    );
     const now = Date.now();
     const scheduleCompaction = !doc.compactionScheduledAt || doc.compactionScheduledAt <= now;
     await ctx.db.patch(doc._id, {
@@ -1348,6 +1561,7 @@ export const ensureSeed = mutation({
         doc.fileType !== "board" &&
         doc.fileType !== "view" &&
         doc.fileType !== "chart" &&
+        doc.fileType !== "dashboard" &&
         doc.content.length === 0)
     ) {
       return { seeded: false };
@@ -1361,6 +1575,9 @@ export const ensureSeed = mutation({
       seedView(seedDoc);
     } else if (doc.fileType === "chart") {
       seedChart(seedDoc);
+    } else if (doc.fileType === "dashboard") {
+      seedDoc.getMap("dashboardTiles");
+      seedDoc.getArray("dashboardTileOrder");
     } else {
       seedDoc.getText("codemirror").insert(0, doc.content);
     }
@@ -1563,7 +1780,8 @@ export const restoreHistory = mutation({
       (fileType === "sheet" && newSize > MAX_SHEET_STORED_BYTES) ||
       (fileType === "board" && newSize > MAX_BOARD_STORED_BYTES) ||
       (fileType === "view" && newSize > MAX_VIEW_STORED_BYTES) ||
-      (fileType === "chart" && newSize > MAX_CHART_STORED_BYTES)
+      (fileType === "chart" && newSize > MAX_CHART_STORED_BYTES) ||
+      (fileType === "dashboard" && newSize > MAX_DASHBOARD_STORED_BYTES)
     ) {
       targetDoc.destroy();
       throw new Error("file-too-large");
@@ -1604,7 +1822,8 @@ export const restoreHistory = mutation({
       (fileType === "sheet" && restoredSize > MAX_SHEET_STORED_BYTES) ||
       (fileType === "board" && restoredSize > MAX_BOARD_STORED_BYTES) ||
       (fileType === "view" && restoredSize > MAX_VIEW_STORED_BYTES) ||
-      (fileType === "chart" && restoredSize > MAX_CHART_STORED_BYTES)
+      (fileType === "chart" && restoredSize > MAX_CHART_STORED_BYTES) ||
+      (fileType === "dashboard" && restoredSize > MAX_DASHBOARD_STORED_BYTES)
     ) {
       throw new Error("file-too-large");
     }
