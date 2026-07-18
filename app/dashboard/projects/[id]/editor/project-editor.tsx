@@ -364,7 +364,14 @@ function ViewerPresence({ viewers, canOpen }: { viewers: CollabViewer[]; canOpen
                   >
                     <ViewerAvatar viewer={viewer} size={22} />
                     <span className="min-w-0 flex-1">
-                      <span className="block text-xs">{viewer.name}</span>
+                      <span className="flex items-center gap-2 text-xs">
+                        {viewer.name}
+                        {viewer.role === "org:guest" ? (
+                          <span className="rounded-xs border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider">
+                            Guest
+                          </span>
+                        ) : null}
+                      </span>
                       {viewer.email ? (
                         <span className="block break-all text-[11px] text-muted-foreground leading-snug">
                           {viewer.email}
@@ -609,7 +616,11 @@ export function ProjectEditor({
   );
   const mentionCandidatesData = useQuery(
     api.comments.mentionCandidates,
-    (commentsOpen || selectedNode?.fileType === "board" || selectedNode?.fileType === "md") &&
+    (commentsOpen ||
+      selectedNode?.fileType === "board" ||
+      selectedNode?.fileType === "view" ||
+      selectedNode?.fileType === "md" ||
+      recordDetailsOpen) &&
       selectedFileId &&
       !accessLost
       ? { projectId: pid }
@@ -618,15 +629,6 @@ export function ProjectEditor({
   const documentMentionCandidates = useQuery(
     api.comments.documentMentionCandidates,
     selectedNode?.fileType === "md" && selectedFileId && !accessLost ? { projectId: pid } : "skip",
-  );
-  const boardMembersData = useQuery(
-    api.members.listByOrg,
-    (selectedNode?.fileType === "board" ||
-      selectedNode?.fileType === "view" ||
-      recordDetailsOpen) &&
-      !accessLost
-      ? { clerkOrgId }
-      : "skip",
   );
   const shareStateData = useQuery(
     api.sharing.getState,
@@ -664,22 +666,7 @@ export function ProjectEditor({
     }
     return result;
   }, [buffer, doc?.content, nodes, selectedNode, visualAssetUrls]);
-  const boardMembers = useMemo<MentionCandidate[]>(
-    () =>
-      (boardMembersData ?? []).flatMap((member) => {
-        if (member.status !== "accepted" || !member.memberUserId) return [];
-        const name = [member.firstName, member.lastName].filter(Boolean).join(" ") || member.email;
-        return [
-          {
-            userId: member.memberUserId,
-            name,
-            email: member.email,
-            imageUrl: member.imageUrl,
-          },
-        ];
-      }),
-    [boardMembersData],
-  );
+  const boardMembers = mentionCandidates;
   const shareState = useMemo(
     () => shareStateData as ShareState | null | undefined,
     [shareStateData],

@@ -8,6 +8,7 @@ const schema = defineSchema({
     tags: v.array(v.string()),
     maxProjects: v.optional(v.number()),
     maxCollaborators: v.optional(v.number()),
+    maxGuests: v.optional(v.number()),
     maxSizeBytes: v.optional(v.number()),
     historyRetentionDays: v.optional(v.number()),
     publicSharingEnabled: v.optional(v.boolean()),
@@ -279,6 +280,23 @@ const schema = defineSchema({
     .index("by_org_user", ["clerkOrgId", "userId"])
     .index("by_project_user", ["projectId", "userId"]),
 
+  guestInvitations: defineTable({
+    clerkOrgId: v.string(),
+    projectId: v.id("projects"),
+    email: v.string(),
+    clerkInvitationId: v.string(),
+    level: v.union(v.literal("viewer"), v.literal("editor")),
+    invitedBy: v.string(),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["clerkOrgId", "createdAt"])
+    .index("by_project", ["projectId", "createdAt"])
+    .index("by_invitation", ["clerkInvitationId"])
+    .index("by_org_email", ["clerkOrgId", "email"])
+    .index("by_expiry", ["expiresAt"]),
+
   recentDocuments: defineTable({
     clerkOrgId: v.string(),
     userId: v.string(),
@@ -370,6 +388,7 @@ const schema = defineSchema({
     email: v.optional(v.string()),
     color: v.string(),
     image: v.union(v.string(), v.null()),
+    role: v.optional(v.string()),
     state: v.string(),
     lastSeen: v.number(),
   })
@@ -403,6 +422,7 @@ const schema = defineSchema({
     authorName: v.string(),
     authorEmail: v.union(v.string(), v.null()),
     authorImage: v.union(v.string(), v.null()),
+    authorRole: v.optional(v.string()),
     resolvedByUserId: v.union(v.string(), v.null()),
     resolvedByName: v.union(v.string(), v.null()),
     resolvedAt: v.union(v.number(), v.null()),
@@ -424,6 +444,7 @@ const schema = defineSchema({
     authorName: v.string(),
     authorEmail: v.union(v.string(), v.null()),
     authorImage: v.union(v.string(), v.null()),
+    authorRole: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_comment", ["commentId"])
@@ -585,6 +606,163 @@ const schema = defineSchema({
     .index("by_document", ["documentId", "createdAt"])
     .index("by_project", ["projectId", "createdAt"])
     .index("by_created", ["createdAt"]),
+
+  projectShares: defineTable({
+    projectId: v.id("projects"),
+    clerkOrgId: v.string(),
+    mode: v.union(v.literal("private"), v.literal("org"), v.literal("public")),
+    token: v.string(),
+    expiresAt: v.union(v.number(), v.null()),
+    excludedDocumentIds: v.array(v.id("documents")),
+    createdBy: v.string(),
+    updatedBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_project", ["projectId"])
+    .index("by_org", ["clerkOrgId"])
+    .index("by_token", ["token"]),
+
+  projectShareEvents: defineTable({
+    projectId: v.id("projects"),
+    clerkOrgId: v.string(),
+    actorUserId: v.string(),
+    actorName: v.string(),
+    previousMode: v.union(v.literal("private"), v.literal("org"), v.literal("public")),
+    nextMode: v.union(v.literal("private"), v.literal("org"), v.literal("public")),
+    createdAt: v.number(),
+  })
+    .index("by_project", ["projectId", "createdAt"])
+    .index("by_org", ["clerkOrgId", "createdAt"])
+    .index("by_created", ["createdAt"]),
+
+  organizationEvents: defineTable({
+    clerkOrgId: v.string(),
+    actorUserId: v.union(v.string(), v.null()),
+    actorName: v.string(),
+    kind: v.string(),
+    projectId: v.optional(v.id("projects")),
+    projectName: v.optional(v.string()),
+    targetId: v.optional(v.string()),
+    targetName: v.string(),
+    metadata: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org_time", ["clerkOrgId", "createdAt"])
+    .index("by_org_kind_time", ["clerkOrgId", "kind", "createdAt"])
+    .index("by_org_actor_time", ["clerkOrgId", "actorUserId", "createdAt"])
+    .index("by_project_time", ["projectId", "createdAt"])
+    .index("by_created", ["createdAt"]),
+
+  apiKeys: defineTable({
+    clerkOrgId: v.string(),
+    name: v.string(),
+    keyHash: v.string(),
+    keyPrefix: v.string(),
+    scopes: v.array(v.string()),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["clerkOrgId", "createdAt"])
+    .index("by_hash", ["keyHash"]),
+
+  webhookEndpoints: defineTable({
+    clerkOrgId: v.string(),
+    name: v.string(),
+    url: v.string(),
+    encryptedSecret: v.string(),
+    eventKinds: v.array(v.string()),
+    createdBy: v.string(),
+    disabledAt: v.optional(v.number()),
+    failureCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["clerkOrgId", "createdAt"])
+    .index("by_org_enabled", ["clerkOrgId", "disabledAt"]),
+
+  webhookDeliveries: defineTable({
+    clerkOrgId: v.string(),
+    endpointId: v.id("webhookEndpoints"),
+    eventId: v.id("organizationEvents"),
+    eventKind: v.string(),
+    state: v.union(
+      v.literal("pending"),
+      v.literal("delivering"),
+      v.literal("delivered"),
+      v.literal("failed"),
+    ),
+    attemptCount: v.number(),
+    nextAttemptAt: v.number(),
+    responseStatus: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    leaseExpiresAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_due", ["state", "nextAttemptAt"])
+    .index("by_endpoint_time", ["endpointId", "createdAt"])
+    .index("by_event_endpoint", ["eventId", "endpointId"])
+    .index("by_org_time", ["clerkOrgId", "createdAt"])
+    .index("by_created", ["createdAt"]),
+
+  importJobs: defineTable({
+    clerkOrgId: v.string(),
+    projectId: v.id("projects"),
+    source: v.union(v.literal("notion"), v.literal("confluence"), v.literal("google")),
+    state: v.union(
+      v.literal("preview"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    manifest: v.string(),
+    totalEntries: v.number(),
+    processedEntries: v.number(),
+    createdDocumentIds: v.array(v.id("documents")),
+    error: v.optional(v.string()),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_project", ["projectId", "createdAt"])
+    .index("by_org", ["clerkOrgId", "createdAt"])
+    .index("by_state", ["state", "updatedAt"]),
+
+  organizationExports: defineTable({
+    clerkOrgId: v.string(),
+    state: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+    ),
+    projectIds: v.array(v.id("projects")),
+    completedProjectIds: v.array(v.id("projects")),
+    manifest: v.optional(v.string()),
+    files: v.optional(
+      v.array(
+        v.object({
+          projectId: v.id("projects"),
+          name: v.string(),
+          storageId: v.id("_storage"),
+          size: v.number(),
+          capturedAt: v.number(),
+        }),
+      ),
+    ),
+    manifestStorageId: v.optional(v.id("_storage")),
+    error: v.optional(v.string()),
+    createdBy: v.string(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    expiresAt: v.optional(v.number()),
+  })
+    .index("by_org", ["clerkOrgId", "createdAt"])
+    .index("by_state", ["state", "updatedAt"]),
 });
 
 export default schema;

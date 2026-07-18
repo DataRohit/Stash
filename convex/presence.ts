@@ -26,6 +26,7 @@ export const heartbeat = mutation({
       return;
     }
     const access = await requireProjectAccess(ctx, doc.projectId);
+    const identity = await ctx.auth.getUserIdentity();
     const allowed = await enforceWriteRateLimit(
       ctx,
       "presence",
@@ -50,6 +51,7 @@ export const heartbeat = mutation({
       email: args.email?.slice(0, 120) ?? undefined,
       color: args.color.slice(0, 32),
       image: args.image,
+      role: typeof identity?.org_role === "string" ? identity.org_role : undefined,
       state: args.state.length > MAX_STATE_LENGTH ? "" : args.state,
       lastSeen: Date.now(),
     };
@@ -120,6 +122,7 @@ export const list = query({
         email: row.email ?? null,
         color: row.color,
         image: row.image,
+        role: row.role ?? "org:member",
         state: row.state,
       }));
   },

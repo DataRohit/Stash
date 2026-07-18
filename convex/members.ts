@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
@@ -31,7 +32,7 @@ async function requireOrgMember(ctx: QueryCtx, clerkOrgId: string): Promise<bool
   if (!identity) {
     return false;
   }
-  return identity.org_id === clerkOrgId;
+  return identity.org_id === clerkOrgId && identity.org_role !== "org:guest";
 }
 
 async function requireOrgAdmin(ctx: MutationCtx, clerkOrgId: string): Promise<boolean> {
@@ -158,6 +159,10 @@ export const deleteByInvitationId = mutation({
         throw new Error("Forbidden");
       }
       await ctx.db.delete(row._id);
+      await ctx.scheduler.runAfter(0, internal.guests.deleteByInvitation, {
+        clerkOrgId: args.clerkOrgId,
+        clerkInvitationId: args.clerkInvitationId,
+      });
     }
   },
 });
@@ -245,6 +250,12 @@ export const reconcile = mutation({
       }
       if (isOwner || member.role === "org:admin") {
         await purgeAccessForUser(ctx, args.clerkOrgId, member.memberUserId);
+      } else if (member.role === "org:guest") {
+        await ctx.scheduler.runAfter(0, internal.guests.acceptForMember, {
+          clerkOrgId: args.clerkOrgId,
+          userId: member.memberUserId,
+          email: member.email,
+        });
       }
     }
 
@@ -347,6 +358,12 @@ export const webhookUpsertMember = mutation({
     }
     if (fields.isOwner || fields.role === "org:admin") {
       await purgeAccessForUser(ctx, args.clerkOrgId, args.memberUserId);
+    } else if (fields.role === "org:guest") {
+      await ctx.scheduler.runAfter(0, internal.guests.acceptForMember, {
+        clerkOrgId: args.clerkOrgId,
+        userId: args.memberUserId,
+        email,
+      });
     }
   },
 });
@@ -436,5 +453,9 @@ export const webhookDeleteInvitation = mutation({
         await ctx.db.delete(row._id);
       }
     }
+    await ctx.scheduler.runAfter(0, internal.guests.deleteByInvitation, {
+      clerkOrgId: args.clerkOrgId,
+      clerkInvitationId: args.clerkInvitationId,
+    });
   },
 });

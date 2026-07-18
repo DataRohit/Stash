@@ -12,6 +12,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { recordOrganizationEvent } from "./audit";
 import { accessForProject, documentState, isInactiveTree, requireProjectEditor } from "./documents";
 import { ensureAutoWatch } from "./watchHelpers";
 import { enforceWriteRateLimit } from "./writeRateLimit";
@@ -36,6 +37,7 @@ type Actor = {
   name: string;
   email: string | null;
   image: string | null;
+  role: string;
 };
 
 function trimBody(body: string): string {
@@ -77,6 +79,7 @@ async function actorFor(ctx: QueryCtx, userId: string): Promise<Actor> {
     name: identity.name ?? identity.email ?? userId,
     email: identity.email ?? null,
     image: identity.pictureUrl ?? null,
+    role: typeof identity.org_role === "string" ? identity.org_role : "org:member",
   };
 }
 
@@ -355,6 +358,7 @@ export const listForDocument = query({
           authorName: thread.authorName,
           authorEmail: thread.authorEmail,
           authorImage: thread.authorImage,
+          authorRole: thread.authorRole ?? "org:member",
           resolvedByUserId: thread.resolvedByUserId,
           resolvedByName: thread.resolvedByName,
           resolvedAt: thread.resolvedAt,
@@ -372,6 +376,7 @@ export const listForDocument = query({
               authorName: message.authorName,
               authorEmail: message.authorEmail,
               authorImage: message.authorImage,
+              authorRole: message.authorRole ?? "org:member",
               createdAt: message.createdAt,
             })),
         };
@@ -412,6 +417,7 @@ export const listThreadMessages = query({
           authorName: message.authorName,
           authorEmail: message.authorEmail,
           authorImage: message.authorImage,
+          authorRole: message.authorRole ?? "org:member",
           createdAt: message.createdAt,
         })),
     };
@@ -466,6 +472,7 @@ export const documentMentionCandidates = query({
         name: displayName(member),
         email: member.email,
         imageUrl: member.imageUrl,
+        role: member.role,
         hasAccess: accessible.has(member.memberUserId as string),
       }))
       .sort(
@@ -575,6 +582,7 @@ export const createThread = mutation({
       authorName: actor.name,
       authorEmail: actor.email,
       authorImage: actor.image,
+      authorRole: actor.role,
       resolvedByUserId: null,
       resolvedByName: null,
       resolvedAt: null,
@@ -592,6 +600,7 @@ export const createThread = mutation({
       authorName: actor.name,
       authorEmail: actor.email,
       authorImage: actor.image,
+      authorRole: actor.role,
       createdAt: now,
     });
     await notifyMentions(
@@ -624,6 +633,16 @@ export const createThread = mutation({
       (await watcherIds(ctx, doc._id)).filter((userId) => !mentioned.has(userId)),
       "watching",
     );
+    await recordOrganizationEvent(ctx, {
+      clerkOrgId: doc.clerkOrgId,
+      actorUserId: actor.userId,
+      actorName: actor.name,
+      kind: "comment.created",
+      projectId: doc.projectId,
+      projectName: access.project.title,
+      targetId: commentId,
+      targetName: doc.name,
+    });
     return commentId;
   },
 });
@@ -675,6 +694,7 @@ export const reply = mutation({
       authorName: actor.name,
       authorEmail: actor.email,
       authorImage: actor.image,
+      authorRole: actor.role,
       createdAt: now,
     });
     await ctx.db.patch(thread._id, { updatedAt: now });

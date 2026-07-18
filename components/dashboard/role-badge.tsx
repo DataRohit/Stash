@@ -1,4 +1,4 @@
-import { Crown, ShieldCheck, User } from "lucide-react";
+import { Crown, ShieldCheck, User, UserRoundCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 type RoleBadgeProps = {
@@ -27,6 +27,17 @@ export function RoleBadge({ role, isOwner = false, className }: RoleBadgeProps) 
       >
         <ShieldCheck className="size-3 shrink-0" aria-hidden="true" />
         Admin
+      </Badge>
+    );
+  }
+  if (role === "org:guest") {
+    return (
+      <Badge
+        variant="outline"
+        className={`border-warning/40 bg-warning/10 text-foreground ${className ?? ""}`}
+      >
+        <UserRoundCheck className="size-3 shrink-0" aria-hidden="true" />
+        Guest
       </Badge>
     );
   }

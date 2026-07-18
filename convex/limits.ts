@@ -1,10 +1,12 @@
 export const DEFAULT_MAX_PROJECTS = 5;
 export const DEFAULT_MAX_COLLABORATORS = 5;
+export const DEFAULT_MAX_GUESTS = 3;
 export const DEFAULT_MAX_PROJECT_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_HISTORY_RETENTION_DAYS = 30;
 
 export const HARD_MAX_PROJECTS = 1000;
 export const HARD_MAX_COLLABORATORS = 500;
+export const HARD_MAX_GUESTS = 5_000;
 export const MIN_PROJECT_BYTES = 1024 * 1024;
 export const HARD_MAX_PROJECT_BYTES = 1024 * 1024 * 1024;
 export const MIN_HISTORY_RETENTION_DAYS = 1;

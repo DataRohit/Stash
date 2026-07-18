@@ -47,6 +47,7 @@ export type CollabViewer = {
   email: string | null;
   color: string;
   image: string | null;
+  role: string;
   isSelf: boolean;
 };
 
@@ -591,6 +592,7 @@ export function useCollabDoc(
           email: row.email,
           color: row.color,
           image: row.image,
+          role: row.role,
           isSelf,
         });
       }

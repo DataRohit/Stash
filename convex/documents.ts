@@ -41,6 +41,7 @@ import {
   HARD_MAX_PROJECT_BYTES,
   MIN_PROJECT_BYTES,
 } from "./limits";
+import { secretMatches } from "./secrets";
 import { ensureAutoWatch } from "./watchHelpers";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
@@ -2432,10 +2433,24 @@ export const search = query({
 });
 
 export const exportBundle = query({
-  args: { projectId: v.id("projects"), cursor: v.optional(v.string()) },
+  args: {
+    projectId: v.id("projects"),
+    cursor: v.optional(v.string()),
+    secret: v.optional(v.string()),
+    clerkOrgId: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const access = await accessForProject(ctx, args.projectId);
-    if (!access) {
+    const serviceAllowed = Boolean(
+      args.secret && args.clerkOrgId && secretMatches(args.secret, process.env.CONVEX_PURGE_SECRET),
+    );
+    const serviceProject = serviceAllowed ? await ctx.db.get(args.projectId) : null;
+    const projectRow =
+      access?.project ??
+      (serviceProject && serviceProject.clerkOrgId === args.clerkOrgId && !serviceProject.deletedAt
+        ? serviceProject
+        : null);
+    if (!projectRow) {
       return null;
     }
     const page = await ctx.db
@@ -2524,7 +2539,8 @@ export const exportBundle = query({
       }),
     );
     return {
-      projectTitle: access.project.title,
+      projectTitle: projectRow.title,
+      projectVersion: `${projectRow.updatedAt}:${projectRow.lastSavedAt ?? 0}`,
       nodes,
       cursor: page.isDone ? null : page.continueCursor,
     };

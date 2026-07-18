@@ -34,8 +34,10 @@ import {
   type BundleNode,
   exportProjectZip,
 } from "@/app/dashboard/projects/[id]/editor/lib/export-doc";
+import { ImportDialog } from "@/app/dashboard/projects/[id]/import-dialog";
 import { ProjectAccessManager } from "@/app/dashboard/projects/[id]/project-access-manager";
 import { ProjectActivity } from "@/app/dashboard/projects/[id]/project-activity";
+import { ProjectShareControl } from "@/app/dashboard/projects/[id]/project-share-control";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { DataLoader } from "@/components/ui/data-state";
@@ -389,6 +391,8 @@ export function ProjectDetail({ projectId, clerkOrgId }: ProjectDetailProps) {
                   )}
                   {exportingZip ? "Exporting…" : "Export ZIP"}
                 </Button>
+                {isAdmin ? <ProjectShareControl projectId={project.id} /> : null}
+                {isAdmin ? <ImportDialog projectId={project.id} /> : null}
                 {isAdmin ? (
                   <Button
                     variant="secondary"

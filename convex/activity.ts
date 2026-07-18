@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { recordOrganizationEvent } from "./audit";
 import { accessForProject, isInactiveTree, requireProjectAccess } from "./documents";
 
 export type ProjectEventKind =
@@ -44,11 +45,34 @@ export async function recordProjectEvent(
   const identity = await ctx.auth.getUserIdentity();
   const actorUserId = value.actorUserId ?? identity?.subject;
   if (!actorUserId) throw new Error("Unauthenticated");
+  const actorName = value.actorName ?? identity?.name ?? identity?.email ?? actorUserId;
   await ctx.db.insert("projectEvents", {
     ...value,
     actorUserId,
-    actorName: value.actorName ?? identity?.name ?? identity?.email ?? actorUserId,
+    actorName,
     createdAt: Date.now(),
+  });
+  const project = await ctx.db.get(value.projectId);
+  const kind =
+    value.kind === "node_created" && value.detail !== "folder"
+      ? "document.created"
+      : `project.${value.kind}`;
+  await recordOrganizationEvent(ctx, {
+    clerkOrgId: value.clerkOrgId,
+    actorUserId,
+    actorName,
+    kind,
+    projectId: value.projectId,
+    projectName: project?.title,
+    targetId: value.documentId ?? value.memberUserId ?? value.checkpointId,
+    targetName: value.targetName,
+    metadata: value.detail
+      ? JSON.stringify({
+          detail: value.detail,
+          previousValue: value.previousValue,
+          nextValue: value.nextValue,
+        })
+      : undefined,
   });
 }
 

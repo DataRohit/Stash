@@ -30,6 +30,16 @@ crons.interval(
   {},
 );
 crons.interval("prune project activity", { hours: 12 }, internal.activity.pruneProjectEvents, {});
+crons.interval("prune organization audit", { hours: 12 }, internal.audit.pruneScheduled, {});
+crons.interval("prune guest invitations", { hours: 6 }, internal.guests.pruneExpired, {});
+crons.interval("deliver outgoing webhooks", { minutes: 1 }, internal.webhooks.drain, {});
+crons.interval("prune webhook deliveries", { hours: 12 }, internal.webhooks.prune, {});
+crons.interval(
+  "prune organization exports",
+  { hours: 6 },
+  internal.organizationExports.pruneExpired,
+  {},
+);
 crons.interval("reap stuck project clones", { minutes: 30 }, internal.projects.reapStuckClones, {});
 crons.daily(
   "reconcile project bytes",

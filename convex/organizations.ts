@@ -1,10 +1,11 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import {
   clampInt,
   HARD_MAX_COLLABORATORS,
+  HARD_MAX_GUESTS,
   HARD_MAX_HISTORY_RETENTION_DAYS,
   HARD_MAX_PROJECT_BYTES,
   HARD_MAX_PROJECTS,
@@ -16,6 +17,7 @@ import { secretMatches } from "./secrets";
 const MAX_TAGS = 8;
 const MAX_TAG_LENGTH = 24;
 const MAX_DESCRIPTION_LENGTH = 280;
+const ORG_PURGE_BATCH = 200;
 
 function normalizeTags(tags: string[]): string[] {
   const seen = new Set<string>();
@@ -136,6 +138,9 @@ export const remove = mutation({
     for (const template of templates) await ctx.db.delete(template._id);
     const existing = await findByClerkOrgId(ctx, args.clerkOrgId);
     if (existing) await ctx.db.delete(existing._id);
+    await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, {
+      clerkOrgId: args.clerkOrgId,
+    });
   },
 });
 
@@ -145,6 +150,7 @@ export const setPlanLimits = mutation({
     clerkOrgId: v.string(),
     maxProjects: v.number(),
     maxCollaborators: v.number(),
+    maxGuests: v.optional(v.number()),
     maxSizeBytes: v.number(),
     historyRetentionDays: v.number(),
   },
@@ -159,6 +165,7 @@ export const setPlanLimits = mutation({
     const next = {
       maxProjects: clampInt(args.maxProjects, 0, HARD_MAX_PROJECTS),
       maxCollaborators: clampInt(args.maxCollaborators, 0, HARD_MAX_COLLABORATORS),
+      maxGuests: clampInt(args.maxGuests ?? 3, 0, HARD_MAX_GUESTS),
       maxSizeBytes: clampInt(args.maxSizeBytes, MIN_PROJECT_BYTES, HARD_MAX_PROJECT_BYTES),
       historyRetentionDays: clampInt(
         args.historyRetentionDays,
@@ -169,6 +176,7 @@ export const setPlanLimits = mutation({
     if (
       row.maxProjects === next.maxProjects &&
       row.maxCollaborators === next.maxCollaborators &&
+      row.maxGuests === next.maxGuests &&
       row.maxSizeBytes === next.maxSizeBytes &&
       row.historyRetentionDays === next.historyRetentionDays
     ) {
@@ -248,5 +256,97 @@ export const purgeDeletedOrg = mutation({
     if (row) {
       await ctx.db.delete(row._id);
     }
+    await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, {
+      clerkOrgId: args.clerkOrgId,
+    });
+  },
+});
+
+export const purgeOrgResources = internalMutation({
+  args: { clerkOrgId: v.string() },
+  handler: async (ctx, args) => {
+    const deliveries = await ctx.db
+      .query("webhookDeliveries")
+      .withIndex("by_org_time", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of deliveries) await ctx.db.delete(row._id);
+    if (deliveries.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const endpoints = await ctx.db
+      .query("webhookEndpoints")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of endpoints) await ctx.db.delete(row._id);
+    if (endpoints.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const exports = await ctx.db
+      .query("organizationExports")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(20);
+    for (const row of exports) {
+      for (const file of row.files ?? []) await ctx.storage.delete(file.storageId);
+      if (row.manifestStorageId) await ctx.storage.delete(row.manifestStorageId);
+      await ctx.db.delete(row._id);
+    }
+    if (exports.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const imports = await ctx.db
+      .query("importJobs")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of imports) await ctx.db.delete(row._id);
+    if (imports.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const apiKeys = await ctx.db
+      .query("apiKeys")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of apiKeys) await ctx.db.delete(row._id);
+    if (apiKeys.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const shares = await ctx.db
+      .query("projectShares")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of shares) await ctx.db.delete(row._id);
+    if (shares.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const shareEvents = await ctx.db
+      .query("projectShareEvents")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of shareEvents) await ctx.db.delete(row._id);
+    if (shareEvents.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const invitations = await ctx.db
+      .query("guestInvitations")
+      .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of invitations) await ctx.db.delete(row._id);
+    if (invitations.length) {
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
+      return;
+    }
+    const events = await ctx.db
+      .query("organizationEvents")
+      .withIndex("by_org_time", (q) => q.eq("clerkOrgId", args.clerkOrgId))
+      .take(ORG_PURGE_BATCH);
+    for (const row of events) await ctx.db.delete(row._id);
+    if (events.length)
+      await ctx.scheduler.runAfter(0, internal.organizations.purgeOrgResources, args);
   },
 });

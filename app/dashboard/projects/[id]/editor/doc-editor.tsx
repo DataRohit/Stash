@@ -66,6 +66,7 @@ export type InlineMentionCandidate = {
   name: string;
   email: string;
   hasAccess?: boolean;
+  role?: string;
 };
 
 type DocEditorProps = {
@@ -456,7 +457,12 @@ function mentionCompletions(getCandidates: () => InlineMentionCandidate[]) {
       from: before.from,
       options: getCandidates().map((candidate) => ({
         label: `@${candidate.name}`,
-        detail: candidate.hasAccess === false ? "No document access" : candidate.email,
+        detail:
+          candidate.hasAccess === false
+            ? "No document access"
+            : candidate.role === "org:guest"
+              ? `Guest · ${candidate.email}`
+              : candidate.email,
         type: "variable",
         apply: `@[${candidate.name.replaceAll("]", "")}](user:${candidate.userId})`,
       })),

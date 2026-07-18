@@ -192,6 +192,42 @@ async function tombstoneProject(ctx: MutationCtx, projectId: Doc<"projects">["_i
 export const purgeBatch = internalMutation({
   args: { projectId: v.id("projects") },
   handler: async (ctx, args) => {
+    const projectShareEvents = await ctx.db
+      .query("projectShareEvents")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const event of projectShareEvents) await ctx.db.delete(event._id);
+    if (projectShareEvents.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const importJobs = await ctx.db
+      .query("importJobs")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const job of importJobs) await ctx.db.delete(job._id);
+    if (importJobs.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const guestInvitations = await ctx.db
+      .query("guestInvitations")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .take(PURGE_GRANT_BATCH);
+    for (const invitation of guestInvitations) await ctx.db.delete(invitation._id);
+    if (guestInvitations.length > 0) {
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
+    const projectShare = await ctx.db
+      .query("projectShares")
+      .withIndex("by_project", (q) => q.eq("projectId", args.projectId))
+      .unique();
+    if (projectShare) {
+      await ctx.db.delete(projectShare._id);
+      await ctx.scheduler.runAfter(0, internal.projects.purgeBatch, { projectId: args.projectId });
+      return;
+    }
     const events = await ctx.db
       .query("projectEvents")
       .withIndex("by_project", (q) => q.eq("projectId", args.projectId))

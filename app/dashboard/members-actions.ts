@@ -2,11 +2,13 @@
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
 import {
+  cancelGuestInvitation,
   claimReconcile,
   mirrorDeleteInvitation,
   mirrorDeleteMember,
   mirrorUpsertPending,
   reconcileOrgMembers,
+  registerGuestInvitation,
   revokeAllProjectAccessForUser,
 } from "@/lib/convex-server";
 import { getUserPlanLimits } from "@/lib/plan-limits";
@@ -14,7 +16,7 @@ import { logServerError } from "@/lib/server-log";
 
 type ClerkClient = Awaited<ReturnType<typeof clerkClient>>;
 
-export type MemberRole = "org:admin" | "org:member";
+export type MemberRole = "org:admin" | "org:member" | "org:guest";
 export type MemberActionResult = { ok: true } | { error: string };
 
 const ALLOWED_ROLES: MemberRole[] = ["org:admin", "org:member"];
@@ -235,6 +237,68 @@ export async function inviteMember(input: {
     return { ok: true };
   } catch (error) {
     logServerError("dashboard.invite_member_failed", error, { clerkOrgId: orgId, userId });
+    return { error: "failed" };
+  }
+}
+
+export async function inviteGuest(input: {
+  projectId: string;
+  email: string;
+  level: "viewer" | "editor";
+}): Promise<MemberActionResult> {
+  const { userId, orgId, orgRole } = await auth();
+  if (!userId || !orgId) return { error: "unauthenticated" };
+  if (orgRole !== "org:admin") return { error: "forbidden" };
+  const email = input.email.trim().toLowerCase();
+  if (!EMAIL_PATTERN.test(email)) return { error: "invalid-email" };
+  try {
+    const client = await clerkClient();
+    const [members, pending, limits] = await Promise.all([
+      fetchAllMembers(client, orgId),
+      fetchAllPending(client, orgId),
+      getUserPlanLimits(),
+    ]);
+    const guestCount = members.filter((member) => member.role === "org:guest").length;
+    const pendingGuestCount = pending.filter((invite) => invite.role === "org:guest").length;
+    if (guestCount + pendingGuestCount >= limits.maxGuestsPerOrganization) {
+      return { error: "guest-limit-reached" };
+    }
+    if (pending.some((invite) => invite.emailAddress.toLowerCase() === email)) {
+      return { error: "already-invited" };
+    }
+    const invitation = await client.organizations.createOrganizationInvitation({
+      organizationId: orgId,
+      inviterUserId: userId,
+      emailAddress: email,
+      role: "org:guest",
+    });
+    try {
+      await registerGuestInvitation({
+        projectId: input.projectId,
+        email,
+        clerkInvitationId: invitation.id,
+        level: input.level,
+      });
+      await mirrorUpsertPending(orgId, email, "org:guest", invitation.id);
+      return { ok: true };
+    } catch (error) {
+      await client.organizations.revokeOrganizationInvitation({
+        organizationId: orgId,
+        invitationId: invitation.id,
+        requestingUserId: userId,
+      });
+      await cancelGuestInvitation(input.projectId, invitation.id).catch(() => undefined);
+      throw error;
+    }
+  } catch (error) {
+    logServerError("dashboard.invite_guest_failed", error, {
+      clerkOrgId: orgId,
+      userId,
+      projectId: input.projectId,
+    });
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("guest-limit-reached")) return { error: "guest-limit-reached" };
+    if (message.includes("already-invited")) return { error: "already-invited" };
     return { error: "failed" };
   }
 }

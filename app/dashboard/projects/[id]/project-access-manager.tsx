@@ -1,9 +1,10 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { Loader2, UserPlus, X } from "lucide-react";
+import { Loader2, Mail, UserPlus, X } from "lucide-react";
 import Image from "next/image";
 import { useState } from "react";
+import { inviteGuest } from "@/app/dashboard/members-actions";
 import { RoleBadge } from "@/components/dashboard/role-badge";
 import { Button } from "@/components/ui/button";
 import { notify } from "@/components/ui/toast";
@@ -36,6 +37,9 @@ export function ProjectAccessManager({
   const grant = useMutation(api.projects.grantAccess);
   const revoke = useMutation(api.projects.revokeAccess);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [guestEmail, setGuestEmail] = useState("");
+  const [guestLevel, setGuestLevel] = useState<GrantLevel>("viewer");
+  const [invitingGuest, setInvitingGuest] = useState(false);
 
   const pid = projectId as Id<"projects">;
   const levelByUser = new Map(access.map((row) => [row.userId, row.level]));
@@ -61,6 +65,28 @@ export function ProjectAccessManager({
   };
 
   const members = (people ?? []).filter((person) => person.status === "accepted");
+
+  const submitGuest = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setInvitingGuest(true);
+    const result = await inviteGuest({ projectId, email: guestEmail, level: guestLevel });
+    setInvitingGuest(false);
+    if ("error" in result) {
+      const messages: Record<string, string> = {
+        "invalid-email": "Enter a valid email address.",
+        "already-invited": "That person already has a pending invitation.",
+        "guest-limit-reached": "Your organization has reached its guest limit.",
+      };
+      notify.error("Couldn’t invite guest", {
+        description: messages[result.error] ?? "Check your Clerk guest role and try again.",
+      });
+      return;
+    }
+    setGuestEmail("");
+    notify.success("Guest invited", {
+      description: `They will only see this project as a ${guestLevel}.`,
+    });
+  };
 
   return (
     <div className="flex flex-col gap-3 border-hairline border-t pt-6">
@@ -189,6 +215,54 @@ export function ProjectAccessManager({
           );
         })}
       </ul>
+      <form
+        onSubmit={submitGuest}
+        className="mt-2 flex flex-col gap-3 rounded-lg border border-hairline bg-foreground/[0.025] p-4"
+      >
+        <div>
+          <p className="flex items-center gap-2 font-medium text-sm">
+            <Mail className="size-4 text-muted-foreground" aria-hidden="true" />
+            Invite a guest
+          </p>
+          <p className="mt-1 text-muted-foreground text-xs leading-relaxed">
+            They will only see this project. Guests cannot create projects, templates, shares, or
+            manage organization settings.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <label className="min-w-0 flex-1">
+            <span className="sr-only">Guest email</span>
+            <input
+              type="email"
+              required
+              autoComplete="email"
+              value={guestEmail}
+              onChange={(event) => setGuestEmail(event.target.value)}
+              placeholder="client@example.com"
+              className="h-11 w-full rounded-sm border border-hairline bg-background px-3 text-sm outline-none transition-colors focus:border-accent"
+            />
+          </label>
+          <label>
+            <span className="sr-only">Guest access level</span>
+            <select
+              value={guestLevel}
+              onChange={(event) => setGuestLevel(event.target.value as GrantLevel)}
+              className="h-11 w-full rounded-sm border border-hairline bg-background px-3 text-sm outline-none focus:border-accent sm:w-28"
+            >
+              <option value="viewer">Viewer</option>
+              <option value="editor">Editor</option>
+            </select>
+          </label>
+          <Button type="submit" className="h-11 sm:w-28" disabled={invitingGuest || !guestEmail}>
+            {invitingGuest ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <UserPlus className="size-4" aria-hidden="true" />
+            )}
+            Invite
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }

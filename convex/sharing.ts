@@ -44,6 +44,12 @@ const SHARE_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
 const RATE_KEY_PATTERN = /^[a-f0-9]{64}$/;
 const SHARED_VIEW_RECORD_LIMIT = 200;
 
+type AllowedDocuments = Set<string> | ((documentId: string) => boolean);
+
+function documentAllowed(allowed: AllowedDocuments, documentId: string): boolean {
+  return typeof allowed === "function" ? allowed(documentId) : allowed.has(documentId);
+}
+
 type SharedViewRecord = {
   id: string;
   name: string;
@@ -57,11 +63,11 @@ type SharedViewRecord = {
   }>;
 };
 
-async function sharedViewPreview(
+export async function sharedViewPreview(
   ctx: QueryCtx,
   projectId: Id<"projects">,
   config: ViewConfig,
-  allowedDocumentIds: Set<string>,
+  allowedDocumentIds: AllowedDocuments,
 ) {
   const referenced = new Set([
     ...config.visibleColumns,
@@ -89,7 +95,7 @@ async function sharedViewPreview(
       : Promise.resolve([]),
   ]);
   const visible = visibleDocuments(documents).filter((document) =>
-    allowedDocumentIds.has(document._id),
+    documentAllowed(allowedDocumentIds, document._id),
   );
   const valuesByDocument = new Map<string, Doc<"documentPropertyValues">[]>();
   await Promise.all(
@@ -188,14 +194,14 @@ async function sharedViewPreview(
   };
 }
 
-async function sharedChartPreview(
+export async function sharedChartPreview(
   ctx: QueryCtx,
   projectId: Id<"projects">,
   config: ChartConfig,
-  allowedDocumentIds: Set<string>,
+  allowedDocumentIds: AllowedDocuments,
 ) {
   let source = null;
-  if (config.sourceDocId && allowedDocumentIds.has(config.sourceDocId)) {
+  if (config.sourceDocId && documentAllowed(allowedDocumentIds, config.sourceDocId)) {
     const id = ctx.db.normalizeId("documents", config.sourceDocId);
     const sourceDoc = id ? await ctx.db.get(id) : null;
     if (
@@ -245,6 +251,83 @@ async function sharedChartPreview(
     }
   }
   return resolveChartData(config, source);
+}
+
+export async function sharedDashboardPreview(
+  ctx: QueryCtx,
+  projectId: Id<"projects">,
+  state: ArrayBuffer,
+  allowedDocumentIds: AllowedDocuments,
+) {
+  const dashboard = new Y.Doc();
+  Y.applyUpdate(dashboard, new Uint8Array(state));
+  const tiles = inspectDashboard(dashboard);
+  dashboard.destroy();
+  const result: Array<{
+    tile: (typeof tiles)[number];
+    status: "ok" | "missing";
+    chart?: Awaited<ReturnType<typeof sharedChartPreview>>;
+    value?: number;
+    truncated?: boolean;
+  }> = [];
+  for (const tile of tiles) {
+    if (!documentAllowed(allowedDocumentIds, tile.sourceDocId)) {
+      result.push({ tile, status: "missing" });
+      continue;
+    }
+    const sourceId = ctx.db.normalizeId("documents", tile.sourceDocId);
+    const sourceDoc = sourceId ? await ctx.db.get(sourceId) : null;
+    if (
+      sourceDoc?.kind !== "file" ||
+      sourceDoc.projectId !== projectId ||
+      (await isInactiveTree(ctx, sourceDoc))
+    ) {
+      result.push({ tile, status: "missing" });
+      continue;
+    }
+    const sourceState = await documentState(ctx, sourceDoc);
+    if (!sourceState) {
+      result.push({ tile, status: "missing" });
+      continue;
+    }
+    const sourceYdoc = new Y.Doc();
+    Y.applyUpdate(sourceYdoc, new Uint8Array(sourceState));
+    if (tile.kind === "chart" && sourceDoc.fileType === "chart") {
+      const chart = await sharedChartPreview(
+        ctx,
+        projectId,
+        inspectChart(sourceYdoc),
+        allowedDocumentIds,
+      );
+      sourceYdoc.destroy();
+      result.push({ tile, status: "ok", chart });
+    } else if (tile.kind === "stat" && sourceDoc.fileType === "view") {
+      const preview = await sharedViewPreview(
+        ctx,
+        projectId,
+        inspectView(sourceYdoc),
+        allowedDocumentIds,
+      );
+      sourceYdoc.destroy();
+      const value =
+        tile.aggregate === "count"
+          ? preview.records.length
+          : preview.records.reduce(
+              (sum, record) =>
+                sum +
+                (Number(
+                  record.properties.find((property) => property.propertyId === tile.propertyId)
+                    ?.displayValue,
+                ) || 0),
+              0,
+            );
+      result.push({ tile, status: "ok", value, truncated: preview.truncated });
+    } else {
+      sourceYdoc.destroy();
+      result.push({ tile, status: "missing" });
+    }
+  }
+  return result;
 }
 
 function serviceSecretValid(provided: string): boolean {
@@ -917,6 +1000,15 @@ export const pruneShareEvents = internalMutation({
       await ctx.db.delete(row._id);
     }
     if (rows.length === PRUNE_BATCH) {
+      await ctx.scheduler.runAfter(0, internal.sharing.pruneShareEvents, {});
+      return;
+    }
+    const projectRows = await ctx.db
+      .query("projectShareEvents")
+      .withIndex("by_created", (q) => q.lt("createdAt", cutoff))
+      .take(PRUNE_BATCH);
+    for (const row of projectRows) await ctx.db.delete(row._id);
+    if (projectRows.length === PRUNE_BATCH) {
       await ctx.scheduler.runAfter(0, internal.sharing.pruneShareEvents, {});
     }
   },

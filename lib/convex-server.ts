@@ -301,6 +301,39 @@ export async function fetchSharedDocument(token: string, ip: string) {
   }
 }
 
+export async function fetchSharedProject(
+  token: string,
+  documentId: string | undefined,
+  treeCursor: string | undefined,
+  ip: string,
+) {
+  if (!SHARE_TOKEN_PATTERN.test(token)) return null;
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  const secret = process.env.CONVEX_PURGE_SECRET;
+  const salt = process.env.SHARE_IP_SALT;
+  if (!url || !secret || !salt) return { status: "unconfigured" as const };
+  const rateId = `${ip.slice(0, MAX_SHARE_RATE_ID_LENGTH)}\0project`;
+  const rateKey = createHash("sha256").update(`${rateId}\0${salt}`).digest("hex");
+  const { userId, orgId, orgRole } = await auth();
+  const client = new ConvexHttpClient(url);
+  try {
+    const rate = await client.mutation(api.sharing.checkShareRate, { secret, rateKey });
+    if (rate.limited) return { status: "rate-limited" as const };
+    return await client.query(api.projectSharing.redeem, {
+      secret,
+      token,
+      documentId: documentId as Id<"documents"> | undefined,
+      treeCursor,
+      viewerUserId: userId ?? undefined,
+      viewerOrgId: orgId ?? undefined,
+      viewerOrgRole: orgRole ?? undefined,
+    });
+  } catch (error) {
+    logServerError("convex.fetch_shared_project", error);
+    return { status: "error" as const };
+  }
+}
+
 export async function fetchProject(projectId: string) {
   const client = await authedClient();
   if (!client) {
@@ -316,6 +349,7 @@ export async function setOrgPlanLimits(
   limits: {
     maxProjects: number;
     maxCollaborators: number;
+    maxGuests?: number;
     maxSizeBytes: number;
     historyRetentionDays: number;
   },
@@ -330,6 +364,7 @@ export async function setOrgPlanLimits(
     clerkOrgId,
     maxProjects: limits.maxProjects,
     maxCollaborators: limits.maxCollaborators,
+    maxGuests: limits.maxGuests,
     maxSizeBytes: limits.maxSizeBytes,
     historyRetentionDays: limits.historyRetentionDays,
   });
@@ -340,6 +375,7 @@ export async function webhookSetOrgPlanLimits(
   limits: {
     maxProjects: number;
     maxCollaborators: number;
+    maxGuests?: number;
     maxSizeBytes: number;
     historyRetentionDays: number;
   },
@@ -415,6 +451,79 @@ export async function webhookDeleteInvitation(
   });
 }
 
+export async function recordTrustedOrgEvent(input: {
+  clerkOrgId: string;
+  actorUserId: string | null;
+  actorName: string;
+  kind: string;
+  targetId?: string;
+  targetName: string;
+  metadata?: string;
+}): Promise<void> {
+  const { client, secret } = webhookConvexClient();
+  await client.mutation(api.audit.recordTrusted, { ...input, secret });
+}
+
+export async function fetchAuditExport(
+  clerkOrgId: string,
+  filters: {
+    kind?: string;
+    actorUserId?: string;
+    projectId?: string;
+    from?: number;
+    to?: number;
+  } = {},
+) {
+  const client = await authedClient();
+  if (!client) throw new Error("Unauthenticated");
+  const items: Array<{
+    id: string;
+    actorUserId: string | null;
+    actorName: string;
+    kind: string;
+    projectId?: string;
+    projectName?: string;
+    targetId?: string;
+    targetName: string;
+    metadata?: string;
+    createdAt: number;
+  }> = [];
+  let cursor: string | null = null;
+  for (let pageNumber = 0; pageNumber < 50; pageNumber += 1) {
+    const page: {
+      items: typeof items;
+      nextCursor: string | null;
+    } = await client.query(api.audit.list, {
+      clerkOrgId,
+      cursor,
+      limit: 100,
+      kind: filters.kind,
+      actorUserId: filters.actorUserId,
+      projectId: filters.projectId as Id<"projects"> | undefined,
+      from: filters.from,
+      to: filters.to,
+    });
+    items.push(...page.items);
+    cursor = page.nextCursor;
+    if (!cursor) break;
+  }
+  return { items, truncated: cursor !== null };
+}
+
+export async function fetchOrganizationExportUrl(
+  clerkOrgId: string,
+  jobId: string,
+  fileName: string,
+): Promise<string | null> {
+  const client = await authedClient();
+  if (!client) throw new Error("Unauthenticated");
+  return await client.query(api.organizationExports.downloadUrl, {
+    clerkOrgId,
+    jobId: jobId as Id<"organizationExports">,
+    fileName,
+  });
+}
+
 export async function claimReconcile(clerkOrgId: string, staleMs: number): Promise<boolean> {
   try {
     const client = await authedClient();
@@ -461,6 +570,32 @@ export async function setProjectMaxCollaborators(
   await client.mutation(api.projects.setMaxCollaborators, {
     projectId: projectId as Id<"projects">,
     maxCollaborators,
+  });
+}
+
+export async function registerGuestInvitation(input: {
+  projectId: string;
+  email: string;
+  clerkInvitationId: string;
+  level: "viewer" | "editor";
+}): Promise<void> {
+  const client = await authedClient();
+  if (!client) throw new Error("Convex is not configured");
+  await client.mutation(api.guests.registerInvitation, {
+    ...input,
+    projectId: input.projectId as Id<"projects">,
+  });
+}
+
+export async function cancelGuestInvitation(
+  projectId: string,
+  clerkInvitationId: string,
+): Promise<void> {
+  const client = await authedClient();
+  if (!client) throw new Error("Convex is not configured");
+  await client.mutation(api.guests.cancelInvitation, {
+    projectId: projectId as Id<"projects">,
+    clerkInvitationId,
   });
 }
 

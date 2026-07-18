@@ -33,6 +33,7 @@ export default async function ProjectsPage() {
     await setOrgPlanLimits(orgId, {
       maxProjects: limits.maxProjectsPerOrganization,
       maxCollaborators: limits.maxCollaboratorsPerProject,
+      maxGuests: limits.maxGuestsPerOrganization,
       maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
       historyRetentionDays: limits.historyRetentionDays,
     });

@@ -3,6 +3,7 @@ import { verifyWebhook } from "@clerk/nextjs/webhooks";
 import type { NextRequest } from "next/server";
 import {
   purgeDeletedOrganization,
+  recordTrustedOrgEvent,
   webhookDeleteAcceptedMember,
   webhookDeleteInvitation,
   webhookDeleteUser,
@@ -82,6 +83,18 @@ export async function POST(req: NextRequest) {
             lastName: userData.last_name,
             imageUrl: userData.image_url,
           });
+          await recordTrustedOrgEvent({
+            clerkOrgId: orgId,
+            actorUserId: userId,
+            actorName: email,
+            kind:
+              event.type === "organizationMembership.created"
+                ? "member.joined"
+                : "member.role_changed",
+            targetId: userId,
+            targetName: email,
+            metadata: JSON.stringify({ role: event.data.role }),
+          });
         } else if (orgId && userId) {
           logServerWarning("clerk_webhook.membership_email_unresolved", {
             eventType: event.type,
@@ -96,6 +109,14 @@ export async function POST(req: NextRequest) {
         const userId = event.data.public_user_data.user_id;
         if (orgId && userId) {
           await webhookDeleteAcceptedMember(orgId, userId);
+          await recordTrustedOrgEvent({
+            clerkOrgId: orgId,
+            actorUserId: userId,
+            actorName: userId,
+            kind: "member.left",
+            targetId: userId,
+            targetName: userId,
+          });
           await revokeOrganizationSessions(userId, orgId);
         }
         break;
@@ -126,6 +147,7 @@ export async function POST(req: NextRequest) {
           await webhookSetOrgPlanLimits(organization.id, {
             maxProjects: limits.maxProjectsPerOrganization,
             maxCollaborators: limits.maxCollaboratorsPerProject,
+            maxGuests: limits.maxGuestsPerOrganization,
             maxSizeBytes: limits.maxProjectSizeMb * 1024 * 1024,
             historyRetentionDays: limits.historyRetentionDays,
           });

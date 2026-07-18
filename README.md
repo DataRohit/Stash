@@ -187,19 +187,62 @@ confirms that changes synchronize automatically.
 ### Sharing and export
 
 - Private, organization-only, and public read-only document modes.
+- Project-wide read-only links with expiry, token rotation, per-document exclusions,
+  a paged public tree, and mobile navigation.
 - Optional expiry and share-token rotation.
 - Organization policy that degrades public links to organization access.
 - Public-edge throttling isolated by token and IP.
 - Standalone HTML, print/PDF, Markdown, canonical CSV, board Markdown, view-record
   CSV, chart SVG, dashboard HTML/PDF/ZIP, and project ZIP export.
+- Administrator organization exports with one archive per project, a capture manifest,
+  consistency checks, bounded archive memory, and links that expire after 24 hours.
 
 ### Organizations and authorization
 
 - Mandatory Clerk organizations and organization-scoped routing.
-- Administrator, editor, and viewer behavior.
+- Administrator, editor, viewer, and project-scoped guest behavior.
 - Server-side organization, role, membership, project-grant, and mutation checks.
-- Project, member, collaborator, and storage plan limits.
+- Project, member, guest, collaborator, and storage plan limits.
 - Clerk webhook synchronization with a local reconciliation fallback.
+- An administrator Trust center with paged audit events, actor/project/date filters,
+  bounded CSV export, usage insights, retention policy, scoped API keys, signed
+  outgoing webhooks, delivery history, and organization export.
+- ZIP migration from Notion, Confluence, and Google Docs exports with archive-bomb
+  defenses, preview, conversion reporting, live progress, quota checks, and undo.
+
+### Automation API and webhooks
+
+Organization administrators create reveal-once API keys in the Trust center. Keys are
+stored only as SHA-256 hashes, independently revocable, limited to 120 requests per
+minute, and restricted to the selected `projects:read`, `documents:read`,
+`documents:write`, and `properties:write` scopes. Send a key as
+`Authorization: Bearer stash_v1_...` to the versioned endpoints below.
+
+| Method and path | Required scope | Behavior |
+| --- | --- | --- |
+| `GET /api/v1/projects` | `projects:read` | Lists active organization projects |
+| `GET /api/v1/projects/{projectId}/documents` | `documents:read` | Lists active project nodes with cursor paging |
+| `GET /api/v1/documents/{documentId}` | `documents:read` | Returns content, metadata, and typed properties |
+| `POST /api/v1/projects/{projectId}/documents` | `documents:write` | Creates a Markdown document |
+| `PATCH /api/v1/documents/{documentId}` | `documents:write` | Appends Markdown through the collaboration stream |
+| `PUT /api/v1/documents/{documentId}/properties/{propertyId}` | `properties:write` | Updates a typed property |
+
+API errors use `{ "error": { "code": "...", "message": "..." } }`. List responses
+contain `data` and a nullable `nextCursor`; `limit` is clamped to 1–100. Writes enforce
+active-project access, parent and property validation, node and file-size ceilings, and
+the current project quota.
+
+Outgoing webhook endpoints accept HTTPS URLs on the standard port and select from
+document-created, comment-created, project-share, membership, and guest events. Event
+payloads contain identifiers and names, never document content. Every request carries
+`X-Stash-Delivery`, `X-Stash-Timestamp`, and `X-Stash-Signature`. Verify the signature by
+computing a keyed SHA-256 digest over `timestamp + "." + rawRequestBody`, reject stale
+timestamps, compare in constant time, and deduplicate by the delivery ID.
+
+Delivery uses an eight-second timeout, no redirects, per-endpoint ordering, bounded
+concurrency, and exponential retry for up to eight attempts. Terminal failures disable
+the endpoint and remain visible in delivery history. Slack delivery and link unfurling
+are intentionally not included.
 
 ## Architecture
 
@@ -311,6 +354,7 @@ cp .env.example .env.local
 | `RESEND_API_KEY` | No | Enables transactional notification emails through Resend when paired with a sender |
 | `RESEND_FROM_EMAIL` | No | Verified sender used for notification and digest emails |
 | `EMAIL_UNSUBSCRIBE_SECRET` | For email | Signs expiring, single-purpose unsubscribe links; use 32+ random characters |
+| `WEBHOOK_SECRET_ENCRYPTION_KEY` | For outgoing webhooks | Base64-encoded 32-byte AES key used to encrypt endpoint signing secrets inside Convex |
 | `CLERK_JWT_ISSUER_DOMAIN` | Yes | Verifies Clerk session JWTs inside Convex |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | No | Overrides the sign-in route; template default is `/sign-in` |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | No | Overrides the sign-up route; template default is `/sign-up` |
@@ -325,6 +369,12 @@ Convex deployment environment as well as the web environment. The unsubscribe
 secret must have the same value in both runtimes; `CONVEX_PURGE_SECRET` must
 also match so the signed public route can update the preference through the
 trusted server path.
+
+Outgoing webhook delivery runs inside Convex actions. Configure
+`WEBHOOK_SECRET_ENCRYPTION_KEY` in the Convex deployment environment. Generate an
+independent key with a cryptographically secure random source, keep it stable across
+deployments, and rotate endpoints after changing it because existing encrypted signing
+secrets cannot be decrypted with a replacement key.
 
 ## Local development
 

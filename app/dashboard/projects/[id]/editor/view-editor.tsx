@@ -347,7 +347,7 @@ function PropertyCell({
           { value: "", label: "Unassigned" },
           ...members.map((member) => ({
             value: member.userId,
-            label: `${member.name} · ${member.email}`,
+            label: `${member.name}${member.role === "org:guest" ? " · Guest" : ""} · ${member.email}`,
           })),
         ]}
         onChange={(userId) => void save(userId ? { type: "person", userId } : null)}

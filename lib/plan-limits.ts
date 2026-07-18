@@ -5,6 +5,7 @@ export type PlanLimits = {
   maxProjectsPerOrganization: number;
   maxCollaboratorsPerProject: number;
   maxMembersPerOrganization: number;
+  maxGuestsPerOrganization: number;
   maxProjectSizeMb: number;
   historyRetentionDays: number;
 };
@@ -14,6 +15,7 @@ const DEFAULT_LIMITS: PlanLimits = {
   maxProjectsPerOrganization: 5,
   maxCollaboratorsPerProject: 5,
   maxMembersPerOrganization: 5,
+  maxGuestsPerOrganization: 3,
   maxProjectSizeMb: 8,
   historyRetentionDays: 30,
 };
@@ -22,6 +24,7 @@ const ORGANIZATIONS_PATTERN = /^(\d+)_organizations?$/;
 const PROJECTS_PATTERN = /^(\d+)_projects_per_organization$/;
 const COLLABORATORS_PATTERN = /^(\d+)_collaborators_per_project$/;
 const MEMBERS_PATTERN = /^(\d+)_organization_members?$/;
+const GUESTS_PATTERN = /^(\d+)_organization_guests?$/;
 const PROJECT_SIZE_PATTERN = /^(\d+)_mb_max_project_size$/;
 const HISTORY_RETENTION_PATTERN = /^(\d+)_days?_version_history$/;
 
@@ -49,6 +52,8 @@ export function limitsFromFeatures(featureSlugs: string[]): PlanLimits {
       firstMatch(featureSlugs, COLLABORATORS_PATTERN) ?? DEFAULT_LIMITS.maxCollaboratorsPerProject,
     maxMembersPerOrganization:
       firstMatch(featureSlugs, MEMBERS_PATTERN) ?? DEFAULT_LIMITS.maxMembersPerOrganization,
+    maxGuestsPerOrganization:
+      firstMatch(featureSlugs, GUESTS_PATTERN) ?? DEFAULT_LIMITS.maxGuestsPerOrganization,
     maxProjectSizeMb:
       firstMatch(featureSlugs, PROJECT_SIZE_PATTERN) ?? DEFAULT_LIMITS.maxProjectSizeMb,
     historyRetentionDays:

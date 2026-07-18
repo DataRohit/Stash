@@ -564,7 +564,14 @@ function AssigneePicker({
                     >
                       <Avatar member={member} px={32} className="size-8" />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium text-sm">{member.name}</span>
+                        <span className="flex items-center gap-1.5 truncate font-medium text-sm">
+                          {member.name}
+                          {member.role === "org:guest" ? (
+                            <span className="rounded-xs border border-warning/40 bg-warning/10 px-1 py-0.5 font-mono text-[8px] uppercase tracking-wider">
+                              Guest
+                            </span>
+                          ) : null}
+                        </span>
                         <span className="block truncate text-muted-foreground text-xs">
                           {member.email}
                         </span>

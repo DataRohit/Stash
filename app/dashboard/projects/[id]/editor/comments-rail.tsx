@@ -19,6 +19,7 @@ export type MentionCandidate = {
   name: string;
   email: string;
   imageUrl: string | null;
+  role?: string;
 };
 
 export type CommentMessage = {
@@ -29,6 +30,7 @@ export type CommentMessage = {
   authorName: string;
   authorEmail: string | null;
   authorImage: string | null;
+  authorRole?: string;
   createdAt: number;
 };
 
@@ -221,7 +223,14 @@ function Composer({
                       {initials(candidate.name)}
                     </span>
                     <span className="min-w-0">
-                      <span className="block truncate text-xs">{candidate.name}</span>
+                      <span className="flex items-center gap-1.5 truncate text-xs">
+                        {candidate.name}
+                        {candidate.role === "org:guest" ? (
+                          <span className="rounded-xs border border-warning/40 bg-warning/10 px-1 py-0.5 font-mono text-[8px] uppercase tracking-wider">
+                            Guest
+                          </span>
+                        ) : null}
+                      </span>
                       <span className="block truncate text-[11px] text-muted-foreground">
                         {candidate.email}
                       </span>
@@ -254,6 +263,11 @@ function MessageItem({ message }: { message: CommentMessage }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
           <span className="truncate font-medium text-xs">{message.authorName}</span>
+          {message.authorRole === "org:guest" ? (
+            <span className="rounded-xs border border-warning/40 bg-warning/10 px-1 py-0.5 font-mono text-[8px] uppercase tracking-wider">
+              Guest
+            </span>
+          ) : null}
           <time
             dateTime={new Date(message.createdAt).toISOString()}
             title={formatDateTime(message.createdAt)}
