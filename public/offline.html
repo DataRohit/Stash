@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#171717" />
+    <title>Offline · Stash</title>
+    <style>
+      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #f7f6f2; color: #171717; }
+      main { width: min(32rem, calc(100vw - 2rem)); box-sizing: border-box; padding: 2rem; border: 1px solid #17171722; border-radius: 1rem; background: #ffffffcc; box-shadow: 0 1rem 4rem #17171712; }
+      span { display: grid; place-items: center; width: 2.75rem; height: 2.75rem; border-radius: .5rem; background: #171717; color: #f7f6f2; font-weight: 700; }
+      h1 { margin: 1.25rem 0 .5rem; font-family: Georgia, serif; font-size: 2rem; font-weight: 500; }
+      p { margin: 0; color: #5c5a55; line-height: 1.6; }
+      button { min-height: 2.75rem; margin-top: 1.5rem; padding: 0 1rem; border: 0; border-radius: .4rem; background: #171717; color: #fff; font: inherit; cursor: pointer; }
+      @media (prefers-color-scheme: dark) { body { background: #111; color: #f7f6f2; } main { background: #1b1b1bcc; border-color: #ffffff20; } p { color: #b8b5ad; } button { background: #f7f6f2; color: #171717; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span aria-hidden="true">S</span>
+      <h1>You’re offline</h1>
+      <p>This page is not stored on this device. Reconnect and try again, or return to a document that is available offline.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

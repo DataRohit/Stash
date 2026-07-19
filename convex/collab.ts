@@ -1241,7 +1241,7 @@ export const pullUpdates = query({
   handler: async (ctx, args) => {
     const projectId = await documentProject(ctx, args.documentId);
     if (!projectId || !(await accessForProject(ctx, projectId))) {
-      return { snapshot: null, throughSeq: 0, updates: [] };
+      return { authorized: false as const, snapshot: null, throughSeq: 0, updates: [] };
     }
     const snapshotRow = args.afterSeq === 0 ? await baseSnapshot(ctx, args.documentId) : null;
     const baseSeq = snapshotRow?.throughSeq ?? args.afterSeq;
@@ -1250,6 +1250,7 @@ export const pullUpdates = query({
       .withIndex("by_document", (q) => q.eq("documentId", args.documentId).gt("seq", baseSeq))
       .collect();
     return {
+      authorized: true as const,
       snapshot: snapshotRow?.snapshot ?? null,
       throughSeq: snapshotRow?.throughSeq ?? args.afterSeq,
       updates: updates.map((row) => ({ seq: row.seq, update: row.update })),

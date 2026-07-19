@@ -12,6 +12,7 @@ const schema = defineSchema({
     maxSizeBytes: v.optional(v.number()),
     historyRetentionDays: v.optional(v.number()),
     publicSharingEnabled: v.optional(v.boolean()),
+    offlineCachingEnabled: v.optional(v.boolean()),
     reconciledAt: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_clerk_org", ["clerkOrgId"]),

@@ -3,6 +3,7 @@
 import { useMutation, useQuery } from "convex/react";
 import {
   Activity,
+  CloudOff,
   Copy,
   Download,
   HardDrive,
@@ -14,6 +15,7 @@ import {
 import { useState } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { DataLoader } from "@/components/ui/data-state";
+import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { formatBytes, formatDateTime, formatRelativeTime } from "@/lib/format";
@@ -45,12 +47,15 @@ export function AdminWorkspace({ clerkOrgId }: { clerkOrgId: string }) {
   const usage = useQuery(api.audit.usage, { clerkOrgId });
   const filterOptions = useQuery(api.audit.filterOptions, { clerkOrgId });
   const apiKeys = useQuery(api.apiKeys.list, { clerkOrgId });
+  const organization = useQuery(api.organizations.get, { clerkOrgId });
   const createApiKey = useMutation(api.apiKeys.create);
   const revokeApiKey = useMutation(api.apiKeys.revoke);
+  const setOfflineCaching = useMutation(api.organizations.setOfflineCaching);
   const [newKeyName, setNewKeyName] = useState("");
   const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyScopes, setKeyScopes] = useState(["projects:read", "documents:read"]);
+  const [offlinePolicyBusy, setOfflinePolicyBusy] = useState(false);
   const auditExportHref = `/api/audit/export?${new URLSearchParams({
     ...(auditKind ? { kind: auditKind } : {}),
     ...(auditActor ? { actor: auditActor } : {}),
@@ -331,6 +336,58 @@ export function AdminWorkspace({ clerkOrgId }: { clerkOrgId: string }) {
                   Organization administrators can audit every project regardless of an individual
                   project grant. Enterprise SSO and automated provisioning are not enabled.
                 </p>
+              </div>
+            </div>
+            <div className="border-hairline border-t pt-6">
+              <div className="flex items-start gap-3">
+                <CloudOff className="mt-0.5 size-5 text-accent" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <h2 className="font-serif text-xl">Offline document access</h2>
+                  <p className="mt-1 max-w-3xl text-muted-foreground text-sm leading-relaxed">
+                    Allow recently opened documents to be stored on members&apos; devices for
+                    offline reading and editing. Browser storage is not encrypted by Stash, so leave
+                    this disabled when organization policy prohibits local copies.
+                  </p>
+                  {organization === undefined ? (
+                    <div className="mt-3">
+                      <DataLoader label="Loading offline policy" compact />
+                    </div>
+                  ) : (
+                    <label className="mt-4 flex min-h-11 cursor-pointer items-center gap-3 rounded-sm border border-hairline bg-background/40 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={organization?.offlineCachingEnabled === true}
+                        disabled={offlinePolicyBusy}
+                        onChange={async (event) => {
+                          const enabled = event.target.checked;
+                          setOfflinePolicyBusy(true);
+                          try {
+                            await setOfflineCaching({ clerkOrgId, enabled });
+                            notify.success(
+                              enabled
+                                ? "Offline document access enabled"
+                                : "Offline document access disabled",
+                              {
+                                description: enabled
+                                  ? "Documents opened from now on may be stored on members’ devices."
+                                  : "Stored workspace data will be cleared when connected clients receive this policy update.",
+                              },
+                            );
+                          } catch {
+                            notify.error("Couldn’t update offline access", {
+                              description: "The policy was not changed. Please try again.",
+                            });
+                          } finally {
+                            setOfflinePolicyBusy(false);
+                          }
+                        }}
+                      />
+                      <span className="text-sm">
+                        Permit offline copies on organization members&apos; devices
+                      </span>
+                    </label>
+                  )}
+                </div>
               </div>
             </div>
             <div className="border-hairline border-t pt-6">

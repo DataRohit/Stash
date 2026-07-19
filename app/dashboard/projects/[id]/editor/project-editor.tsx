@@ -448,6 +448,7 @@ export function ProjectEditor({
   const nodesData = useQuery(api.documents.listByProject, accessLost ? "skip" : { projectId: pid });
   const nodes = useMemo(() => (nodesData ?? []) as TreeNode[], [nodesData]);
   const usage = useQuery(api.documents.usage, accessLost ? "skip" : { projectId: pid });
+  const organization = useQuery(api.organizations.get, orgChanged ? "skip" : { clerkOrgId });
 
   const createFolder = useMutation(api.documents.createFolder);
   const createFile = useMutation(api.documents.createFile);
@@ -573,7 +574,18 @@ export function ProjectEditor({
     window.addEventListener("pointerup", onUp);
   };
 
-  const { user } = useUser();
+  const { isLoaded: userLoaded, user } = useUser();
+  const [networkOnline, setNetworkOnline] = useState(true);
+  useEffect(() => {
+    const update = () => setNetworkOnline(navigator.onLine);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
   const effectiveSelectedId =
     selectedId && (nodesData === undefined || nodes.some((node) => node.id === selectedId))
       ? selectedId
@@ -609,7 +621,22 @@ export function ProjectEditor({
     }),
     [user],
   );
-  const collab = useCollabDoc(selectedFileId, canEdit, collabUser);
+  const collab = useCollabDoc(
+    selectedFileId,
+    canEdit,
+    collabUser,
+    clerkOrgId,
+    !userLoaded || !user || organization === undefined
+      ? undefined
+      : organization?.offlineCachingEnabled === true,
+  );
+  const isOffline = collab ? !collab.online : !networkOnline;
+  const canEditDocument =
+    canEdit &&
+    (!isOffline ||
+      (organization?.offlineCachingEnabled === true &&
+        collab?.offlineAvailable === true &&
+        !collab.storageDegraded));
   const commentThreadsData = useQuery(
     api.comments.listForDocument,
     selectedFileId && !accessLost ? { documentId: selectedFileId as Id<"documents"> } : "skip",
@@ -942,6 +969,15 @@ export function ProjectEditor({
     files: File[],
     update: (index: number, progress: number, status: UploadStatus, error?: string) => void,
   ) => {
+    if (isOffline) {
+      files.forEach((_, index) => {
+        update(index, 100, "failed", "Uploads are unavailable while offline.");
+      });
+      notify.warning("Uploads unavailable offline", {
+        description: "Reconnect before adding files or attachments.",
+      });
+      return;
+    }
     let completed = 0;
     let failed = 0;
     for (const [index, file] of files.entries()) {
@@ -998,6 +1034,12 @@ export function ProjectEditor({
   };
 
   const insertImageAsset = async (file: File): Promise<string | null> => {
+    if (isOffline) {
+      notify.warning("Image uploads unavailable offline", {
+        description: "Reconnect before adding an image.",
+      });
+      return null;
+    }
     if (selectedNode?.kind !== "file") {
       return null;
     }
@@ -1341,7 +1383,7 @@ export function ProjectEditor({
         projectId={projectId}
         clerkOrgId={clerkOrgId}
         selectedId={effectiveSelectedId}
-        canEdit={canEdit}
+        canEdit={canEdit && !isOffline}
         onSelect={(node) => selectNode(node.id)}
         onCreateFolder={(parentId, name) =>
           guard(() =>
@@ -1480,13 +1522,17 @@ export function ProjectEditor({
   );
 
   const saveStatus = selectedFileId
-    ? collab?.pendingEdits
-      ? "Reconnecting..."
-      : collab?.syncing
-        ? "Syncing..."
-        : collab?.lastSyncedAt
-          ? `Live ${formatRelativeTime(collab.lastSyncedAt)}`
-          : "Live"
+    ? isOffline
+      ? collab?.pendingEdits
+        ? `Offline · ${collab.pendingEdits} ${collab.pendingEdits === 1 ? "edit" : "edits"} queued`
+        : "Offline"
+      : collab?.pendingEdits
+        ? "Reconnecting..."
+        : collab?.syncing
+          ? "Syncing..."
+          : collab?.lastSyncedAt
+            ? `Live ${formatRelativeTime(collab.lastSyncedAt)}`
+            : "Live"
     : "";
   const usedBytes = usage?.usedBytes ?? 0;
   const maxBytes = usage?.maxSizeBytes ?? 8 * 1024 * 1024;
@@ -1564,11 +1610,17 @@ export function ProjectEditor({
               documentId={selectedNode.id}
               favorite={favoriteData?.some((item) => item.documentId === selectedNode.id) ?? false}
               className="size-11"
+              disabled={isOffline}
             />
           ) : null}
           {selectedFileId && watchState ? (
             <div className="hidden sm:block">
-              <WatchButton documentId={selectedFileId} watching={watchState.watching} compact />
+              <WatchButton
+                documentId={selectedFileId}
+                watching={watchState.watching}
+                compact
+                disabled={isOffline}
+              />
             </div>
           ) : null}
           {selectedFileId && collab ? (
@@ -1611,12 +1663,14 @@ export function ProjectEditor({
                   <button
                     type="button"
                     onClick={() => setShareOpen((value) => !value)}
+                    disabled={isOffline}
+                    title={isOffline ? "Sharing is unavailable while offline" : undefined}
                     aria-label="Share document"
                     aria-haspopup="dialog"
                     aria-expanded={shareOpen}
                     aria-pressed={shareOpen}
                     className={cn(
-                      "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors",
+                      "relative flex size-8 cursor-pointer items-center justify-center rounded-sm border border-hairline transition-colors disabled:cursor-not-allowed disabled:opacity-50",
                       shareOpen
                         ? "bg-foreground/[0.08] text-foreground"
                         : "text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground",
@@ -1982,7 +2036,33 @@ export function ProjectEditor({
                   {collab.blocked} Editing is paused until this file can sync again.
                 </div>
               ) : null}
-              {!collab?.blocked && collab?.pendingEdits ? (
+              {!collab?.blocked && collab?.storageDegraded ? (
+                <div
+                  role="status"
+                  className="shrink-0 border-warning/30 border-b bg-warning/8 px-4 py-2 text-warning text-xs"
+                >
+                  Offline storage is unavailable in this browser. Live synchronization still works,
+                  but this document may not survive a reload without a connection.
+                </div>
+              ) : null}
+              {!collab?.blocked && isOffline ? (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="shrink-0 border-warning/30 border-b bg-warning/8 px-4 py-2 text-warning text-xs"
+                >
+                  {organization?.offlineCachingEnabled !== true
+                    ? "Offline editing is disabled by your organization’s device-storage policy."
+                    : collab?.offlineAvailable && !collab.storageDegraded
+                      ? "Offline — live document edits stay on this device until the connection returns."
+                      : "This document is not available for durable offline editing. Keep this tab open and reconnect."}{" "}
+                  Comments, uploads, sharing, and properties are read-only.
+                  {organization?.offlineCachingEnabled === true && collab?.pendingEdits
+                    ? ` ${collab.pendingEdits} ${collab.pendingEdits === 1 ? "edit is" : "edits are"} queued.`
+                    : ""}
+                </div>
+              ) : null}
+              {!collab?.blocked && !isOffline && collab?.pendingEdits ? (
                 <div
                   role="status"
                   aria-live="polite"
@@ -1998,7 +2078,7 @@ export function ProjectEditor({
                     key={selectedFileId}
                     ydoc={collab?.ydoc}
                     awareness={collab?.awareness}
-                    readOnly={!canEdit || Boolean(collab?.blocked)}
+                    readOnly={!canEditDocument || Boolean(collab?.blocked)}
                     documentId={selectedFileId}
                     activeComment={
                       commentThreads.find((thread) => thread.id === activeCommentId)?.anchor
@@ -2023,7 +2103,7 @@ export function ProjectEditor({
                     ydoc={collab.ydoc}
                     awareness={collab.awareness}
                     ready={collab.ready}
-                    canEdit={canEdit && !collab.blocked}
+                    canEdit={canEditDocument && !collab.blocked}
                     members={boardMembers}
                     nodes={nodes}
                     documentId={selectedFileId}
@@ -2041,7 +2121,7 @@ export function ProjectEditor({
                     ydoc={collab.ydoc}
                     awareness={collab.awareness}
                     ready={collab.ready}
-                    canEdit={canEdit && !collab.blocked}
+                    canEdit={canEditDocument && !collab.blocked}
                     members={boardMembers}
                     documentId={selectedFileId}
                     userId={user?.id ?? "anonymous"}
@@ -2056,7 +2136,7 @@ export function ProjectEditor({
                     ydoc={collab.ydoc}
                     awareness={collab.awareness}
                     ready={collab.ready}
-                    canEdit={canEdit && !collab.blocked}
+                    canEdit={canEditDocument && !collab.blocked}
                     nodes={nodes}
                   />
                 </div>
@@ -2067,7 +2147,7 @@ export function ProjectEditor({
                     projectId={pid}
                     ydoc={collab.ydoc}
                     ready={collab.ready}
-                    canEdit={canEdit && !collab.blocked}
+                    canEdit={canEditDocument && !collab.blocked}
                     nodes={nodes}
                   />
                 </div>
@@ -2102,7 +2182,7 @@ export function ProjectEditor({
                             <button
                               type="button"
                               key={format}
-                              disabled={!canEdit || Boolean(collab?.blocked)}
+                              disabled={!canEditDocument || Boolean(collab?.blocked)}
                               aria-label={label}
                               aria-pressed={
                                 editorSelection?.activeFormats.includes(format) ?? false
@@ -2126,9 +2206,9 @@ export function ProjectEditor({
                           key={`${selectedFileId}:${doc.fileType}`}
                           initialContent={doc.content}
                           language={doc.fileType === "html" ? "html" : "md"}
-                          readOnly={!canEdit || Boolean(collab?.blocked)}
+                          readOnly={!canEditDocument || Boolean(collab?.blocked)}
                           onChange={setBuffer}
-                          maxContentBytes={canEdit ? maxEditableBytes : undefined}
+                          maxContentBytes={canEditDocument ? maxEditableBytes : undefined}
                           onLimit={() =>
                             notify.error("Edit is too large", {
                               description: mapDocError(new Error("file-too-large")),
@@ -2144,7 +2224,7 @@ export function ProjectEditor({
                             setCommentsOpen(true);
                             focusThread(commentId);
                           }}
-                          onInsertImage={canEdit ? insertImageAsset : undefined}
+                          onInsertImage={canEdit && !isOffline ? insertImageAsset : undefined}
                           fileNode={selectedNode}
                           nodes={nodes}
                           visualMode={doc.fileType === "md" && markdownVisual}
@@ -2237,6 +2317,7 @@ export function ProjectEditor({
           <CommentsRail
             documentId={selectedFileId}
             watching={watchState?.watching ?? false}
+            offline={isOffline}
             threads={commentThreads}
             loading={commentThreadsData === undefined}
             candidates={mentionCandidates}
@@ -2270,7 +2351,7 @@ export function ProjectEditor({
           nodes={nodes}
           currentContent={canEdit ? buffer : doc.content}
           language={doc.fileType === "html" ? "html" : "md"}
-          canCheckpoint={canEdit && !collab?.syncing}
+          canCheckpoint={canEdit && !collab?.syncing && !isOffline}
           canManage={isAdmin}
           onClose={() => setHistoryState({ documentId: selectedFileId, open: false })}
           onRestored={(documentId) => {
@@ -2295,7 +2376,7 @@ export function ProjectEditor({
           sourceCardId={selectedNode.fileType === "board" ? boardSelection?.cardId : undefined}
           nodes={nodes}
           members={boardMembers}
-          canEdit={canEdit}
+          canEdit={canEdit && !isOffline}
           onClose={() => setRecordDetailsOpen(false)}
           onOpenDocument={(documentId) => {
             setRecordDetailsOpen(false);

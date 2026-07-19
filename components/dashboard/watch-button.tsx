@@ -13,12 +13,14 @@ export function WatchButton({
   watching,
   compact = false,
   menu = false,
+  disabled = false,
   onToggled,
 }: {
   documentId: string;
   watching: boolean;
   compact?: boolean;
   menu?: boolean;
+  disabled?: boolean;
   onToggled?: () => void;
 }) {
   const update = useMutation(api.watches.setWatching);
@@ -32,9 +34,16 @@ export function WatchButton({
         ? { role: "menuitemcheckbox" as const, "aria-checked": active }
         : { "aria-pressed": active })}
       aria-label={active ? "Stop watching document" : "Watch document"}
-      title={active ? "Watching new comments" : "Notify me about new comments"}
-      disabled={busy}
+      title={
+        disabled
+          ? "Watching is unavailable while offline"
+          : active
+            ? "Watching new comments"
+            : "Notify me about new comments"
+      }
+      disabled={busy || disabled}
       onClick={async () => {
+        if (disabled) return;
         const next = !active;
         setOptimistic(next);
         setBusy(true);

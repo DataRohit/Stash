@@ -9,6 +9,10 @@ type ToastType = "success" | "error" | "warning" | "info";
 
 type ToastOptions = {
   description?: ReactNode;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 };
 
 const TYPE_STYLES: Record<
@@ -42,11 +46,13 @@ function ToastCard({
   type,
   title,
   description,
+  action,
 }: {
   id: string | number;
   type: ToastType;
   title: string;
   description?: ReactNode;
+  action?: ToastOptions["action"];
 }) {
   const { icon: Icon, badge, iconColor } = TYPE_STYLES[type];
 
@@ -68,6 +74,18 @@ function ToastCard({
           <p className="mt-1 text-muted-foreground text-xs leading-relaxed">{description}</p>
         ) : null}
       </div>
+      {action ? (
+        <button
+          type="button"
+          onClick={() => {
+            sonnerToast.dismiss(id);
+            action.onClick();
+          }}
+          className="min-h-9 shrink-0 cursor-pointer rounded-sm border border-hairline px-2.5 font-medium text-xs transition-colors hover:bg-foreground/8"
+        >
+          {action.label}
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={() => sonnerToast.dismiss(id)}
@@ -82,7 +100,13 @@ function ToastCard({
 
 function show(type: ToastType, title: string, options?: ToastOptions) {
   return sonnerToast.custom((id) => (
-    <ToastCard id={id} type={type} title={title} description={options?.description} />
+    <ToastCard
+      id={id}
+      type={type}
+      title={title}
+      description={options?.description}
+      action={options?.action}
+    />
   ));
 }
 

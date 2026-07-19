@@ -76,6 +76,7 @@ type CommentsRailProps = {
   selectionKind?: "text" | "cell" | "card" | "document";
   documentId: string;
   watching: boolean;
+  offline?: boolean;
   onClose: () => void;
   onCreate: (body: string, mentionUserIds: string[]) => Promise<void>;
   onReply: (threadId: string, body: string, mentionUserIds: string[]) => Promise<void>;
@@ -327,6 +328,7 @@ export function CommentsRail({
   selectionKind = "text",
   documentId,
   watching,
+  offline = false,
   onClose,
   onCreate,
   onReply,
@@ -348,6 +350,7 @@ export function CommentsRail({
   });
 
   const resolve = async (threadId: string, resolved: boolean) => {
+    if (offline) return;
     setBusyThreadId(threadId);
     try {
       await onResolve(threadId, resolved);
@@ -387,7 +390,7 @@ export function CommentsRail({
             <span className="sr-only">{openCount} open comments</span>
           </div>
           <div className="flex items-center gap-1">
-            <WatchButton documentId={documentId} watching={watching} compact />
+            <WatchButton documentId={documentId} watching={watching} compact disabled={offline} />
             <button
               ref={closeRef}
               type="button"
@@ -401,6 +404,11 @@ export function CommentsRail({
         </div>
 
         <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-auto p-3">
+          {offline ? (
+            <p role="status" className="rounded-sm bg-warning/10 px-3 py-2 text-warning text-xs">
+              Comments are read-only while offline.
+            </p>
+          ) : null}
           <section className="rounded-md border border-hairline bg-foreground/[0.025] p-3">
             <p className="mb-2 font-medium text-xs">New thread</p>
             {hasSelection ? (
@@ -422,7 +430,7 @@ export function CommentsRail({
               placeholder="Write a comment. Type @ to mention someone."
               submitLabel="Comment"
               candidates={candidates}
-              disabled={!hasSelection}
+              disabled={offline || !hasSelection}
               onSubmit={onCreate}
             />
           </section>
@@ -493,7 +501,7 @@ export function CommentsRail({
                         <button
                           type="button"
                           onClick={() => resolve(thread.id, thread.status === "open")}
-                          disabled={busyThreadId === thread.id}
+                          disabled={offline || busyThreadId === thread.id}
                           className="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-xs border border-hairline px-2.5 font-medium text-muted-foreground text-xs transition-colors hover:bg-foreground/[0.06] hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {busyThreadId === thread.id ? (
@@ -521,6 +529,7 @@ export function CommentsRail({
                             placeholder="Reply or mention someone."
                             submitLabel="Reply"
                             candidates={candidates}
+                            disabled={offline}
                             onSubmit={(body, mentionUserIds) =>
                               onReply(thread.id, body, mentionUserIds)
                             }

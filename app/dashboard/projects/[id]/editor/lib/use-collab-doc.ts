@@ -13,6 +13,14 @@ import { mapDocError } from "@/app/dashboard/projects/[id]/editor/lib/editor-for
 import { notify } from "@/components/ui/toast";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import {
+  clearOfflineDocument,
+  closeOfflineDocument,
+  markOfflineDocumentAvailable,
+  type OfflineDocumentHandle,
+  openOfflineDocument,
+  subscribeToOfflineClear,
+} from "@/lib/offline-document-storage";
 
 const CURSOR_COLORS = [
   { color: "#b91c1c", light: "#b91c1c33" },
@@ -36,9 +44,10 @@ const CURSOR_COLORS = [
 const DEFAULT_CURSOR_COLOR = { color: "#1d4ed8", light: "#1d4ed833" };
 
 const FLUSH_MS = 200;
+const MAX_RETRY_MS = 30_000;
 const HEARTBEAT_MS = 5_000;
-const OUTBOX_PREFIX = "stash:collab-outbox:";
-const OUTBOX_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const OUTBOX_PREFIX = "stash:collab-outbox:v2:";
+const LEGACY_OUTBOX_PREFIX = "stash:collab-outbox:";
 
 export type CollabViewer = {
   sessionId: string;
@@ -61,6 +70,9 @@ type CollabDoc = {
   ytext: Y.Text;
   awareness: Awareness;
   ready: boolean;
+  online: boolean;
+  offlineAvailable: boolean;
+  storageDegraded: boolean;
   syncing: boolean;
   blocked: string | null;
   pendingEdits: number;
@@ -104,17 +116,14 @@ function base64ToBytes(value: string): Uint8Array {
   return bytes;
 }
 
-function readOutbox(value: string): { createdAt: number | null; update: Uint8Array } {
+function readOutbox(value: string): Uint8Array {
   try {
-    const parsed = JSON.parse(value) as { createdAt?: unknown; update?: unknown };
+    const parsed = JSON.parse(value) as { update?: unknown };
     if (typeof parsed.update === "string") {
-      return {
-        createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : null,
-        update: base64ToBytes(parsed.update),
-      };
+      return base64ToBytes(parsed.update);
     }
   } catch {}
-  return { createdAt: null, update: base64ToBytes(value) };
+  return base64ToBytes(value);
 }
 
 function createSessionId(): string {
@@ -149,9 +158,15 @@ export function useCollabDoc(
   documentId: string | null,
   canEdit: boolean,
   user: CollabUser,
+  organizationId: string,
+  offlineCachingEnabled?: boolean,
 ): CollabDoc | null {
   const [engine, setEngine] = useState<Engine | null>(null);
   const [ready, setReady] = useState(false);
+  const [online, setOnline] = useState(true);
+  const [persistenceReady, setPersistenceReady] = useState(false);
+  const [offlineAvailable, setOfflineAvailable] = useState(false);
+  const [storageDegraded, setStorageDegraded] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
   const [pendingEdits, setPendingEdits] = useState(0);
@@ -175,11 +190,14 @@ export function useCollabDoc(
   );
   const pushUpdateV2 = useMutation(api.collab.pushUpdateV2);
   const ensureSeed = useMutation(api.collab.ensureSeed);
+  const createHistoryCheckpoint = useMutation(api.collab.createHistoryCheckpoint);
   const heartbeat = useMutation(api.presence.heartbeat);
   const leavePresence = useMutation(api.presence.leave);
 
   const appliedSeq = useRef(0);
   const seeded = useRef(false);
+  const persistenceRef = useRef<OfflineDocumentHandle | null>(null);
+  const cacheValidated = useRef(false);
   const userColor = useMemo(() => colorForUser(user.id), [user.id]);
   const userLabel = useMemo(
     () => (user.email ? `${user.name} · ${user.email}` : user.name),
@@ -191,9 +209,23 @@ export function useCollabDoc(
   }, []);
 
   useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    update();
+    window.addEventListener("online", update);
+    window.addEventListener("offline", update);
+    return () => {
+      window.removeEventListener("online", update);
+      window.removeEventListener("offline", update);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!documentId || !sessionId) {
       setEngine(null);
       setReady(false);
+      setPersistenceReady(false);
+      setOfflineAvailable(false);
+      setStorageDegraded(false);
       setSyncing(false);
       setPendingEdits(0);
       setLastSyncedAt(null);
@@ -205,8 +237,12 @@ export function useCollabDoc(
     const awareness = new Awareness(ydoc);
     appliedSeq.current = 0;
     seeded.current = false;
+    cacheValidated.current = false;
     setPullCursor({ documentId, afterSeq: 0 });
     setReady(false);
+    setPersistenceReady(false);
+    setOfflineAvailable(false);
+    setStorageDegraded(false);
     setSyncing(false);
     setBlocked(null);
     setPendingEdits(0);
@@ -232,7 +268,58 @@ export function useCollabDoc(
   }, [engine, userLabel, userColor, sessionId]);
 
   useEffect(() => {
-    if (!engine || !documentId || !canEdit || !sessionId) {
+    if (!engine || !documentId || !sessionId || offlineCachingEnabled === undefined) return;
+    if (!offlineCachingEnabled) {
+      setPersistenceReady(true);
+      setOfflineAvailable(false);
+      setStorageDegraded(false);
+      return;
+    }
+    const identity = { organizationId, userId: user.id, documentId };
+    let active = true;
+    setPersistenceReady(false);
+    setStorageDegraded(false);
+    const unsubscribe = subscribeToOfflineClear(identity, () => {
+      const handle = persistenceRef.current;
+      if (handle?.identity.documentId !== documentId) return;
+      persistenceRef.current = null;
+      cacheValidated.current = false;
+      setOfflineAvailable(false);
+      if (!navigator.onLine) setReady(false);
+      void clearOfflineDocument(handle).catch(reportAsync);
+    });
+    void openOfflineDocument(identity, engine.ydoc)
+      .then(async (handle) => {
+        if (!active) {
+          await closeOfflineDocument(handle);
+          return;
+        }
+        persistenceRef.current = handle;
+        cacheValidated.current = handle.available;
+        setOfflineAvailable(handle.available);
+        if (handle.available) setReady(true);
+        setPersistenceReady(true);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setStorageDegraded(true);
+        setOfflineAvailable(false);
+        setPersistenceReady(true);
+        reportAsync(error);
+      });
+    return () => {
+      active = false;
+      unsubscribe();
+      const handle = persistenceRef.current;
+      if (handle?.identity.documentId === documentId) {
+        persistenceRef.current = null;
+        void closeOfflineDocument(handle).catch(reportAsync);
+      }
+    };
+  }, [engine, documentId, sessionId, organizationId, user.id, offlineCachingEnabled]);
+
+  useEffect(() => {
+    if (!engine || !documentId || !canEdit || !sessionId || !persistenceReady) {
       return;
     }
     const { ydoc } = engine;
@@ -243,12 +330,21 @@ export function useCollabDoc(
     let timer: ReturnType<typeof setTimeout> | null = null;
     let failureNotified = false;
     let reconnecting = false;
+    let retryMs = FLUSH_MS;
     let active = true;
-    const outboxPrefix = `${OUTBOX_PREFIX}${documentId}:${user.id}:`;
+    const userOutboxPrefix = `${OUTBOX_PREFIX}${organizationId}:${user.id}:`;
+    const outboxPrefix = `${userOutboxPrefix}${documentId}:`;
+    const legacyOutboxPrefix = `${LEGACY_OUTBOX_PREFIX}${documentId}:${user.id}:`;
     const outboxKey = `${outboxPrefix}${sessionId}`;
     const recoveredEntries = new Map<string, string>();
     const persistOutbox = () => {
       try {
+        if (offlineCachingEnabled === false) {
+          localStorage.removeItem(outboxKey);
+          clearRecoveredEntries();
+          return;
+        }
+        if (offlineCachingEnabled !== true) return;
         const updates = inFlight ? [inFlight, ...pending] : pending;
         if (updates.length === 0) {
           localStorage.removeItem(outboxKey);
@@ -278,45 +374,57 @@ export function useCollabDoc(
       }
     };
     try {
-      const recovered: Uint8Array[] = [];
-      for (let index = 0; index < localStorage.length; index += 1) {
-        const key = localStorage.key(index);
-        if (!key?.startsWith(OUTBOX_PREFIX)) {
-          continue;
-        }
-        const value = localStorage.getItem(key);
-        if (!value) {
-          continue;
-        }
-        try {
-          const outbox = readOutbox(value);
-          if (outbox.createdAt !== null && Date.now() - outbox.createdAt > OUTBOX_RETENTION_MS) {
+      if (offlineCachingEnabled !== true) {
+        for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+          const key = localStorage.key(index);
+          if (
+            offlineCachingEnabled === false &&
+            (key?.startsWith(userOutboxPrefix) || key?.startsWith(legacyOutboxPrefix))
+          ) {
             localStorage.removeItem(key);
-            index -= 1;
+          }
+        }
+      } else {
+        const recovered: Uint8Array[] = [];
+        for (let index = 0; index < localStorage.length; index += 1) {
+          const key = localStorage.key(index);
+          if (!key?.startsWith(outboxPrefix) && !key?.startsWith(legacyOutboxPrefix)) {
             continue;
           }
-          if (!key.startsWith(outboxPrefix)) continue;
-          recovered.push(outbox.update);
-          recoveredEntries.set(key, value);
-        } catch {
-          localStorage.removeItem(key);
+          const value = localStorage.getItem(key);
+          if (!value) {
+            continue;
+          }
+          try {
+            recovered.push(readOutbox(value));
+            recoveredEntries.set(key, value);
+          } catch {
+            localStorage.removeItem(key);
+          }
         }
-      }
-      if (recovered.length > 0) {
-        const update = Y.mergeUpdates(recovered);
-        Y.applyUpdate(ydoc, update, "recovery");
-        pending = [update];
-        pendingEditCount = 1;
-        reconnecting = true;
-        setSyncing(true);
-        setPendingEdits(1);
-        persistOutbox();
+        if (recovered.length > 0) {
+          const update = Y.mergeUpdates(recovered);
+          Y.applyUpdate(ydoc, update, "recovery");
+          pending = [update];
+          pendingEditCount = 1;
+          reconnecting = true;
+          setSyncing(true);
+          setPendingEdits(1);
+          persistOutbox();
+        }
       }
     } catch (error) {
       reportAsync(error);
     }
     const flush = async () => {
       timer = null;
+      if (!navigator.onLine) {
+        reconnecting = true;
+        setOnline(false);
+        setSyncing(false);
+        setPendingEdits(pendingEditCount + inFlightEditCount);
+        return;
+      }
       if (inFlight || pending.length === 0) {
         if (!inFlight && pending.length === 0) {
           setSyncing(false);
@@ -341,13 +449,21 @@ export function useCollabDoc(
         inFlight = null;
         inFlightEditCount = 0;
         failureNotified = false;
+        const checkpointAfterReconnect = reconnecting;
         reconnecting = false;
+        retryMs = FLUSH_MS;
+        setOnline(true);
         setBlocked(null);
         setPendingEdits(pendingEditCount);
         setLastSyncedAt(new Date());
         setSeq(result.seq);
         clearRecoveredEntries();
         persistOutbox();
+        if (checkpointAfterReconnect) {
+          void createHistoryCheckpoint({ documentId: documentId as Id<"documents"> }).catch(
+            reportAsync,
+          );
+        }
       } catch (error) {
         if (inFlight) {
           pending = [inFlight, ...pending];
@@ -375,6 +491,7 @@ export function useCollabDoc(
         } else {
           retryable = true;
           reconnecting = true;
+          retryMs = Math.min(MAX_RETRY_MS, Math.max(FLUSH_MS, retryMs * 2));
           setPendingEdits(pendingEditCount);
         }
         if (!failureNotified) {
@@ -391,7 +508,7 @@ export function useCollabDoc(
         if (!inFlight && pending.length === 0) {
           setSyncing(false);
         } else if (retryable && active && timer === null) {
-          timer = setTimeout(() => void flush(), FLUSH_MS);
+          timer = setTimeout(() => void flush(), retryMs);
         } else if (!inFlight && pending.length > 0 && active && timer === null) {
           timer = setTimeout(() => void flush(), FLUSH_MS);
         }
@@ -401,6 +518,7 @@ export function useCollabDoc(
       if (origin === "remote" || origin === "seed" || origin === "recovery") {
         return;
       }
+      if (origin === persistenceRef.current?.provider) return;
       pending.push(update);
       pendingEditCount += 1;
       persistOutbox();
@@ -432,10 +550,29 @@ export function useCollabDoc(
         onPageHide();
       }
     };
+    const onOffline = () => {
+      setOnline(false);
+      persistOutbox();
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      setSyncing(false);
+      setPendingEdits(pendingEditCount + inFlightEditCount);
+    };
+    const onOnline = () => {
+      setOnline(true);
+      retryMs = FLUSH_MS;
+      if ((pending.length > 0 || inFlight) && timer === null) {
+        timer = setTimeout(() => void flush(), 0);
+      }
+    };
     ydoc.on("update", onUpdate);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("beforeunload", onBeforeUnload);
     document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
     if (pending.length > 0) {
       timer = setTimeout(() => void flush(), 0);
     }
@@ -445,16 +582,52 @@ export function useCollabDoc(
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("beforeunload", onBeforeUnload);
       document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
       if (timer !== null) {
         clearTimeout(timer);
       }
       persistOutbox();
       void flush();
     };
-  }, [engine, documentId, canEdit, pushUpdateV2, sessionId, user.id]);
+  }, [
+    engine,
+    documentId,
+    canEdit,
+    pushUpdateV2,
+    createHistoryCheckpoint,
+    sessionId,
+    user.id,
+    organizationId,
+    offlineCachingEnabled,
+    persistenceReady,
+  ]);
 
   useEffect(() => {
-    if (!engine || !documentId || pullResult === undefined) {
+    if (!engine || !documentId || pullResult === undefined || !persistenceReady) {
+      return;
+    }
+    if (!pullResult.authorized) {
+      setReady(false);
+      setBlocked("You no longer have access to this document.");
+      const handle = persistenceRef.current;
+      if (handle?.identity.documentId === documentId) {
+        persistenceRef.current = null;
+        cacheValidated.current = false;
+        setOfflineAvailable(false);
+        void clearOfflineDocument(handle).catch(reportAsync);
+      }
+      try {
+        const prefix = `${OUTBOX_PREFIX}${organizationId}:${user.id}:${documentId}:`;
+        const legacyPrefix = `${LEGACY_OUTBOX_PREFIX}${documentId}:${user.id}:`;
+        for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+          const key = localStorage.key(index);
+          if (key?.startsWith(prefix) || key?.startsWith(legacyPrefix))
+            localStorage.removeItem(key);
+        }
+      } catch (error) {
+        reportAsync(error);
+      }
       return;
     }
     const { ydoc } = engine;
@@ -486,7 +659,28 @@ export function useCollabDoc(
       setPullCursor({ documentId, afterSeq: appliedSeq.current });
     }
     setSeq(appliedSeq.current);
-  }, [engine, documentId, pullResult, queryAfterSeq, canEdit, ensureSeed]);
+    const handle = persistenceRef.current;
+    if (handle && !cacheValidated.current) {
+      cacheValidated.current = true;
+      void markOfflineDocumentAvailable(handle)
+        .then(() => setOfflineAvailable(true))
+        .catch((error) => {
+          cacheValidated.current = false;
+          setStorageDegraded(true);
+          reportAsync(error);
+        });
+    }
+  }, [
+    engine,
+    documentId,
+    pullResult,
+    queryAfterSeq,
+    canEdit,
+    ensureSeed,
+    user.id,
+    organizationId,
+    persistenceReady,
+  ]);
 
   useEffect(() => {
     if (!engine || !presenceResult) {
@@ -526,6 +720,7 @@ export function useCollabDoc(
     }
     const { awareness } = engine;
     const send = () => {
+      if (!navigator.onLine) return;
       const state = encodeAwarenessUpdate(awareness, [awareness.clientID]);
       void heartbeat({
         documentId: documentId as Id<"documents">,
@@ -552,14 +747,17 @@ export function useCollabDoc(
       }, 300);
     };
     const onPageHide = () => beaconLeave(documentId, sessionId);
+    const onOnline = () => send();
     awareness.on("update", onChange);
     window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("online", onOnline);
     send();
     const interval = setInterval(send, HEARTBEAT_MS);
     return () => {
       awareness.off("update", onChange);
       if (timer !== null) clearTimeout(timer);
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("online", onOnline);
       clearInterval(interval);
       beaconLeave(documentId, sessionId);
       void leavePresence({
@@ -607,6 +805,9 @@ export function useCollabDoc(
     ytext: engine.ytext,
     awareness: engine.awareness,
     ready,
+    online,
+    offlineAvailable,
+    storageDegraded,
     syncing,
     blocked,
     pendingEdits,

@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { recordOrganizationEvent } from "./audit";
 import {
   clampInt,
   HARD_MAX_COLLABORATORS,
@@ -13,6 +14,7 @@ import {
   MIN_PROJECT_BYTES,
 } from "./limits";
 import { secretMatches } from "./secrets";
+import { enforceWriteRateLimit } from "./writeRateLimit";
 
 const MAX_TAGS = 8;
 const MAX_TAG_LENGTH = 24;
@@ -47,7 +49,7 @@ function findByClerkOrgId(ctx: QueryCtx, clerkOrgId: string) {
     .unique();
 }
 
-async function requireOrgAdmin(ctx: QueryCtx, clerkOrgId: string): Promise<void> {
+async function requireOrgAdmin(ctx: QueryCtx, clerkOrgId: string) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
     throw new Error("Unauthenticated");
@@ -55,6 +57,7 @@ async function requireOrgAdmin(ctx: QueryCtx, clerkOrgId: string): Promise<void>
   if (identity.org_id !== clerkOrgId || identity.org_role !== "org:admin") {
     throw new Error("Forbidden");
   }
+  return identity;
 }
 
 async function ensureRow(ctx: MutationCtx, clerkOrgId: string) {
@@ -86,6 +89,7 @@ export const get = query({
       description: doc.description,
       tags: doc.tags,
       publicSharingEnabled: doc.publicSharingEnabled !== false,
+      offlineCachingEnabled: doc.offlineCachingEnabled === true,
     };
   },
 });
@@ -200,6 +204,40 @@ export const setPublicSharing = mutation({
     await ctx.db.patch(row._id, {
       publicSharingEnabled: args.enabled,
       updatedAt: Date.now(),
+    });
+  },
+});
+
+export const setOfflineCaching = mutation({
+  args: { clerkOrgId: v.string(), enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const identity = await requireOrgAdmin(ctx, args.clerkOrgId);
+    const allowed = await enforceWriteRateLimit(
+      ctx,
+      "organization-offline-policy",
+      args.clerkOrgId,
+      identity.subject,
+      { capacity: 10, refillPerSecond: 0.1 },
+    );
+    if (!allowed) throw new Error("rate-limited");
+    const row = await ensureRow(ctx, args.clerkOrgId);
+    if (!row || row.offlineCachingEnabled === args.enabled) {
+      return;
+    }
+    await ctx.db.patch(row._id, {
+      offlineCachingEnabled: args.enabled,
+      updatedAt: Date.now(),
+    });
+    await recordOrganizationEvent(ctx, {
+      clerkOrgId: args.clerkOrgId,
+      actorUserId: identity.subject,
+      actorName: identity.name ?? identity.email ?? identity.subject,
+      kind: "organization.offline_policy_changed",
+      targetId: row._id,
+      targetName: args.enabled
+        ? "Offline document access enabled"
+        : "Offline document access disabled",
+      metadata: JSON.stringify({ enabled: args.enabled }),
     });
   },
 });

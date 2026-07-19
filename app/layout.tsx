@@ -1,6 +1,7 @@
 import { ClerkProvider } from "@clerk/nextjs";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Instrument_Serif, Inter, JetBrains_Mono } from "next/font/google";
+import { OfflineAppProvider } from "@/components/providers/OfflineAppProvider";
 import { ThemeProvider } from "@/components/providers/ThemeProvider";
 import { Toaster } from "@/components/ui/toaster";
 import "./globals.css";
@@ -33,6 +34,7 @@ function metadataBase(): URL {
 export const metadata: Metadata = {
   metadataBase: metadataBase(),
   applicationName: "Stash",
+  manifest: "/manifest.webmanifest",
   title: {
     default: "Stash — Collaborative Workspace",
     template: "%s · Stash",
@@ -72,6 +74,10 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  themeColor: "#171717",
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -91,6 +97,7 @@ export default function RootLayout({
             enableSystem={false}
             disableTransitionOnChange
           >
+            <OfflineAppProvider />
             {children}
             <Toaster />
           </ThemeProvider>

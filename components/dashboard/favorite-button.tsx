@@ -13,18 +13,20 @@ export function FavoriteButton({
   documentId,
   favorite,
   className,
+  disabled = false,
 }: {
   projectId: string;
   documentId?: string;
   favorite: boolean;
   className?: string;
+  disabled?: boolean;
 }) {
   const setFavorite = useMutation(api.navigation.toggleFavorite);
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const active = optimistic ?? favorite;
   const toggle = async () => {
-    if (busy) return;
+    if (busy || disabled) return;
     const next = !active;
     setOptimistic(next);
     setBusy(true);
@@ -56,7 +58,8 @@ export function FavoriteButton({
         event.stopPropagation();
         void toggle();
       }}
-      disabled={busy}
+      disabled={busy || disabled}
+      title={disabled ? "Favorites are unavailable while offline" : undefined}
       aria-pressed={active}
       aria-label={active ? "Remove from favorites" : "Add to favorites"}
       className={cn(

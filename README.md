@@ -28,6 +28,11 @@ collaboration, history, search, sharing, and export. Convex owns
 reactive data and authorization boundaries; Clerk owns sessions, organizations,
 roles, invitations, and billing-plan data.
 
+The browser application is installable and keeps an administrator-approved set of
+recently opened documents available through connection loss. Offline document state
+is isolated by organization, user, and document, while database-backed actions remain
+read-only until connectivity returns.
+
 The repository includes the complete application and local backend workflow. Production account provisioning, webhook configuration, deployment, and monitoring remain operator-controlled requirements.
 
 ## Security and data-integrity hardening
@@ -87,9 +92,12 @@ The editor derives write and administrator controls from the live project grant.
 If edit access is revoked during a session, editing becomes read-only within the
 next reactive update and the editor explains the change. Transient collaboration
 failures retain local updates and display a persistent reconnecting count until
-the pending edits synchronize. The lightweight `/api/health` response is suitable
-for load balancers; `/api/health?deep=1` also verifies Convex reachability and
-returns a service-unavailable status when that dependency cannot be reached.
+the pending edits synchronize. Approved offline caches load before remote state,
+retain at most twenty recent documents per user and organization, and are cleared
+when policy, identity, or access changes. The lightweight `/api/health` response
+is suitable for load balancers; `/api/health?deep=1` also verifies Convex
+reachability and returns a service-unavailable status when that dependency cannot
+be reached.
 
 ## Performance and scale safeguards
 
@@ -172,6 +180,10 @@ confirms that changes synchronize automatically.
 - Replies, resolution, reopening, mentions, and notification preferences.
 - Document watches, unread markers, optional immediate email, and daily digests.
 - Version checkpoints, text comparison, restoration, and live collaborator updates.
+- Administrator-controlled offline document persistence, durable queued edits,
+  reconnect checkpoints, and live, reconnecting, or offline status.
+- Installable application manifest, cached static shell, offline fallback, and
+  controlled application-update prompts.
 - Project activity feed with actor, target, event type, and time.
 
 ### Search and navigation
@@ -206,7 +218,8 @@ confirms that changes synchronize automatically.
 - Clerk webhook synchronization with a local reconciliation fallback.
 - An administrator Trust center with paged audit events, actor/project/date filters,
   bounded CSV export, usage insights, retention policy, scoped API keys, signed
-  outgoing webhooks, delivery history, and organization export.
+  outgoing webhooks, delivery history, organization export, and an offline-device
+  storage policy.
 - ZIP migration from Notion, Confluence, and Google Docs exports with archive-bomb
   defenses, preview, conversion reporting, live progress, quota checks, and undo.
 
@@ -309,6 +322,7 @@ stash/
 ├── components/          UI primitives, providers, dashboard and landing UI
 ├── convex/              Schema, public functions, internal jobs, generated API
 ├── lib/                 Billing, identity, server and domain helpers
+├── public/              Install icons, offline fallback, service worker
 ├── tools/               Repository verification and local dashboard helpers
 ├── .github/             CI, dependency updates, issue and PR templates
 ├── .husky/              Staged-file and commit-message hooks
@@ -489,6 +503,9 @@ Production approval additionally requires:
 - A coordinated Convex and frontend rollout before public launch; content in any
   active pre-release editor tabs must be synced or copied before those tabs are
   refreshed or closed.
+- HTTPS delivery so browsers can install the application and activate its service
+  worker outside localhost, plus airplane-mode checks on representative iOS and
+  Android devices for every supported editor format.
 - Successful authenticated rate soaks, trusted-proxy spoofing checks, real share
   rendering, counter reconciliation, orphan-deletion safety checks, near-quota
   history checks, and recent-document pruning in the release candidate.
