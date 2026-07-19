@@ -2,7 +2,7 @@
 
 import { FileText, Globe2 } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
-import { DocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
+import { StaticDocPreview } from "@/app/dashboard/projects/[id]/editor/doc-preview";
 import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-html";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { BoardView } from "@/components/board-view";
@@ -137,7 +137,7 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
             ))}
           </div>
         ) : fileNode ? (
-          <DocPreview
+          <StaticDocPreview
             fileNode={fileNode}
             content={shared.content}
             nodes={nodes}

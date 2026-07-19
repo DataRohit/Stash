@@ -25,7 +25,7 @@ type DocPreviewProps = {
 
 const EMPTY_FILE_LINKS: Record<string, string> = {};
 
-export function DocPreview({
+function DocPreviewSurface({
   fileNode,
   content,
   nodes,
@@ -51,35 +51,16 @@ export function DocPreview({
     return () => clearTimeout(timer);
   }, [content]);
 
-  const assetIds = useMemo(
-    () => referencedAssetIds(fileNode, debounced, nodes),
-    [debounced, fileNode, nodes],
-  );
-  const assetUrls = useQuery(
-    api.documents.getAssetUrls,
-    assetIds.length > 0 ? { documentIds: assetIds as Id<"documents">[] } : "skip",
-  );
-  const resolvedNodes = useMemo(() => {
-    if (!assetUrls) {
-      return nodes;
-    }
-    const urlById = new Map<string, string>(assetUrls.map((asset) => [asset.id, asset.url]));
-    return nodes.map((node) => {
-      const assetUrl = urlById.get(node.id);
-      return assetUrl ? { ...node, assetUrl } : node;
-    });
-  }, [assetUrls, nodes]);
-
   const base = useMemo(() => {
     const { inner, isMd, blocks } = renderInner(
       fileNode,
       debounced,
-      resolvedNodes,
+      nodes,
       fileLinkById,
       allowActiveContent,
     );
     return { inner, isMd, blocks, doc: previewSrcDoc(inner, isMd, allowActiveContent) };
-  }, [allowActiveContent, debounced, fileLinkById, fileNode, resolvedNodes]);
+  }, [allowActiveContent, debounced, fileLinkById, fileNode, nodes]);
 
   useEffect(() => {
     if (base.blocks.length === 0) {
@@ -131,4 +112,44 @@ export function DocPreview({
       </div>
     </div>
   );
+}
+
+export function StaticDocPreview(props: DocPreviewProps) {
+  return <DocPreviewSurface {...props} />;
+}
+
+export function DocPreview(props: DocPreviewProps) {
+  const [assetContent, setAssetContent] = useState({
+    fileId: props.fileNode.id,
+    content: props.content,
+  });
+  useEffect(() => {
+    const timer = setTimeout(
+      () => setAssetContent({ fileId: props.fileNode.id, content: props.content }),
+      400,
+    );
+    return () => clearTimeout(timer);
+  }, [props.content, props.fileNode.id]);
+  const contentForAssets =
+    assetContent.fileId === props.fileNode.id ? assetContent.content : props.content;
+  const assetIds = useMemo(
+    () => referencedAssetIds(props.fileNode, contentForAssets, props.nodes),
+    [contentForAssets, props.fileNode, props.nodes],
+  );
+  const assetUrls = useQuery(
+    api.documents.getAssetUrls,
+    assetIds.length > 0 ? { documentIds: assetIds as Id<"documents">[] } : "skip",
+  );
+  const resolvedNodes = useMemo(() => {
+    if (!assetUrls) {
+      return props.nodes;
+    }
+    const urlById = new Map<string, string>(assetUrls.map((asset) => [asset.id, asset.url]));
+    return props.nodes.map((node) => {
+      const assetUrl = urlById.get(node.id);
+      return assetUrl ? { ...node, assetUrl } : node;
+    });
+  }, [assetUrls, props.nodes]);
+
+  return <DocPreviewSurface {...props} nodes={resolvedNodes} />;
 }
