@@ -6,6 +6,7 @@ import { useState } from "react";
 import { AttachmentViewer } from "@/app/dashboard/projects/[id]/editor/attachment-viewer";
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { SharedDocumentContent } from "@/app/share/[token]/shared-document-view";
+import { ThemeToggle } from "@/components/landing/theme-toggle";
 
 type Result = {
   mode: "private" | "org" | "public";
@@ -173,9 +174,12 @@ export function ProjectSharedView({ token, result }: { token: string; result: Re
           />
         )}
       </div>
-      <footer className="fixed right-4 bottom-2 z-20 rounded-sm bg-surface/85 px-2 py-1 font-mono text-[9px] text-muted-foreground uppercase tracking-wider backdrop-blur">
-        Shared via Stash
-      </footer>
+      <div className="fixed right-4 bottom-2 z-20 flex items-center gap-2">
+        <ThemeToggle />
+        <footer className="rounded-sm bg-surface/85 px-2 py-1 font-mono text-[9px] text-muted-foreground uppercase tracking-wider backdrop-blur">
+          Shared via Stash
+        </footer>
+      </div>
     </div>
   );
 }

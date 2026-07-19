@@ -7,6 +7,7 @@ import { missingRefToast } from "@/app/dashboard/projects/[id]/editor/lib/doc-ht
 import type { TreeNode } from "@/app/dashboard/projects/[id]/editor/tree-utils";
 import { BoardView } from "@/components/board-view";
 import { ChartView } from "@/components/chart-view";
+import { ThemeToggle } from "@/components/landing/theme-toggle";
 import { SheetTable } from "@/components/sheet-table";
 import { notify } from "@/components/ui/toast";
 import { ViewPreview, type ViewPreviewModel } from "@/components/view-preview";
@@ -94,10 +95,13 @@ export function SharedDocumentContent({ shared }: { shared: SharedDocument }) {
             </p>
           </div>
         </div>
-        <span className="hidden shrink-0 items-center gap-1.5 rounded-sm border border-hairline bg-foreground/[0.04] px-2.5 py-1 font-mono text-[10px] text-muted-foreground uppercase tracking-widest sm:inline-flex">
-          <Globe2 className="size-3" aria-hidden="true" />
-          {shared.mode === "public" ? "Public" : "Org"}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="hidden shrink-0 items-center gap-1.5 rounded-sm border border-hairline bg-foreground/[0.04] px-2.5 py-1 font-mono text-[10px] text-muted-foreground uppercase tracking-widest sm:inline-flex">
+            <Globe2 className="size-3" aria-hidden="true" />
+            {shared.mode === "public" ? "Public" : "Org"}
+          </span>
+          <ThemeToggle />
+        </div>
       </header>
       <section className="editor-surface min-h-0 flex-1 overflow-hidden rounded-lg">
         {shared.fileType === "sheet" && shared.sheetPreview ? (

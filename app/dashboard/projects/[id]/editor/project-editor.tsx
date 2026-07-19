@@ -481,7 +481,7 @@ export function ProjectEditor({
   const [buffer, setBuffer] = useState("");
   const [markdownVisual, setMarkdownVisual] = useState(false);
   const markdownModeLoadedRef = useRef("");
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [sidebarWidth, setSidebarWidth] = useState(320);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileFilesOpen, setMobileFilesOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -562,7 +562,7 @@ export function ProjectEditor({
     const startX = event.clientX;
     const startWidth = sidebarWidth;
     const onMove = (moveEvent: PointerEvent) => {
-      const next = Math.min(440, Math.max(260, startWidth + moveEvent.clientX - startX));
+      const next = Math.min(480, Math.max(300, startWidth + moveEvent.clientX - startX));
       setSidebarWidth(next);
     };
     const onUp = () => {

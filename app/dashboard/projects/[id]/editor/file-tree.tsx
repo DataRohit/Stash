@@ -740,12 +740,13 @@ export function FileTree({
                     tabIndex={isSelected || (!selectedId && visibleIds[0] === node.id) ? 0 : -1}
                     className={cn(
                       "relative z-[1] flex h-full w-full min-w-0 items-center gap-1.5 bg-transparent pr-2 text-left transition-[padding] duration-150",
-                      canEdit &&
-                        (node.kind === "folder"
-                          ? "group-focus-within:pr-40 group-hover:pr-40"
+                      canEdit
+                        ? node.kind === "folder"
+                          ? "group-focus-within:pr-44 group-hover:pr-44"
                           : node.kind === "file"
-                            ? "group-focus-within:pr-28 group-hover:pr-28"
-                            : "group-focus-within:pr-20 group-hover:pr-20"),
+                            ? "group-focus-within:pr-36 group-hover:pr-36"
+                            : "group-focus-within:pr-32 group-hover:pr-32"
+                        : "group-focus-within:pr-8 group-hover:pr-8",
                       canEdit ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
                     )}
                     style={{ paddingLeft: rowPadding(depth) }}
