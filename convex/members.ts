@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
+import { belongsToOrganization, isOrganizationAdmin, organizationRole } from "./auth";
 import { purgeAccessForUser } from "./projects";
 import { secretMatches } from "./secrets";
 
@@ -32,7 +33,7 @@ async function requireOrgMember(ctx: QueryCtx, clerkOrgId: string): Promise<bool
   if (!identity) {
     return false;
   }
-  return identity.org_id === clerkOrgId && identity.org_role !== "org:guest";
+  return belongsToOrganization(identity, clerkOrgId) && organizationRole(identity) !== "org:guest";
 }
 
 async function requireOrgAdmin(ctx: MutationCtx, clerkOrgId: string): Promise<boolean> {
@@ -40,7 +41,7 @@ async function requireOrgAdmin(ctx: MutationCtx, clerkOrgId: string): Promise<bo
   if (!identity) {
     return false;
   }
-  return identity.org_id === clerkOrgId && identity.org_role === "org:admin";
+  return isOrganizationAdmin(identity, clerkOrgId);
 }
 
 function rowsByOrg(ctx: QueryCtx, clerkOrgId: string) {
@@ -148,7 +149,7 @@ export const deleteByInvitationId = mutation({
     if (!identity) {
       throw new Error("Unauthenticated");
     }
-    const isAdmin = identity.org_id === args.clerkOrgId && identity.org_role === "org:admin";
+    const isAdmin = isOrganizationAdmin(identity, args.clerkOrgId);
     const callerEmail = typeof identity.email === "string" ? identity.email.toLowerCase() : null;
     const rows = await rowsByOrg(ctx, args.clerkOrgId);
     for (const row of rows) {

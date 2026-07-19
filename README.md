@@ -19,6 +19,39 @@
 
 ---
 
+## Product tour
+
+<p align="center">
+  <img src="./assets/stash-landing.png" alt="Stash landing page with workspace features and dashboard access" width="960" />
+</p>
+
+### Collaborative documents
+
+Write Markdown with a live preview, project navigation, presence, comments,
+sharing, history, and export controls in one focused workspace.
+
+<p align="center">
+  <img src="./assets/stash-editor.png" alt="Stash Markdown editor with live preview and project file tree" width="960" />
+</p>
+
+### Structured data and visualization
+
+Build charts directly from live project spreadsheets while keeping configuration,
+source selection, and the rendered result together.
+
+<p align="center">
+  <img src="./assets/stash-chart.png" alt="Stash chart editor connected to a project spreadsheet" width="960" />
+</p>
+
+### Responsive by design
+
+The public experience and authenticated workspace adapt to narrow touch screens
+without introducing page-level horizontal scrolling.
+
+<p align="center">
+  <img src="./assets/stash-mobile.png" alt="Stash landing page on a mobile viewport" width="320" />
+</p>
+
 ## Overview
 
 Stash is a multi-tenant, developer-first document workspace built for teams that

@@ -12,6 +12,7 @@ import type * as activity from "../activity.js";
 import type * as apiKeys from "../apiKeys.js";
 import type * as apiSurface from "../apiSurface.js";
 import type * as audit from "../audit.js";
+import type * as auth from "../auth.js";
 import type * as charts from "../charts.js";
 import type * as collab from "../collab.js";
 import type * as comments from "../comments.js";
@@ -51,6 +52,7 @@ declare const fullApi: ApiFromModules<{
   apiKeys: typeof apiKeys;
   apiSurface: typeof apiSurface;
   audit: typeof audit;
+  auth: typeof auth;
   charts: typeof charts;
   collab: typeof collab;
   comments: typeof comments;

@@ -3,6 +3,7 @@ import { zipSync } from "fflate";
 import { api, internal } from "./_generated/api";
 import { internalAction, internalMutation, mutation, query } from "./_generated/server";
 import { recordOrganizationEvent } from "./audit";
+import { isOrganizationAdmin } from "./auth";
 
 const MAX_PROJECTS = 500;
 const MAX_PROJECT_EXPORT_BYTES = 200 * 1024 * 1024;
@@ -76,7 +77,7 @@ export const request = mutation({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId || identity.org_role !== "org:admin") {
+    if (!identity || !isOrganizationAdmin(identity, args.clerkOrgId)) {
       throw new Error("Forbidden");
     }
     const running = await ctx.db
@@ -314,8 +315,7 @@ export const list = query({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId || identity.org_role !== "org:admin")
-      throw new Error("Forbidden");
+    if (!identity || !isOrganizationAdmin(identity, args.clerkOrgId)) throw new Error("Forbidden");
     return (
       await ctx.db
         .query("organizationExports")
@@ -346,8 +346,7 @@ export const downloadUrl = query({
   args: { clerkOrgId: v.string(), jobId: v.id("organizationExports"), fileName: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId || identity.org_role !== "org:admin")
-      throw new Error("Forbidden");
+    if (!identity || !isOrganizationAdmin(identity, args.clerkOrgId)) throw new Error("Forbidden");
     const job = await ctx.db.get(args.jobId);
     if (
       !job ||

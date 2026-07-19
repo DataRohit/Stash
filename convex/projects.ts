@@ -9,6 +9,7 @@ import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
+import { belongsToOrganization, isOrganizationAdmin } from "./auth";
 import {
   addProjectBytes,
   purgeDocCollabBatch,
@@ -73,12 +74,12 @@ async function callerFor(ctx: QueryCtx, clerkOrgId: string): Promise<Caller | nu
   if (!identity) {
     return null;
   }
-  if (identity.org_id !== clerkOrgId) {
+  if (!belongsToOrganization(identity, clerkOrgId)) {
     return null;
   }
   return {
     userId: identity.subject,
-    isAdmin: identity.org_role === "org:admin",
+    isAdmin: isOrganizationAdmin(identity, clerkOrgId),
   };
 }
 

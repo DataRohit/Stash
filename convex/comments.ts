@@ -13,6 +13,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { recordOrganizationEvent } from "./audit";
+import { organizationId, organizationRole } from "./auth";
 import { accessForProject, documentState, isInactiveTree, requireProjectEditor } from "./documents";
 import { ensureAutoWatch } from "./watchHelpers";
 import { enforceWriteRateLimit } from "./writeRateLimit";
@@ -79,7 +80,7 @@ async function actorFor(ctx: QueryCtx, userId: string): Promise<Actor> {
     name: identity.name ?? identity.email ?? userId,
     email: identity.email ?? null,
     image: identity.pictureUrl ?? null,
-    role: typeof identity.org_role === "string" ? identity.org_role : "org:member",
+    role: organizationRole(identity) ?? "org:member",
   };
 }
 
@@ -805,16 +806,15 @@ export const unreadCount = query({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity?.org_id) {
+    if (!identity) {
       return 0;
     }
+    const clerkOrgId = organizationId(identity);
+    if (!clerkOrgId) return 0;
     const rows = await ctx.db
       .query("notifications")
       .withIndex("by_recipient_org_read", (q) =>
-        q
-          .eq("recipientUserId", identity.subject)
-          .eq("clerkOrgId", identity.org_id as string)
-          .eq("readAt", null),
+        q.eq("recipientUserId", identity.subject).eq("clerkOrgId", clerkOrgId).eq("readAt", null),
       )
       .order("desc")
       .take(UNREAD_SCAN_LIMIT);
@@ -836,13 +836,15 @@ export const listMine = query({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity?.org_id) {
+    if (!identity) {
       return [];
     }
+    const clerkOrgId = organizationId(identity);
+    if (!clerkOrgId) return [];
     const rows = await ctx.db
       .query("notifications")
       .withIndex("by_recipient_org", (q) =>
-        q.eq("recipientUserId", identity.subject).eq("clerkOrgId", identity.org_id as string),
+        q.eq("recipientUserId", identity.subject).eq("clerkOrgId", clerkOrgId),
       )
       .order("desc")
       .take(40);
@@ -885,7 +887,7 @@ export const markRead = mutation({
       !identity ||
       !notification ||
       notification.recipientUserId !== identity.subject ||
-      notification.clerkOrgId !== identity.org_id
+      notification.clerkOrgId !== organizationId(identity)
     ) {
       return;
     }
@@ -899,16 +901,15 @@ export const markAllRead = mutation({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity?.org_id) {
+    if (!identity) {
       return;
     }
+    const clerkOrgId = organizationId(identity);
+    if (!clerkOrgId) return;
     const rows = await ctx.db
       .query("notifications")
       .withIndex("by_recipient_org_read", (q) =>
-        q
-          .eq("recipientUserId", identity.subject)
-          .eq("clerkOrgId", identity.org_id as string)
-          .eq("readAt", null),
+        q.eq("recipientUserId", identity.subject).eq("clerkOrgId", clerkOrgId).eq("readAt", null),
       )
       .take(MARK_READ_BATCH);
     const now = Date.now();
@@ -918,7 +919,7 @@ export const markAllRead = mutation({
     if (rows.length === MARK_READ_BATCH) {
       await ctx.scheduler.runAfter(0, internal.comments.markAllReadBatch, {
         recipientUserId: identity.subject,
-        clerkOrgId: identity.org_id as string,
+        clerkOrgId,
       });
     }
   },

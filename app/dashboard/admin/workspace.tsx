@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import {
   Activity,
   CloudOff,
@@ -26,6 +26,7 @@ import { WebhookManager } from "./webhook-manager";
 type Tab = "audit" | "usage" | "trust";
 
 export function AdminWorkspace({ clerkOrgId }: { clerkOrgId: string }) {
+  const { isAuthenticated } = useConvexAuth();
   const [tab, setTab] = useState<Tab>("audit");
   const [auditKind, setAuditKind] = useState("");
   const [auditFrom, setAuditFrom] = useState("");
@@ -34,20 +35,28 @@ export function AdminWorkspace({ clerkOrgId }: { clerkOrgId: string }) {
   const [auditProject, setAuditProject] = useState("");
   const [auditCursor, setAuditCursor] = useState<string | null>(null);
   const [auditHistory, setAuditHistory] = useState<Array<string | null>>([]);
-  const events = useQuery(api.audit.list, {
-    clerkOrgId,
-    limit: 100,
-    cursor: auditCursor,
-    kind: auditKind || undefined,
-    actorUserId: auditActor || undefined,
-    projectId: auditProject ? (auditProject as Id<"projects">) : undefined,
-    from: auditFrom ? new Date(`${auditFrom}T00:00:00`).getTime() : undefined,
-    to: auditTo ? new Date(`${auditTo}T23:59:59.999`).getTime() : undefined,
-  });
-  const usage = useQuery(api.audit.usage, { clerkOrgId });
-  const filterOptions = useQuery(api.audit.filterOptions, { clerkOrgId });
-  const apiKeys = useQuery(api.apiKeys.list, { clerkOrgId });
-  const organization = useQuery(api.organizations.get, { clerkOrgId });
+  const events = useQuery(
+    api.audit.list,
+    isAuthenticated
+      ? {
+          clerkOrgId,
+          limit: 100,
+          cursor: auditCursor,
+          kind: auditKind || undefined,
+          actorUserId: auditActor || undefined,
+          projectId: auditProject ? (auditProject as Id<"projects">) : undefined,
+          from: auditFrom ? new Date(`${auditFrom}T00:00:00`).getTime() : undefined,
+          to: auditTo ? new Date(`${auditTo}T23:59:59.999`).getTime() : undefined,
+        }
+      : "skip",
+  );
+  const usage = useQuery(api.audit.usage, isAuthenticated ? { clerkOrgId } : "skip");
+  const filterOptions = useQuery(
+    api.audit.filterOptions,
+    isAuthenticated ? { clerkOrgId } : "skip",
+  );
+  const apiKeys = useQuery(api.apiKeys.list, isAuthenticated ? { clerkOrgId } : "skip");
+  const organization = useQuery(api.organizations.get, isAuthenticated ? { clerkOrgId } : "skip");
   const createApiKey = useMutation(api.apiKeys.create);
   const revokeApiKey = useMutation(api.apiKeys.revoke);
   const setOfflineCaching = useMutation(api.organizations.setOfflineCaching);
@@ -56,6 +65,15 @@ export function AdminWorkspace({ clerkOrgId }: { clerkOrgId: string }) {
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyScopes, setKeyScopes] = useState(["projects:read", "documents:read"]);
   const [offlinePolicyBusy, setOfflinePolicyBusy] = useState(false);
+
+  if (!isAuthenticated) {
+    return (
+      <main className="flex min-h-dvh w-full items-center justify-center px-6 pt-24">
+        <DataLoader label="Securing administration workspace" />
+      </main>
+    );
+  }
+
   const auditExportHref = `/api/audit/export?${new URLSearchParams({
     ...(auditKind ? { kind: auditKind } : {}),
     ...(auditActor ? { actor: auditActor } : {}),

@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import * as Y from "yjs";
 import { getBoardRoots, inspectBoard } from "../lib/board-model";
 import { mutation, query } from "./_generated/server";
+import { belongsToOrganization, isOrganizationAdmin } from "./auth";
 import { accessForProject, isInactiveTree, requireProjectAdmin } from "./documents";
 
 const MAX_TEMPLATES = 50;
@@ -47,7 +48,7 @@ export const listForOrg = query({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId) return [];
+    if (!identity || !belongsToOrganization(identity, args.clerkOrgId)) return [];
     const rows = await ctx.db
       .query("orgTemplates")
       .withIndex("by_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
@@ -140,8 +141,7 @@ export const rename = mutation({
     const row = await ctx.db.get(args.templateId);
     if (!row) throw new Error("not-found");
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== row.clerkOrgId || identity.org_role !== "org:admin")
-      throw new Error("Forbidden");
+    if (!identity || !isOrganizationAdmin(identity, row.clerkOrgId)) throw new Error("Forbidden");
     const name = templateName(args.name);
     const normalizedName = name.toLowerCase();
     const existing = await ctx.db
@@ -162,8 +162,7 @@ export const remove = mutation({
     const row = await ctx.db.get(args.templateId);
     if (!row) return;
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== row.clerkOrgId || identity.org_role !== "org:admin")
-      throw new Error("Forbidden");
+    if (!identity || !isOrganizationAdmin(identity, row.clerkOrgId)) throw new Error("Forbidden");
     await ctx.db.delete(row._id);
   },
 });

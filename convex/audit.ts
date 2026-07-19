@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { isOrganizationAdmin } from "./auth";
 import { DEFAULT_MAX_COLLABORATORS, DEFAULT_MAX_PROJECT_BYTES } from "./limits";
 import { secretMatches } from "./secrets";
 
@@ -70,7 +71,7 @@ export async function recordOrganizationEvent(
 
 async function requireAdmin(ctx: QueryCtx, clerkOrgId: string): Promise<string> {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity || identity.org_id !== clerkOrgId || identity.org_role !== "org:admin") {
+  if (!identity || !isOrganizationAdmin(identity, clerkOrgId)) {
     throw new Error("Forbidden");
   }
   return identity.subject;

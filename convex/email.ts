@@ -9,6 +9,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import { belongsToOrganization } from "./auth";
 import { secretMatches } from "./secrets";
 
 const deliveryChoice = v.union(v.literal("immediate"), v.literal("digest"), v.literal("off"));
@@ -91,7 +92,7 @@ export const getPreferences = query({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId) return null;
+    if (!identity || !belongsToOrganization(identity, args.clerkOrgId)) return null;
     const row = await ctx.db
       .query("emailPreferences")
       .withIndex("by_user_org", (q) =>
@@ -119,7 +120,9 @@ export const setPreferences = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId) throw new Error("forbidden");
+    if (!identity || !belongsToOrganization(identity, args.clerkOrgId)) {
+      throw new Error("forbidden");
+    }
     const existing = await ctx.db
       .query("emailPreferences")
       .withIndex("by_user_org", (q) =>

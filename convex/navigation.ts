@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { belongsToOrganization, isOrganizationAdmin } from "./auth";
 import { accessForProject, isInactiveTree } from "./documents";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
@@ -35,10 +36,10 @@ type SearchResult = {
 
 async function caller(ctx: QueryCtx, clerkOrgId: string) {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity || identity.org_id !== clerkOrgId) {
+  if (!identity || !belongsToOrganization(identity, clerkOrgId)) {
     return null;
   }
-  return { userId: identity.subject, isAdmin: identity.org_role === "org:admin" };
+  return { userId: identity.subject, isAdmin: isOrganizationAdmin(identity, clerkOrgId) };
 }
 
 async function accessibleProjects(ctx: QueryCtx, clerkOrgId: string) {

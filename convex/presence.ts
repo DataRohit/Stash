@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
+import { organizationRole } from "./auth";
 import { accessForProject, requireProjectAccess } from "./documents";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
@@ -51,7 +52,7 @@ export const heartbeat = mutation({
       email: args.email?.slice(0, 120) ?? undefined,
       color: args.color.slice(0, 32),
       image: args.image,
-      role: typeof identity?.org_role === "string" ? identity.org_role : undefined,
+      role: identity ? (organizationRole(identity) ?? undefined) : undefined,
       state: args.state.length > MAX_STATE_LENGTH ? "" : args.state,
       lastSeen: Date.now(),
     };

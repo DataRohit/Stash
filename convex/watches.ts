@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./_generated/server";
+import { belongsToOrganization, organizationId } from "./auth";
 import { accessForProject, isInactiveTree } from "./documents";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
@@ -68,7 +69,9 @@ export const setAutoWatch = mutation({
   args: { clerkOrgId: v.string(), autoWatch: v.boolean() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId) throw new Error("forbidden");
+    if (!identity || !belongsToOrganization(identity, args.clerkOrgId)) {
+      throw new Error("forbidden");
+    }
     const existing = await ctx.db
       .query("watchPreferences")
       .withIndex("by_user_org", (q) =>
@@ -90,7 +93,7 @@ export const getPreferences = query({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId) return null;
+    if (!identity || !belongsToOrganization(identity, args.clerkOrgId)) return null;
     const row = await ctx.db
       .query("watchPreferences")
       .withIndex("by_user_org", (q) =>
@@ -106,15 +109,14 @@ export const listUnread = query({
   handler: async (ctx, args) => {
     if (args.documentIds.length > UNREAD_LIMIT) throw new Error("too-many-items");
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity?.org_id) return { documentIds: [], projectIds: [] };
+    if (!identity) return { documentIds: [], projectIds: [] };
+    const clerkOrgId = organizationId(identity);
+    if (!clerkOrgId) return { documentIds: [], projectIds: [] };
     const requested = new Set<Id<"documents">>(args.documentIds);
     const rows = await ctx.db
       .query("notifications")
       .withIndex("by_recipient_org_read", (q) =>
-        q
-          .eq("recipientUserId", identity.subject)
-          .eq("clerkOrgId", identity.org_id as string)
-          .eq("readAt", null),
+        q.eq("recipientUserId", identity.subject).eq("clerkOrgId", clerkOrgId).eq("readAt", null),
       )
       .order("desc")
       .take(UNREAD_LIMIT);

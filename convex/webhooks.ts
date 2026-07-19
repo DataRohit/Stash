@@ -10,6 +10,7 @@ import {
   query,
 } from "./_generated/server";
 import { recordOrganizationEvent } from "./audit";
+import { isOrganizationAdmin } from "./auth";
 
 const EVENT_KINDS = new Set([
   "document.created",
@@ -165,7 +166,7 @@ export const create = action({
   },
   handler: async (ctx, args): Promise<{ id: Id<"webhookEndpoints">; signingSecret: string }> => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId || identity.org_role !== "org:admin") {
+    if (!identity || !isOrganizationAdmin(identity, args.clerkOrgId)) {
       throw new Error("Forbidden");
     }
     const name = args.name.trim().slice(0, 80);
@@ -188,7 +189,7 @@ export const list = query({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId || identity.org_role !== "org:admin") {
+    if (!identity || !isOrganizationAdmin(identity, args.clerkOrgId)) {
       throw new Error("Forbidden");
     }
     const endpoints = await ctx.db
@@ -232,12 +233,7 @@ export const setDisabled = mutation({
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     const endpoint = await ctx.db.get(args.endpointId);
-    if (
-      !identity ||
-      !endpoint ||
-      identity.org_id !== endpoint.clerkOrgId ||
-      identity.org_role !== "org:admin"
-    )
+    if (!identity || !endpoint || !isOrganizationAdmin(identity, endpoint.clerkOrgId))
       throw new Error("Forbidden");
     await ctx.db.patch(endpoint._id, {
       disabledAt: args.disabled ? Date.now() : undefined,
@@ -252,12 +248,7 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     const endpoint = await ctx.db.get(args.endpointId);
-    if (
-      !identity ||
-      !endpoint ||
-      identity.org_id !== endpoint.clerkOrgId ||
-      identity.org_role !== "org:admin"
-    ) {
+    if (!identity || !endpoint || !isOrganizationAdmin(identity, endpoint.clerkOrgId)) {
       throw new Error("Forbidden");
     }
     const deliveries = await ctx.db
@@ -274,12 +265,7 @@ export const queueTest = mutation({
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     const endpoint = await ctx.db.get(args.endpointId);
-    if (
-      !identity ||
-      !endpoint ||
-      identity.org_id !== endpoint.clerkOrgId ||
-      identity.org_role !== "org:admin"
-    ) {
+    if (!identity || !endpoint || !isOrganizationAdmin(identity, endpoint.clerkOrgId)) {
       throw new Error("Forbidden");
     }
     const eventId = await recordOrganizationEvent(ctx, {

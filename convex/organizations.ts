@@ -3,6 +3,7 @@ import { internal } from "./_generated/api";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { recordOrganizationEvent } from "./audit";
+import { belongsToOrganization, isOrganizationAdmin } from "./auth";
 import {
   clampInt,
   HARD_MAX_COLLABORATORS,
@@ -54,7 +55,7 @@ async function requireOrgAdmin(ctx: QueryCtx, clerkOrgId: string) {
   if (!identity) {
     throw new Error("Unauthenticated");
   }
-  if (identity.org_id !== clerkOrgId || identity.org_role !== "org:admin") {
+  if (!isOrganizationAdmin(identity, clerkOrgId)) {
     throw new Error("Forbidden");
   }
   return identity;
@@ -78,7 +79,7 @@ export const get = query({
   args: { clerkOrgId: v.string() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId) {
+    if (!identity || !belongsToOrganization(identity, args.clerkOrgId)) {
       return null;
     }
     const doc = await findByClerkOrgId(ctx, args.clerkOrgId);
@@ -246,7 +247,7 @@ export const claimReconcile = mutation({
   args: { clerkOrgId: v.string(), staleMs: v.number() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity || identity.org_id !== args.clerkOrgId || identity.org_role !== "org:admin") {
+    if (!identity || !isOrganizationAdmin(identity, args.clerkOrgId)) {
       return false;
     }
     const now = Date.now();

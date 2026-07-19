@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { recordOrganizationEvent } from "./audit";
+import { isOrganizationAdmin } from "./auth";
 import { secretMatches } from "./secrets";
 import { enforceWriteRateLimit } from "./writeRateLimit";
 
@@ -21,7 +22,7 @@ async function digest(value: string): Promise<string> {
 
 async function requireAdmin(ctx: QueryCtx, clerkOrgId: string) {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity || identity.org_id !== clerkOrgId || identity.org_role !== "org:admin") {
+  if (!identity || !isOrganizationAdmin(identity, clerkOrgId)) {
     throw new Error("Forbidden");
   }
   return identity;

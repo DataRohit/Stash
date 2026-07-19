@@ -35,6 +35,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { recordProjectEvent } from "./activity";
+import { belongsToOrganization, isOrganizationAdmin, organizationId } from "./auth";
 import {
   clampInt,
   DEFAULT_MAX_PROJECT_BYTES,
@@ -250,10 +251,10 @@ async function callerFor(ctx: QueryCtx, clerkOrgId: string) {
   if (!identity) {
     return null;
   }
-  if (identity.org_id !== clerkOrgId) {
+  if (!belongsToOrganization(identity, clerkOrgId)) {
     return null;
   }
-  return { userId: identity.subject, isAdmin: identity.org_role === "org:admin" };
+  return { userId: identity.subject, isAdmin: isOrganizationAdmin(identity, clerkOrgId) };
 }
 
 export async function accessForProject(
@@ -2215,12 +2216,14 @@ export const validateAssetUpload = action({
   args: { projectId: v.id("projects"), storageId: v.id("_storage") },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity?.org_id) throw new Error("forbidden");
+    if (!identity) throw new Error("forbidden");
+    const clerkOrgId = organizationId(identity);
+    if (!clerkOrgId) throw new Error("forbidden");
     const info = await ctx.runQuery(internal.documents.assetUploadInfo, {
       ...args,
       userId: identity.subject,
-      clerkOrgId: identity.org_id as string,
-      isAdmin: identity.org_role === "org:admin",
+      clerkOrgId,
+      isAdmin: isOrganizationAdmin(identity, clerkOrgId),
     });
     if (!info) throw new Error("invalid-asset");
     const maxBytes = assetMaxBytes(info.mimeType);
