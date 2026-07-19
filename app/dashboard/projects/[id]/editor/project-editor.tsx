@@ -28,7 +28,7 @@ import {
 import dynamic from "next/dynamic";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   type PointerEvent as ReactPointerEvent,
   useEffect,
@@ -433,6 +433,7 @@ export function ProjectEditor({
   const convex = useConvex();
   const pid = projectId as Id<"projects">;
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { orgId, isLoaded: authLoaded } = useAuth();
   const orgChanged = authLoaded && orgId !== clerkOrgId;
@@ -797,6 +798,20 @@ export function ProjectEditor({
       return () => window.clearTimeout(timer);
     }
   }, [nodes, searchParams]);
+
+  useEffect(() => {
+    if (!effectiveSelectedId || selectedNode?.kind === "folder") {
+      return;
+    }
+    if (searchParams.get("file") === effectiveSelectedId) {
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    next.set("file", effectiveSelectedId);
+    next.delete("thread");
+    handledDeepLinkRef.current = `${effectiveSelectedId}:`;
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [effectiveSelectedId, pathname, router, searchParams, selectedNode?.kind]);
 
   useEffect(() => {
     if (!selectedNode || selectedNode.kind === "folder" || accessLost) {

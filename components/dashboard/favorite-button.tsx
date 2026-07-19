@@ -25,6 +25,9 @@ export function FavoriteButton({
   const [optimistic, setOptimistic] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const active = optimistic ?? favorite;
+  if (optimistic !== null && optimistic === favorite) {
+    setOptimistic(null);
+  }
   const toggle = async () => {
     if (busy || disabled) return;
     const next = !active;
@@ -47,7 +50,6 @@ export function FavoriteButton({
       });
     } finally {
       setBusy(false);
-      window.setTimeout(() => setOptimistic(null), 250);
     }
   };
   return (

@@ -30,7 +30,7 @@ import {
   selectMatches,
   setSearchQuery,
 } from "@codemirror/search";
-import { EditorState, Prec } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
 import {
   crosshairCursor,
   Decoration,
@@ -46,7 +46,7 @@ import {
   rectangularSelection,
   ViewPlugin,
 } from "@codemirror/view";
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
 import type { Awareness } from "y-protocols/awareness";
 import type * as Y from "yjs";
@@ -663,6 +663,13 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
   const nodesRef = useRef(nodes ?? []);
   const mentionCandidatesRef = useRef(mentionCandidates);
   const initialContentRef = useRef(initialContent);
+  const visualCompartmentRef = useRef(new Compartment());
+  const visualExtension = useMemo(
+    () => (visualMode && language === "md" ? markdownVisualExtension(assetUrls) : []),
+    [assetUrls, language, visualMode],
+  );
+  const visualExtensionRef = useRef(visualExtension);
+  visualExtensionRef.current = visualExtension;
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -855,7 +862,7 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
             })
           : [],
         ...commentExtensions,
-        ...(visualMode && language === "md" ? [markdownVisualExtension(assetUrls)] : []),
+        visualCompartmentRef.current.of(visualExtensionRef.current),
         imageInsertHandlers,
         ...collabExtensions,
         EditorView.updateListener.of((update) => {
@@ -887,7 +894,13 @@ export const DocEditor = forwardRef<DocEditorHandle, DocEditorProps>(function Do
       view.destroy();
       undoManager?.destroy();
     };
-  }, [language, maxContentBytes, readOnly, ytext, awareness, visualMode, assetUrls]);
+  }, [language, maxContentBytes, readOnly, ytext, awareness]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: visualCompartmentRef.current.reconfigure(visualExtension),
+    });
+  }, [visualExtension]);
 
   useEffect(() => {
     const view = viewRef.current;
