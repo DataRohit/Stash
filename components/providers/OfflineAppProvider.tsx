@@ -10,7 +10,11 @@ type InstallPromptEvent = Event & {
 };
 
 const VISIT_COUNT_KEY = "stash:pwa-visits";
+const VISIT_COUNTED_KEY = "stash:pwa-visit-counted";
 const INSTALL_DISMISSED_KEY = "stash:pwa-install-dismissed";
+const INSTALL_TOAST_ID = "stash-install-prompt";
+const UPDATE_TOAST_ID = "stash-update-ready";
+const MIN_VISITS_BEFORE_PROMPT = 2;
 const LAST_USER_KEY = "stash:last-authenticated-user";
 const COLLAB_STORAGE_PREFIX = "stash:collab-outbox:";
 
@@ -85,13 +89,19 @@ export function OfflineAppProvider() {
 
     let active = true;
     let installPrompt: InstallPromptEvent | null = null;
-    const visits = Number.parseInt(readStorage(localStorage, VISIT_COUNT_KEY) ?? "0", 10);
-    const nextVisits = Number.isFinite(visits) ? Math.min(visits + 1, 100) : 1;
-    writeStorage(localStorage, VISIT_COUNT_KEY, String(nextVisits));
+    let promptShown = false;
+    const storedVisits = Number.parseInt(readStorage(localStorage, VISIT_COUNT_KEY) ?? "0", 10);
+    let visitCount = Number.isFinite(storedVisits) && storedVisits > 0 ? storedVisits : 0;
+    if (readStorage(sessionStorage, VISIT_COUNTED_KEY) !== "1") {
+      visitCount = Math.min(visitCount + 1, 100);
+      writeStorage(localStorage, VISIT_COUNT_KEY, String(visitCount));
+      writeStorage(sessionStorage, VISIT_COUNTED_KEY, "1");
+    }
 
     const announceWaitingWorker = (registration: ServiceWorkerRegistration) => {
       if (!registration.waiting) return;
       notify.info("A new Stash version is ready", {
+        id: UPDATE_TOAST_ID,
         description: "Refresh when convenient to use the latest application shell.",
         action: {
           label: "Refresh",
@@ -126,14 +136,19 @@ export function OfflineAppProvider() {
       event.preventDefault();
       installPrompt = event as InstallPromptEvent;
       if (
-        nextVisits < 2 ||
+        promptShown ||
+        visitCount < MIN_VISITS_BEFORE_PROMPT ||
         isInstalled() ||
-        readStorage(sessionStorage, INSTALL_DISMISSED_KEY) === "1"
+        readStorage(localStorage, INSTALL_DISMISSED_KEY) === "1"
       ) {
         return;
       }
+      promptShown = true;
       notify.info("Install Stash on this device", {
+        id: INSTALL_TOAST_ID,
+        duration: Number.POSITIVE_INFINITY,
         description: "Open your workspace from an app icon with a faster cached shell.",
+        onDismiss: () => writeStorage(localStorage, INSTALL_DISMISSED_KEY, "1"),
         action: {
           label: "Install",
           onClick: () => {
@@ -143,7 +158,7 @@ export function OfflineAppProvider() {
             void prompt.prompt().then(async () => {
               const choice = await prompt.userChoice;
               if (choice.outcome === "dismissed") {
-                writeStorage(sessionStorage, INSTALL_DISMISSED_KEY, "1");
+                writeStorage(localStorage, INSTALL_DISMISSED_KEY, "1");
               }
             });
           },
@@ -151,13 +166,21 @@ export function OfflineAppProvider() {
       });
     };
 
+    const onAppInstalled = () => {
+      installPrompt = null;
+      writeStorage(localStorage, INSTALL_DISMISSED_KEY, "1");
+      notify.dismiss(INSTALL_TOAST_ID);
+    };
+
     navigator.serviceWorker.addEventListener("controllerchange", onControllerChange);
     window.addEventListener("beforeinstallprompt", onInstallPrompt);
+    window.addEventListener("appinstalled", onAppInstalled);
     void register();
     return () => {
       active = false;
       navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
       window.removeEventListener("beforeinstallprompt", onInstallPrompt);
+      window.removeEventListener("appinstalled", onAppInstalled);
     };
   }, []);
 

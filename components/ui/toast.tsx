@@ -13,6 +13,9 @@ type ToastOptions = {
     label: string;
     onClick: () => void;
   };
+  id?: string;
+  duration?: number;
+  onDismiss?: () => void;
 };
 
 const TYPE_STYLES: Record<
@@ -47,12 +50,14 @@ function ToastCard({
   title,
   description,
   action,
+  onDismiss,
 }: {
   id: string | number;
   type: ToastType;
   title: string;
   description?: ReactNode;
   action?: ToastOptions["action"];
+  onDismiss?: () => void;
 }) {
   const { icon: Icon, badge, iconColor } = TYPE_STYLES[type];
 
@@ -88,7 +93,10 @@ function ToastCard({
       ) : null}
       <button
         type="button"
-        onClick={() => sonnerToast.dismiss(id)}
+        onClick={() => {
+          sonnerToast.dismiss(id);
+          onDismiss?.();
+        }}
         aria-label="Dismiss notification"
         className="-mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center self-center rounded-sm text-muted-foreground transition-colors hover:text-destructive"
       >
@@ -99,15 +107,23 @@ function ToastCard({
 }
 
 function show(type: ToastType, title: string, options?: ToastOptions) {
-  return sonnerToast.custom((id) => (
-    <ToastCard
-      id={id}
-      type={type}
-      title={title}
-      description={options?.description}
-      action={options?.action}
-    />
-  ));
+  return sonnerToast.custom(
+    (id) => (
+      <ToastCard
+        id={id}
+        type={type}
+        title={title}
+        description={options?.description}
+        action={options?.action}
+        onDismiss={options?.onDismiss}
+      />
+    ),
+    {
+      ...(options?.id ? { id: options.id } : {}),
+      ...(options?.duration === undefined ? {} : { duration: options.duration }),
+      ...(options?.onDismiss ? { onDismiss: options.onDismiss } : {}),
+    },
+  );
 }
 
 export const notify = {
@@ -115,4 +131,5 @@ export const notify = {
   error: (title: string, options?: ToastOptions) => show("error", title, options),
   warning: (title: string, options?: ToastOptions) => show("warning", title, options),
   info: (title: string, options?: ToastOptions) => show("info", title, options),
+  dismiss: (id: string) => sonnerToast.dismiss(id),
 };
